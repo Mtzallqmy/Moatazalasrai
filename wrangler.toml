@@ -1,8 +1,10 @@
-# Cloudflare Pages configuration for `next-on-pages` deployments.
-# Deploy with: npm run pages:build && npx wrangler pages deploy .vercel/output/static
+# Cloudflare deployment config for the OpenNext Cloudflare adapter.
+# Build: npm run cf:build   Deploy: npm run cf:deploy
 name = "moataz-ai-platform"
-compatibility_date = "2024-09-01"
+main = ".open-next/worker.js"
+compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 
-[env.production]
-name = "moataz-ai-platform"
+[assets]
+directory = ".open-next/assets"
+binding = "ASSETS"
