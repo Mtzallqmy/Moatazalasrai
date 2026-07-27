@@ -1,0 +1,8 @@
+# Cloudflare Pages configuration for `next-on-pages` deployments.
+# Deploy with: npm run pages:build && npx wrangler pages deploy .vercel/output/static
+name = "moataz-ai-platform"
+compatibility_date = "2024-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+[env.production]
+name = "moataz-ai-platform"
