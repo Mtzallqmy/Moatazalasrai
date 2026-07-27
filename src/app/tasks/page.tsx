@@ -25,6 +25,10 @@ export default function TasksPage() {
   }, []);
 
   useEffect(() => {
+    // Standard "fetch on mount" pattern (matches React's own data-fetching
+    // docs: https://react.dev/learn/synchronizing-with-effects). `load`
+    // itself updates state after the fetch resolves; deliberately allowed.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
   }, [load]);
 
