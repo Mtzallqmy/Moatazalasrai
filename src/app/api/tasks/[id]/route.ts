@@ -8,11 +8,13 @@ function parseId(raw: string): number | null {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
-export async function PATCH(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  const id = parseId(params.id);
+// Next.js 15+ makes route params an async value (Promise) rather than a
+// plain object, so it can be resolved lazily. Always `await params`.
+type RouteParams = { params: Promise<{ id: string }> };
+
+export async function PATCH(request: NextRequest, { params }: RouteParams) {
+  const { id: rawId } = await params;
+  const id = parseId(rawId);
   if (id === null) {
     return NextResponse.json({ error: "Invalid task id." }, { status: 400 });
   }
@@ -53,11 +55,9 @@ export async function PATCH(
   }
 }
 
-export async function DELETE(
-  _request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  const id = parseId(params.id);
+export async function DELETE(_request: NextRequest, { params }: RouteParams) {
+  const { id: rawId } = await params;
+  const id = parseId(rawId);
   if (id === null) {
     return NextResponse.json({ error: "Invalid task id." }, { status: 400 });
   }
