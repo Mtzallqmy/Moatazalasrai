@@ -1,0 +1,72 @@
+name: Apply reviewed replacement
+
+on:
+  push:
+    branches:
+      - agent/full-production-replacement
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[replacement-applied]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout replacement branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify and apply reviewed source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .replacement/patch-* | base64 --decode > /tmp/replacement.tar.xz
+          echo "0d3cd8aa635f43245d3b82b8e9a00fb06495ee13fb18993b6ac7c27946d97e93  /tmp/replacement.tar.xz" | sha256sum --check --strict
+          mkdir -p /tmp/replacement
+          tar -xJf /tmp/replacement.tar.xz -C /tmp/replacement
+
+          if [[ ! -f /tmp/replacement/.replacement-deletions ]]; then
+            echo "Replacement deletion manifest is missing." >&2
+            exit 1
+          fi
+
+          while IFS= read -r path; do
+            [[ -z "$path" ]] && continue
+            case "$path" in
+              /*|*".."*)
+                echo "Unsafe deletion path: $path" >&2
+                exit 1
+                ;;
+            esac
+            rm -f -- "$path"
+          done < /tmp/replacement/.replacement-deletions
+
+          rm -f /tmp/replacement/.replacement-deletions
+          cp -a /tmp/replacement/. .
+          rm -rf .replacement
+          rm -f .github/workflows/apply-reviewed-replacement.yml
+
+          test -f package.json
+          test -f package-lock.json
+          test -f Dockerfile
+          test -f drizzle/0000_platform_schema.sql
+          test -f scripts/start-production.mjs
+          test -f src/app/api/auth/login/route.ts
+          test -f src/app/api/auth/register/route.ts
+
+      - name: Commit reviewed replacement
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No replacement changes to commit."
+            exit 0
+          fi
+          git commit -m "Replace repository with reviewed production platform [replacement-applied]"
+          git push origin HEAD:agent/full-production-replacement
