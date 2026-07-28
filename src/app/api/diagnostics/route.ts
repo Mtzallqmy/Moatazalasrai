@@ -30,20 +30,20 @@ type Check = {
   details: string;
 };
 
-function nowMs() {
-  return Number(process.hrtime.bigint() / 1_000_000n);
+function nowMs(): number {
+  return performance.now();
 }
 
 async function runCheck(name: string, action: () => Promise<string> | string): Promise<Check> {
   const started = nowMs();
   try {
     const details = await action();
-    return { name, status: "pass", latencyMs: nowMs() - started, details };
+    return { name, status: "pass", latencyMs: Math.round(nowMs() - started), details };
   } catch (error) {
     return {
       name,
       status: "fail",
-      latencyMs: nowMs() - started,
+      latencyMs: Math.round(nowMs() - started),
       details: error instanceof Error ? error.message : "فشل غير معروف",
     };
   }
@@ -53,7 +53,17 @@ export async function GET(request: Request) {
   const requestId = request.headers.get("x-request-id") ?? crypto.randomUUID();
   const session = await currentSession();
   if (!session?.organizationId || !session.role || !new Set(["owner", "admin"]).has(session.role)) {
-    return NextResponse.json({ success: false, error: { code: "FORBIDDEN", message: "التشخيص متاح لمالك المؤسسة والمدير فقط.", requestId } }, { status: 403 });
+    return NextResponse.json(
+      {
+        success: false,
+        error: {
+          code: "FORBIDDEN",
+          message: "التشخيص متاح لمالك المؤسسة والمدير فقط.",
+          requestId,
+        },
+      },
+      { status: 403 },
+    );
   }
 
   const checks = await Promise.all([
@@ -76,15 +86,18 @@ export async function GET(request: Request) {
   ]);
 
   const failed = checks.filter((check) => check.status === "fail").length;
-  return NextResponse.json({
-    success: failed === 0,
-    data: {
-      status: failed === 0 ? "healthy" : "degraded",
-      checkedAt: new Date().toISOString(),
-      checks,
-      routes: criticalRoutes,
-      summary: { total: checks.length, passed: checks.length - failed, failed },
+  return NextResponse.json(
+    {
+      success: failed === 0,
+      data: {
+        status: failed === 0 ? "healthy" : "degraded",
+        checkedAt: new Date().toISOString(),
+        checks,
+        routes: criticalRoutes,
+        summary: { total: checks.length, passed: checks.length - failed, failed },
+      },
+      meta: { requestId },
     },
-    meta: { requestId },
-  }, { status: failed === 0 ? 200 : 503 });
+    { status: failed === 0 ? 200 : 503 },
+  );
 }
