@@ -1,57 +1,56 @@
-import Link from "next/link";
-
 const pillars = [
   {
-    title: "الواجهة (Frontend)",
-    desc: "Next.js 14 App Router + TypeScript + Tailwind — نفس التطبيق يخدم الواجهة والـ API.",
+    title: "منصة متعددة المؤسسات",
+    desc: "عزل كامل للبيانات والمفاتيح والوكلاء وعمليات التشغيل حسب المؤسسة.",
   },
   {
-    title: "قاعدة البيانات",
-    desc: "Neon Postgres عبر Drizzle ORM ومُحرّك HTTP (بدون بروتوكول TCP الخام) — يعمل على أي بيئة، حتى Edge.",
+    title: "عدة مزوّدين",
+    desc: "بوابة موحدة لـ OpenAI وAnthropic وGemini دون ربط المنصة بمزوّد واحد.",
   },
   {
-    title: "النشر (Deploy)",
-    desc: "Dockerfile لأي مزوّد (Railway/Render)، وتهيئة جاهزة لـ Cloudflare Pages — بدون ارتباط بمزوّد واحد.",
+    title: "مفاتيح مشفرة",
+    desc: "تُحفظ مفاتيح BYOK مشفرة باستخدام AES-256-GCM ولا تصل إلى المتصفح بعد تخزينها.",
   },
   {
-    title: "الجودة",
-    desc: "TypeScript صارم، ESLint، اختبارات Vitest، وGitHub Actions CI على كل push.",
+    title: "تشغيل قابل للتدقيق",
+    desc: "إصدارات للوكلاء، وسجل Runs وأحداث واستهلاك Tokens وسجل تدقيق للمؤسسة.",
   },
 ];
 
 export default function HomePage() {
   return (
-    <main className="mx-auto flex max-w-4xl flex-col gap-10 px-6 py-16">
-      <header className="flex flex-col gap-3">
-        <span className="text-sm font-medium text-brand-600">Moataz AI Platform</span>
-        <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
-          نقطة انطلاق إنتاجية جاهزة — من GitHub إلى Neon إلى Cloudflare/Railway
+    <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-12 px-6 py-16">
+      <header className="flex flex-col gap-4">
+        <span className="text-sm font-semibold text-brand-600">Moataz Agent Platform</span>
+        <h1 className="max-w-3xl text-4xl font-bold tracking-tight text-slate-950 sm:text-5xl">
+          نواة إنتاجية لبناء وتشغيل وكلاء ذكاء اصطناعي متعددين
         </h1>
-        <p className="max-w-2xl text-slate-600">
-          هذا المشروع ليس صفحة فارغة: فيه ميزة حقيقية تعمل (إدارة مهام) تُثبت أن كل
-          حلقة السلسلة متصلة وتعمل فعليًا — من الواجهة إلى الـ API إلى قاعدة البيانات.
+        <p className="max-w-3xl text-lg leading-8 text-slate-600">
+          منصة API متعددة المؤسسات لإدارة مزوّدي النماذج والمفاتيح المشفرة والوكلاء ذات الإصدارات
+          وعمليات التشغيل. استخدم واجهات <code className="rounded bg-slate-100 px-1.5 py-0.5 text-sm">/api/v1</code>
+          للتهيئة والإدارة والتشغيل.
         </p>
-        <div>
-          <Link
-            href="/tasks"
-            className="inline-flex items-center rounded-lg bg-brand-600 px-5 py-2.5 text-white transition hover:bg-brand-700"
-          >
-            جرّب واجهة المهام →
-          </Link>
+        <div className="flex flex-wrap gap-3 text-sm">
+          <a className="rounded-lg bg-brand-600 px-5 py-2.5 font-medium text-white hover:bg-brand-700" href="/api/health">
+            فحص صحة الخدمة
+          </a>
+          <a className="rounded-lg border border-slate-300 px-5 py-2.5 font-medium text-slate-700 hover:bg-slate-50" href="https://github.com/Mtzallqmy/Moatazalasrai">
+            المستودع
+          </a>
         </div>
       </header>
 
       <section className="grid gap-4 sm:grid-cols-2">
-        {pillars.map((p) => (
-          <div key={p.title} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="mb-1 font-semibold text-slate-900">{p.title}</h2>
-            <p className="text-sm text-slate-600">{p.desc}</p>
-          </div>
+        {pillars.map((pillar) => (
+          <article key={pillar.title} className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 className="mb-2 font-semibold text-slate-950">{pillar.title}</h2>
+            <p className="text-sm leading-6 text-slate-600">{pillar.desc}</p>
+          </article>
         ))}
       </section>
 
-      <footer className="text-sm text-slate-400">
-        راجع README.md لخطوات التشغيل والنشر الكاملة.
+      <footer className="border-t border-slate-200 pt-6 text-sm text-slate-500">
+        راجع <code>docs/DEPLOYMENT.md</code> لإعداد Railway والمتغيرات والترحيلات وتهيئة أول مؤسسة.
       </footer>
     </main>
   );
