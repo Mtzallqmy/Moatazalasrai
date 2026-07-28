@@ -5,12 +5,14 @@ import { db } from "@/db";
 import { agents, providerCredentials, runs } from "@/db/schema";
 import { LogoutButton } from "@/components/logout-button";
 import { currentSession } from "@/lib/auth/session";
+import { platformIdentity } from "@/lib/platform/identity";
 
 const navigation = [
   { label: "نظرة عامة", href: "/dashboard" },
   { label: "المزودون", href: "/dashboard/providers" },
   { label: "الوكلاء", href: "/dashboard/agents" },
   { label: "عمليات التشغيل", href: "/dashboard/runs" },
+  { label: "التشخيص", href: "/dashboard/diagnostics" },
 ];
 
 export default async function DashboardPage() {
@@ -36,7 +38,7 @@ export default async function DashboardPage() {
       <div className="mx-auto grid min-h-screen max-w-[1500px] gap-5 px-4 py-5 lg:grid-cols-[250px_1fr] lg:px-6">
         <aside className="glass-panel rounded-3xl p-4 lg:sticky lg:top-5 lg:h-[calc(100vh-2.5rem)]">
           <div className="border-b border-stone-700/70 px-2 pb-5">
-            <p className="font-latin text-sm font-bold tracking-wide text-emerald-100" dir="ltr">Moataz Agent Platform</p>
+            <p className="font-latin text-sm font-bold tracking-wide text-emerald-100" dir="ltr">{platformIdentity.productName}</p>
             <p className="mt-2 text-xs leading-5 text-stone-400">{session.organizationName}</p>
           </div>
           <nav className="mt-5 grid grid-cols-2 gap-2 text-sm lg:grid-cols-1">
@@ -60,7 +62,10 @@ export default async function DashboardPage() {
                 <h1 className="text-2xl font-black text-stone-50 sm:text-3xl">مرحبًا {session.name ?? session.email}</h1>
                 <p className="mt-2 text-sm text-stone-400">بيانات حقيقية من PostgreSQL — الصلاحية الحالية: {session.role}</p>
               </div>
-              <Link className="secondary-button px-4 py-2 text-sm" href="/api/ready">فحص الجاهزية</Link>
+              <div className="flex flex-wrap gap-2">
+                <Link className="secondary-button px-4 py-2 text-sm" href="/api/ready">فحص الجاهزية</Link>
+                {session.role === "owner" || session.role === "admin" ? <Link className="primary-button px-4 py-2 text-sm" href="/dashboard/diagnostics">مركز التشخيص</Link> : null}
+              </div>
             </div>
           </header>
 
@@ -95,7 +100,7 @@ export default async function DashboardPage() {
             )}
           </section>
 
-          <footer className="mt-8 border-t border-stone-700/70 py-6 text-center text-sm text-stone-500">برمجة وتطوير معتز العلقمي</footer>
+          <footer className="mt-8 border-t border-stone-700/70 py-6 text-center text-sm text-stone-500">{platformIdentity.ownerRole}: {platformIdentity.ownerName}</footer>
         </section>
       </div>
     </main>
