@@ -1,4 +1,4 @@
-export type ProviderKind = "openai" | "anthropic" | "gemini";
+export type ProviderKind = "openai" | "anthropic" | "gemini" | "openai_compatible";
 
 export type ModelMessage = {
   role: "system" | "user" | "assistant";
@@ -8,6 +8,7 @@ export type ModelMessage = {
 export type GenerateRequest = {
   provider: ProviderKind;
   apiKey: string;
+  baseUrl?: string;
   model: string;
   messages: ModelMessage[];
   temperature?: number;
@@ -38,9 +39,14 @@ async function requestJson(url: string, init: RequestInit, timeoutMs: number): P
   }
 }
 
+function normalizedBaseUrl(value: string | undefined, fallback: string): string {
+  return (value?.trim() || fallback).replace(/\/$/, "");
+}
+
 async function generateOpenAI(request: GenerateRequest): Promise<GenerateResult> {
+  const baseUrl = normalizedBaseUrl(request.baseUrl, "https://api.openai.com/v1");
   const { body, headers } = await requestJson(
-    "https://api.openai.com/v1/responses",
+    `${baseUrl}/responses`,
     {
       method: "POST",
       headers: { Authorization: `Bearer ${request.apiKey}`, "Content-Type": "application/json" },
@@ -68,11 +74,43 @@ async function generateOpenAI(request: GenerateRequest): Promise<GenerateResult>
   };
 }
 
+async function generateOpenAICompatible(request: GenerateRequest): Promise<GenerateResult> {
+  if (!request.baseUrl) throw new Error("Base URL is required for OpenAI-compatible providers.");
+  const baseUrl = normalizedBaseUrl(request.baseUrl, request.baseUrl);
+  const { body, headers } = await requestJson(
+    `${baseUrl}/chat/completions`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${request.apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: request.model,
+        messages: request.messages,
+        temperature: request.temperature,
+        max_tokens: request.maxOutputTokens,
+      }),
+    },
+    request.timeoutMs ?? 90_000
+  );
+  const data = body as {
+    choices?: Array<{ message?: { content?: string } }>;
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
+  };
+  const text = data.choices?.[0]?.message?.content;
+  if (!text) throw new Error("OpenAI-compatible provider returned no text output.");
+  return {
+    text,
+    inputTokens: data.usage?.prompt_tokens ?? 0,
+    outputTokens: data.usage?.completion_tokens ?? 0,
+    rawRequestId: headers.get("x-request-id") ?? undefined,
+  };
+}
+
 async function generateAnthropic(request: GenerateRequest): Promise<GenerateResult> {
   const system = request.messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n");
   const messages = request.messages.filter((message) => message.role !== "system");
+  const baseUrl = normalizedBaseUrl(request.baseUrl, "https://api.anthropic.com");
   const { body, headers } = await requestJson(
-    "https://api.anthropic.com/v1/messages",
+    `${baseUrl}/v1/messages`,
     {
       method: "POST",
       headers: {
@@ -110,8 +148,9 @@ async function generateGemini(request: GenerateRequest): Promise<GenerateResult>
     role: message.role === "assistant" ? "model" : "user",
     parts: [{ text: message.content }],
   }));
+  const baseUrl = normalizedBaseUrl(request.baseUrl, "https://generativelanguage.googleapis.com/v1beta");
   const { body } = await requestJson(
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(request.model)}:generateContent?key=${encodeURIComponent(request.apiKey)}`,
+    `${baseUrl}/models/${encodeURIComponent(request.model)}:generateContent?key=${encodeURIComponent(request.apiKey)}`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -145,6 +184,7 @@ export async function generateText(request: GenerateRequest): Promise<GenerateRe
   }
   switch (request.provider) {
     case "openai": return generateOpenAI(request);
+    case "openai_compatible": return generateOpenAICompatible(request);
     case "anthropic": return generateAnthropic(request);
     case "gemini": return generateGemini(request);
   }
