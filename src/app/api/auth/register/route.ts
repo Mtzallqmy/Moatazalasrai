@@ -41,10 +41,12 @@ export async function POST(request: Request) {
     await db().insert(organizationMembers).values({ organizationId: organization.id, userId: user.id, role: "owner" });
     await db().insert(auditLogs).values({ organizationId: organization.id, actorType: "user", actorId: user.id, action: "auth.register", resourceType: "user", resourceId: user.id, metadata: {} });
 
-    await createSession(user.id, {
-      ipAddress: request.headers.get("x-forwarded-for")?.split(",")[0]?.trim(),
-      userAgent: request.headers.get("user-agent") ?? undefined,
-    });
+    const ipAddress = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+    const userAgent = request.headers.get("user-agent") ?? undefined;
+    const metadata: { ipAddress?: string; userAgent?: string } = {};
+    if (ipAddress) metadata.ipAddress = ipAddress;
+    if (userAgent) metadata.userAgent = userAgent;
+    await createSession(user.id, metadata);
 
     return NextResponse.json({ success: true, data: { userId: user.id, organizationId: organization.id }, meta: { requestId: id } }, { status: 201 });
   } catch (error) {
