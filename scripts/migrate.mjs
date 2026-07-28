@@ -83,7 +83,7 @@ for (const name of migrationFiles) {
           ...statements.map((statement) => tx`${tx.unsafe(statement)}`),
           tx`INSERT INTO "_platform_migrations" ("name", "checksum") VALUES (${name}, ${digest})`,
         ],
-        { isolationLevel: "Serializable", fetchOptions: { signal } },
+        { isolationMode: "Serializable", fetchOptions: { signal } },
       ),
     `Applying migration ${name}`,
   );
