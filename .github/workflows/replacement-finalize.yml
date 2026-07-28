@@ -1,0 +1,84 @@
+name: Replacement final gate
+
+on:
+  push:
+    branches:
+      - agent/full-production-replacement
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+
+concurrency:
+  group: replacement-final-gate
+  cancel-in-progress: false
+
+jobs:
+  validate-and-enable-merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://user:password@example.invalid/database?sslmode=require
+      CREDENTIAL_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      BOOTSTRAP_ADMIN_TOKEN: ci-only-bootstrap-token-32-chars
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout final replacement branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/full-production-replacement
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify clean replacement tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -d .replacement
+          test ! -f .github/workflows/apply-reviewed-replacement.yml
+          test ! -f .github/workflows/apply-reviewed-replacement-v2.yml
+          test -f drizzle/0000_platform_schema.sql
+          test -f scripts/start-production.mjs
+          test -f src/app/api/auth/login/route.ts
+          test -f src/app/api/auth/register/route.ts
+          test -f src/app/api/dashboard/providers/validate/route.ts
+          test -f src/app/dashboard/chat/page.tsx
+          test -f src/components/chat-workspace.tsx
+          test -f tests/sql-splitter.test.ts
+          test "$(find drizzle -maxdepth 1 -name '*.sql' -type f | wc -l)" -eq 1
+          ! git ls-files | grep -E '^\.replacement/|^drizzle/000[123]_'
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Lint
+        run: npm run lint
+
+      - name: TypeScript
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+
+      - name: Remove temporary final gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/workflows/replacement-finalize.yml
+          git add -A
+          git commit -m "Remove temporary replacement gate [replacement-gate-cleanup]"
+          git push origin HEAD:agent/full-production-replacement
+
+      - name: Enable squash auto-merge for PR 9
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr merge 9 --repo Mtzallqmy/Moatazalasrai --squash --auto
