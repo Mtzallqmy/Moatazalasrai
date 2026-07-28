@@ -50,7 +50,8 @@ export default function HomePage() {
       </section>
 
       <footer className="border-t border-slate-200 pt-6 text-sm text-slate-500">
-        راجع <code>docs/DEPLOYMENT.md</code> لإعداد Railway والمتغيرات والترحيلات وتهيئة أول مؤسسة.
+        <p>راجع <code>docs/DEPLOYMENT.md</code> لإعداد Railway والمتغيرات والترحيلات وتهيئة أول مؤسسة.</p>
+        <p className="mt-3 font-medium text-slate-700">برمجة وتطوير معتز العلقمي</p>
       </footer>
     </main>
   );
