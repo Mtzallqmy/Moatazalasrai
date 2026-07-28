@@ -14,14 +14,22 @@ function hashToken(token: string): string {
 export async function createSession(userId: string, metadata?: { ipAddress?: string; userAgent?: string }) {
   const token = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000);
-
-  await db().insert(sessions).values({
+  const values: {
+    userId: string;
+    tokenHash: string;
+    expiresAt: Date;
+    ipAddress?: string;
+    userAgent?: string;
+  } = {
     userId,
     tokenHash: hashToken(token),
     expiresAt,
-    ipAddress: metadata?.ipAddress,
-    userAgent: metadata?.userAgent?.slice(0, 500),
-  });
+  };
+
+  if (metadata?.ipAddress) values.ipAddress = metadata.ipAddress;
+  if (metadata?.userAgent) values.userAgent = metadata.userAgent.slice(0, 500);
+
+  await db().insert(sessions).values(values);
 
   const store = await cookies();
   store.set(SESSION_COOKIE, token, {
