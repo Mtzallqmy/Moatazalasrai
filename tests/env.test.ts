@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { env, resetEnvForTests } from "../src/lib/config/env";
 
-const originalEnv = { ...process.env };
+const originalValues = new Map<string, string | undefined>();
+const managedKeys = ["NODE_ENV", "DATABASE_URL", "CREDENTIAL_ENCRYPTION_KEY", "LOG_LEVEL", "APP_URL"] as const;
 
 beforeEach(() => {
+  for (const key of managedKeys) originalValues.set(key, process.env[key]);
   process.env.NODE_ENV = "test";
   process.env.DATABASE_URL = "postgresql://user:pass@example.test/db?sslmode=require";
   process.env.CREDENTIAL_ENCRYPTION_KEY = Buffer.alloc(32, 1).toString("base64");
@@ -13,7 +15,12 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  process.env = { ...originalEnv };
+  for (const key of managedKeys) {
+    const value = originalValues.get(key);
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  originalValues.clear();
   resetEnvForTests();
 });
 
