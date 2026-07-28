@@ -1,57 +1,50 @@
+import Link from "next/link";
+
 const pillars = [
-  {
-    title: "منصة متعددة المؤسسات",
-    desc: "عزل كامل للبيانات والمفاتيح والوكلاء وعمليات التشغيل حسب المؤسسة.",
-  },
-  {
-    title: "عدة مزوّدين",
-    desc: "بوابة موحدة لـ OpenAI وAnthropic وGemini دون ربط المنصة بمزوّد واحد.",
-  },
-  {
-    title: "مفاتيح مشفرة",
-    desc: "تُحفظ مفاتيح BYOK مشفرة باستخدام AES-256-GCM ولا تصل إلى المتصفح بعد تخزينها.",
-  },
-  {
-    title: "تشغيل قابل للتدقيق",
-    desc: "إصدارات للوكلاء، وسجل Runs وأحداث واستهلاك Tokens وسجل تدقيق للمؤسسة.",
-  },
+  { title: "عزل مؤسسي حقيقي", desc: "كل مستخدم يعمل داخل مؤسسة محددة، وتُقيّد الاستعلامات والموارد بمعرّف المؤسسة." },
+  { title: "جلسات آمنة", desc: "تسجيل ودخول فعليان باستخدام كلمات مرور مشتقة عبر scrypt وجلسات مخزنة في PostgreSQL وCookies من نوع HttpOnly." },
+  { title: "عدة مزوّدين", desc: "بوابة موحدة لـ OpenAI وAnthropic وGemini مع حفظ مفاتيح BYOK بصورة مشفرة." },
+  { title: "تشغيل قابل للتدقيق", desc: "إصدارات للوكلاء وسجل Runs وأحداث واستهلاك Tokens وسجل تدقيق للمؤسسة." },
 ];
 
 export default function HomePage() {
   return (
-    <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-12 px-6 py-16">
-      <header className="flex flex-col gap-4">
-        <span className="text-sm font-semibold text-brand-600">Moataz Agent Platform</span>
-        <h1 className="max-w-3xl text-4xl font-bold tracking-tight text-slate-950 sm:text-5xl">
-          نواة إنتاجية لبناء وتشغيل وكلاء ذكاء اصطناعي متعددين
-        </h1>
-        <p className="max-w-3xl text-lg leading-8 text-slate-600">
-          منصة API متعددة المؤسسات لإدارة مزوّدي النماذج والمفاتيح المشفرة والوكلاء ذات الإصدارات
-          وعمليات التشغيل. استخدم واجهات <code className="rounded bg-slate-100 px-1.5 py-0.5 text-sm">/api/v1</code>
-          للتهيئة والإدارة والتشغيل.
-        </p>
-        <div className="flex flex-wrap gap-3 text-sm">
-          <a className="rounded-lg bg-brand-600 px-5 py-2.5 font-medium text-white hover:bg-brand-700" href="/api/health">
-            فحص صحة الخدمة
-          </a>
-          <a className="rounded-lg border border-slate-300 px-5 py-2.5 font-medium text-slate-700 hover:bg-slate-50" href="https://github.com/Mtzallqmy/Moatazalasrai">
-            المستودع
-          </a>
-        </div>
-      </header>
+    <main className="min-h-screen bg-slate-950 text-white">
+      <div className="mx-auto max-w-6xl px-5 py-8 sm:px-8">
+        <nav className="flex items-center justify-between gap-4 border-b border-slate-800 pb-5">
+          <span className="text-sm font-bold text-blue-400 sm:text-base">Moataz Agent Platform</span>
+          <div className="flex gap-2 text-sm">
+            <Link className="rounded-xl border border-slate-700 px-4 py-2 hover:bg-slate-900" href="/login">تسجيل الدخول</Link>
+            <Link className="rounded-xl bg-blue-600 px-4 py-2 font-semibold hover:bg-blue-500" href="/register">إنشاء حساب</Link>
+          </div>
+        </nav>
 
-      <section className="grid gap-4 sm:grid-cols-2">
-        {pillars.map((pillar) => (
-          <article key={pillar.title} className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h2 className="mb-2 font-semibold text-slate-950">{pillar.title}</h2>
-            <p className="text-sm leading-6 text-slate-600">{pillar.desc}</p>
-          </article>
-        ))}
-      </section>
+        <header className="grid gap-10 py-16 lg:grid-cols-[1.15fr_.85fr] lg:items-center lg:py-24">
+          <div>
+            <span className="inline-flex rounded-full border border-blue-500/30 bg-blue-500/10 px-3 py-1 text-sm text-blue-300">منصة SaaS متعددة المؤسسات</span>
+            <h1 className="mt-6 max-w-3xl text-4xl font-black leading-tight sm:text-5xl lg:text-6xl">أنشئ وكلاء ذكاء اصطناعي وشغّلهم من منصة واحدة آمنة</h1>
+            <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-300">إدارة المؤسسات ومفاتيح المزودين والوكلاء وإصداراتهم وعمليات التشغيل من Backend فعلي مرتبط بـPostgreSQL.</p>
+            <div className="mt-8 flex flex-wrap gap-3">
+              <Link className="rounded-xl bg-blue-600 px-6 py-3 font-semibold hover:bg-blue-500" href="/register">ابدأ بإنشاء مؤسستك</Link>
+              <Link className="rounded-xl border border-slate-700 px-6 py-3 font-semibold hover:bg-slate-900" href="/api/ready">فحص قاعدة البيانات</Link>
+            </div>
+          </div>
+          <aside className="rounded-3xl border border-slate-800 bg-slate-900 p-6 shadow-2xl shadow-blue-950/30">
+            <p className="text-sm text-slate-400">المسار الإنتاجي</p>
+            <div className="mt-5 space-y-4 text-sm">
+              {["إنشاء حساب ومؤسسة", "إضافة مفاتيح المزودين", "إنشاء وكيل وإصدار", "تشغيل الوكيل ومراجعة النتائج"].map((step, index) => (
+                <div key={step} className="flex items-center gap-3 rounded-2xl bg-slate-950 px-4 py-4"><span className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-600 font-bold">{index + 1}</span><span>{step}</span></div>
+              ))}
+            </div>
+          </aside>
+        </header>
 
-      <footer className="border-t border-slate-200 pt-6 text-sm text-slate-500">
-        راجع <code>docs/DEPLOYMENT.md</code> لإعداد Railway والمتغيرات والترحيلات وتهيئة أول مؤسسة.
-      </footer>
+        <section className="grid gap-4 pb-16 sm:grid-cols-2">
+          {pillars.map((pillar) => <article key={pillar.title} className="rounded-2xl border border-slate-800 bg-slate-900 p-6"><h2 className="font-bold">{pillar.title}</h2><p className="mt-2 text-sm leading-7 text-slate-400">{pillar.desc}</p></article>)}
+        </section>
+
+        <footer className="border-t border-slate-800 py-8 text-center text-sm text-slate-500">برمجة وتطوير معتز العلقمي</footer>
+      </div>
     </main>
   );
 }
