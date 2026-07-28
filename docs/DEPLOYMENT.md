@@ -2,23 +2,35 @@
 
 ## Required environment variables
 
-- `DATABASE_URL`: PostgreSQL connection string. Neon is recommended.
+- `NODE_ENV=production`
+- `PORT`: Railway normally supplies this automatically.
+- `APP_URL`: the public HTTPS application URL.
+- `DATABASE_URL`: PostgreSQL connection string. A Neon pooled URL is supported.
 - `CREDENTIAL_ENCRYPTION_KEY`: base64-encoded 32-byte AES key. Generate with `openssl rand -base64 32`.
 - `BOOTSTRAP_ADMIN_TOKEN`: long random token used only to create the first organization and platform API key.
-- `NODE_ENV=production`
+- `LOG_LEVEL=info`
 - `NEXT_TELEMETRY_DISABLED=1`
 
-Never expose provider API keys as deployment variables for individual tenants. Store them through `/api/v1/provider-credentials`; they are encrypted before persistence.
+Optional observability variables are documented in `.env.example`.
 
-## Railway
+Never expose tenant provider API keys as deployment variables. Store them through `/api/v1/provider-credentials`; the server encrypts them before persistence and never returns the plaintext value.
 
-1. Create a Railway project and connect this repository/branch.
-2. Add a PostgreSQL service or use a Neon database.
-3. Configure all required environment variables.
-4. Railway uses the repository `Dockerfile` through `railway.json`.
-5. Deploy, then verify `GET /api/health`.
-6. Run migrations from a one-off shell: `npm run db:migrate`.
-7. Bootstrap the first tenant once:
+## Railway release sequence
+
+1. Connect the repository and select the intended branch.
+2. Configure the required environment variables.
+3. Confirm the service uses `railway.json` and the repository `Dockerfile`.
+4. Run `npm run db:migrate` from a Railway one-off shell before promoting a release that depends on a new migration.
+5. Deploy the service.
+6. Verify liveness at `GET /api/health`.
+7. Verify readiness and database connectivity at `GET /api/ready`.
+8. Expose a Railway public domain only after readiness succeeds.
+
+Railway is configured to use `/api/ready` as its health check. A deployment remains unhealthy when PostgreSQL is unavailable or required runtime configuration is invalid.
+
+## Bootstrap the first tenant
+
+Run this once after migrations and the first healthy deployment:
 
 ```bash
 curl -X POST https://YOUR_DOMAIN/api/v1/bootstrap \
@@ -27,7 +39,7 @@ curl -X POST https://YOUR_DOMAIN/api/v1/bootstrap \
   -d '{"name":"Primary organization","slug":"primary"}'
 ```
 
-Save the returned `apiKey.value`; it is shown once. Rotate or remove `BOOTSTRAP_ADMIN_TOKEN` after initialization.
+Save the returned `apiKey.value`; it is displayed once. Rotate or remove `BOOTSTRAP_ADMIN_TOKEN` after initialization.
 
 ## Add a provider credential
 
@@ -71,4 +83,18 @@ docker build -t moataz-agent-platform .
 docker run --rm -p 3000:3000 --env-file .env moataz-agent-platform
 ```
 
-Run migrations before serving production traffic. Use a managed secret store for the encryption and bootstrap keys, enforce HTTPS, restrict database networking, and configure backups and alerts.
+Verify:
+
+```bash
+curl --fail http://localhost:3000/api/health
+curl --fail http://localhost:3000/api/ready
+```
+
+## Operational safeguards
+
+- Use a managed secret store for encryption and bootstrap keys.
+- Do not rotate `CREDENTIAL_ENCRYPTION_KEY` without a re-encryption procedure for existing credentials.
+- Restrict database networking, enable backups, and configure alerts.
+- Apply migrations once per release; do not run them concurrently from every replica.
+- Keep at least one known-good deployment available for rollback.
+- Require CI to pass before merging production changes.
