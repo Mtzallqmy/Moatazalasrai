@@ -1,0 +1,33 @@
+name: Recover reviewed repository
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Recover available reviewed files
+        shell: bash
+        run: |
+          set -u
+          mkdir -p recovered
+          cat .replacement/archive.part* | base64 --decode > /tmp/reviewed.tar.gz
+          set +e
+          gzip -dc /tmp/reviewed.tar.gz | tar -xvf - -C recovered
+          recovery_status=$?
+          set -e
+          echo "recovery_status=$recovery_status"
+          find recovered -type f -print | sort
+          tar -czf recovered-reviewed.tar.gz -C recovered .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recovered-reviewed
+          path: recovered-reviewed.tar.gz
+          if-no-files-found: error
+          retention-days: 1
