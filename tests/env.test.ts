@@ -3,6 +3,13 @@ import { env, resetEnvForTests } from "../src/lib/config/env";
 
 const originalEnv = { ...process.env };
 
+function restoreEnvironment() {
+  for (const key of Object.keys(process.env)) {
+    if (!(key in originalEnv)) delete process.env[key];
+  }
+  Object.assign(process.env, originalEnv);
+}
+
 beforeEach(() => {
   process.env.NODE_ENV = "test";
   process.env.DATABASE_URL = "postgresql://user:pass@example.test/db?sslmode=require";
@@ -13,7 +20,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  process.env = { ...originalEnv };
+  restoreEnvironment();
   resetEnvForTests();
 });
 
