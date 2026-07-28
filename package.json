@@ -4,13 +4,11 @@
   "private": true,
   "description": "Production-oriented multi-tenant AI agent platform with encrypted BYOK credentials and multi-provider model routing.",
   "license": "MIT",
-  "engines": {
-    "node": ">=20.11.0"
-  },
+  "engines": { "node": ">=20.11.0" },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "npm run db:migrate && next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -43,7 +41,5 @@
     "vitest": "^3.2.7",
     "wrangler": "^4.86.0"
   },
-  "overrides": {
-    "sharp": "^0.35.0"
-  }
+  "overrides": { "sharp": "^0.35.0" }
 }

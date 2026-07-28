@@ -47,6 +47,7 @@ export async function executeAgentRun(input: {
     const result = await generateText({
       provider: credential.provider,
       apiKey: decryptSecret(credential.encryptedSecret),
+      baseUrl: credential.baseUrl,
       model: version.model,
       messages: [
         { role: "system", content: version.instructions },

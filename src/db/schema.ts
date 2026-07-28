@@ -11,23 +11,10 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
-export const memberRole = pgEnum("member_role", [
-  "owner",
-  "admin",
-  "developer",
-  "operator",
-  "viewer",
-]);
+export const memberRole = pgEnum("member_role", ["owner", "admin", "developer", "operator", "viewer"]);
 export const agentStatus = pgEnum("agent_status", ["draft", "published", "archived"]);
-export const runStatus = pgEnum("run_status", [
-  "queued",
-  "running",
-  "waiting_for_approval",
-  "completed",
-  "failed",
-  "cancelled",
-]);
-export const providerKind = pgEnum("provider_kind", ["openai", "anthropic", "gemini"]);
+export const runStatus = pgEnum("run_status", ["queued", "running", "waiting_for_approval", "completed", "failed", "cancelled"]);
+export const providerKind = pgEnum("provider_kind", ["openai", "anthropic", "gemini", "openai_compatible"]);
 
 export const organizations = pgTable("organizations", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -47,33 +34,25 @@ export const users = pgTable("users", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-export const sessions = pgTable(
-  "sessions",
-  {
-    id: uuid("id").defaultRandom().primaryKey(),
-    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-    tokenHash: text("token_hash").notNull().unique(),
-    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
-    ipAddress: text("ip_address"),
-    userAgent: text("user_agent"),
-    revokedAt: timestamp("revoked_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (table) => [index("sessions_user_id_idx").on(table.userId), index("sessions_expires_at_idx").on(table.expiresAt)]
-);
+export const sessions = pgTable("sessions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  tokenHash: text("token_hash").notNull().unique(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [index("sessions_user_id_idx").on(table.userId), index("sessions_expires_at_idx").on(table.expiresAt)]);
 
-export const organizationMembers = pgTable(
-  "organization_members",
-  {
-    id: uuid("id").defaultRandom().primaryKey(),
-    organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
-    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-    role: memberRole("role").notNull().default("viewer"),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (table) => [uniqueIndex("organization_members_org_user_idx").on(table.organizationId, table.userId), index("organization_members_user_idx").on(table.userId)]
-);
+export const organizationMembers = pgTable("organization_members", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  role: memberRole("role").notNull().default("viewer"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [uniqueIndex("organization_members_org_user_idx").on(table.organizationId, table.userId), index("organization_members_user_idx").on(table.userId)]);
 
 export const platformApiKeys = pgTable("platform_api_keys", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -91,8 +70,12 @@ export const providerCredentials = pgTable("provider_credentials", {
   organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   provider: providerKind("provider").notNull(),
   name: text("name").notNull(),
+  baseUrl: text("base_url").notNull(),
   encryptedSecret: text("encrypted_secret").notNull(),
   secretHint: text("secret_hint").notNull(),
+  discoveredModels: jsonb("discovered_models").$type<string[]>().notNull().default([]),
+  validationStatus: text("validation_status").notNull().default("verified"),
+  lastValidatedAt: timestamp("last_validated_at", { withTimezone: true }),
   enabled: boolean("enabled").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -109,24 +92,20 @@ export const agents = pgTable("agents", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-export const agentVersions = pgTable(
-  "agent_versions",
-  {
-    id: uuid("id").defaultRandom().primaryKey(),
-    agentId: uuid("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
-    version: integer("version").notNull(),
-    providerCredentialId: uuid("provider_credential_id").notNull().references(() => providerCredentials.id),
-    model: text("model").notNull(),
-    instructions: text("instructions").notNull(),
-    temperatureMilli: integer("temperature_milli").notNull().default(200),
-    maxOutputTokens: integer("max_output_tokens").notNull().default(2048),
-    maxModelCalls: integer("max_model_calls").notNull().default(8),
-    maxToolCalls: integer("max_tool_calls").notNull().default(12),
-    tools: jsonb("tools").$type<string[]>().notNull().default([]),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (table) => [uniqueIndex("agent_versions_agent_version_idx").on(table.agentId, table.version)]
-);
+export const agentVersions = pgTable("agent_versions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  agentId: uuid("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
+  version: integer("version").notNull(),
+  providerCredentialId: uuid("provider_credential_id").notNull().references(() => providerCredentials.id),
+  model: text("model").notNull(),
+  instructions: text("instructions").notNull(),
+  temperatureMilli: integer("temperature_milli").notNull().default(200),
+  maxOutputTokens: integer("max_output_tokens").notNull().default(2048),
+  maxModelCalls: integer("max_model_calls").notNull().default(8),
+  maxToolCalls: integer("max_tool_calls").notNull().default(12),
+  tools: jsonb("tools").$type<string[]>().notNull().default([]),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [uniqueIndex("agent_versions_agent_version_idx").on(table.agentId, table.version)]);
 
 export const conversations = pgTable("conversations", {
   id: uuid("id").defaultRandom().primaryKey(),
