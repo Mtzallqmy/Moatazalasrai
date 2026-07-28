@@ -1,0 +1,115 @@
+name: Replacement merge v2
+
+on:
+  push:
+    branches:
+      - agent/full-production-replacement
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+
+concurrency:
+  group: replacement-merge-v2
+  cancel-in-progress: false
+
+jobs:
+  validate-clean-and-merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://user:password@example.invalid/database?sslmode=require
+      CREDENTIAL_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      BOOTSTRAP_ADMIN_TOKEN: ci-only-bootstrap-token-32-chars
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout replacement branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/full-production-replacement
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Stop when PR is already merged
+        id: pr
+        shell: bash
+        run: |
+          set -euo pipefail
+          state="$(gh pr view 9 --repo Mtzallqmy/Moatazalasrai --json state --jq .state)"
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+
+      - name: Verify final clean tree
+        if: steps.pr.outputs.state == 'OPEN'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -d .replacement
+          test -f drizzle/0000_platform_schema.sql
+          test -f scripts/start-production.mjs
+          test -f src/app/api/auth/login/route.ts
+          test -f src/app/api/auth/register/route.ts
+          test -f src/app/api/dashboard/providers/validate/route.ts
+          test -f src/app/dashboard/chat/page.tsx
+          test -f src/components/chat-workspace.tsx
+          test -f tests/sql-splitter.test.ts
+          test "$(find drizzle -maxdepth 1 -name '*.sql' -type f | wc -l)" -eq 1
+          ! git ls-files | grep -E '^\.replacement/|^drizzle/000[123]_'
+
+      - name: Install dependencies
+        if: steps.pr.outputs.state == 'OPEN'
+        run: npm ci --no-audit --no-fund
+
+      - name: Lint
+        if: steps.pr.outputs.state == 'OPEN'
+        run: npm run lint
+
+      - name: TypeScript
+        if: steps.pr.outputs.state == 'OPEN'
+        run: npm run typecheck
+
+      - name: Unit tests
+        if: steps.pr.outputs.state == 'OPEN'
+        run: npm test
+
+      - name: Production build
+        if: steps.pr.outputs.state == 'OPEN'
+        run: npm run build
+
+      - name: Remove temporary merge gate and push
+        if: steps.pr.outputs.state == 'OPEN'
+        id: cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/workflows/replacement-merge-v2.yml
+          rm -f .github/workflows/replacement-finalize.yml
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "Remove temporary replacement merge gate [replacement-merge-cleanup]"
+            git push origin HEAD:agent/full-production-replacement
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Merge PR after successful validation
+        if: steps.pr.outputs.state == 'OPEN'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="${{ steps.cleanup.outputs.sha }}"
+          for attempt in $(seq 1 18); do
+            state="$(gh pr view 9 --repo Mtzallqmy/Moatazalasrai --json state --jq .state)"
+            if [[ "$state" == "MERGED" ]]; then exit 0; fi
+            if gh api --method PUT repos/Mtzallqmy/Moatazalasrai/pulls/9/merge -f merge_method=squash -f sha="$sha" >/tmp/merge.json 2>/tmp/merge.err; then
+              cat /tmp/merge.json
+              exit 0
+            fi
+            cat /tmp/merge.err || true
+            sleep 20
+          done
+          echo "PR 9 could not be merged after successful validation." >&2
+          exit 1
