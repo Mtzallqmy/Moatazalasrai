@@ -2,21 +2,17 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Moataz AI Platform",
-  description:
-    "Production-grade full-stack starter: Next.js + Neon + Drizzle, portable across Cloudflare, Railway, and any Node/Docker host.",
+  title: {
+    default: "Moataz Agent Platform",
+    template: "%s | Moataz Agent Platform",
+  },
+  description: "منصة SaaS عربية متعددة المؤسسات لبناء وتشغيل وإدارة وكلاء الذكاء الاصطناعي بأمان.",
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ar" dir="rtl">
-      <body className="min-h-screen bg-slate-50 text-slate-900">
-        {children}
-      </body>
+      <body>{children}</body>
     </html>
   );
 }
