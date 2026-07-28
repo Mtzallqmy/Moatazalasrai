@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 
-const host = process.env.HOSTNAME?.trim() || "0.0.0.0";
+const host = process.env.APP_HOST?.trim() || "0.0.0.0";
 const port = process.env.PORT?.trim() || "3000";
 const nextBinary = "node_modules/next/dist/bin/next";
 let shuttingDown = false;
@@ -78,11 +78,10 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 
 next.once("error", (error) => {
   console.error(JSON.stringify({ level: "fatal", event: "next.start.failed", message: error.message }));
-  process.exitCode = 1;
+  process.exit(1);
 });
 
-next.once("exit", (code, signal) => {
+next.once("exit", (code) => {
   shuttingDown = true;
-  if (signal) process.kill(process.pid, signal);
-  else process.exit(code ?? 1);
+  process.exit(code ?? 1);
 });
