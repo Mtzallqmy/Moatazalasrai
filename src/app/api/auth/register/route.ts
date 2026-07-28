@@ -30,13 +30,13 @@ export async function POST(request: Request) {
     const passwordHash = await hashPassword(password);
     const userRows = await db().insert(users).values({ email, name, passwordHash }).returning({ id: users.id });
     const user = userRows[0];
-    if (!user) throw new Error("تعذر إنشاء المستخدم.");
+    if (!user) throw new Error("USER_INSERT_FAILED");
 
     const slugBase = organizationName.toLowerCase().replace(/[^a-z0-9\u0600-\u06ff]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "org";
     const slug = `${slugBase}-${crypto.randomUUID().slice(0, 8)}`;
     const orgRows = await db().insert(organizations).values({ name: organizationName, slug }).returning({ id: organizations.id });
     const organization = orgRows[0];
-    if (!organization) throw new Error("تعذر إنشاء المؤسسة.");
+    if (!organization) throw new Error("ORGANIZATION_INSERT_FAILED");
 
     await db().insert(organizationMembers).values({ organizationId: organization.id, userId: user.id, role: "owner" });
     await db().insert(auditLogs).values({ organizationId: organization.id, actorType: "user", actorId: user.id, action: "auth.register", resourceType: "user", resourceId: user.id, metadata: {} });
@@ -50,7 +50,14 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true, data: { userId: user.id, organizationId: organization.id }, meta: { requestId: id } }, { status: 201 });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "تعذر إنشاء الحساب.";
-    return NextResponse.json({ success: false, error: { code: "REGISTRATION_FAILED", message, requestId: id } }, { status: 500 });
+    console.error(JSON.stringify({ level: "error", event: "registration_failed", requestId: id, error: error instanceof Error ? error.name : "UnknownError" }));
+    return NextResponse.json({
+      success: false,
+      error: {
+        code: "REGISTRATION_FAILED",
+        message: "تعذر إنشاء الحساب حاليًا. تحقق من جاهزية قاعدة البيانات ثم أعد المحاولة.",
+        requestId: id,
+      },
+    }, { status: 503 });
   }
 }
