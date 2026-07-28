@@ -45,9 +45,9 @@ export function AuthForm({ mode }: { mode: Mode }) {
       <Field name="email" label="البريد الإلكتروني" type="email" autoComplete="email" />
       <Field name="password" label="كلمة المرور" type="password" minLength={10} autoComplete={mode === "login" ? "current-password" : "new-password"} />
 
-      {error && <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
+      {error && <p role="alert" className="rounded-2xl border border-rose-200/20 bg-rose-200/10 px-4 py-3 text-sm text-rose-100">{error}</p>}
 
-      <button disabled={loading} className="w-full rounded-xl bg-blue-600 px-4 py-3 font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60">
+      <button disabled={loading} className="primary-button w-full disabled:cursor-not-allowed disabled:opacity-60">
         {loading ? "جارٍ التنفيذ..." : mode === "login" ? "تسجيل الدخول" : "إنشاء الحساب والمؤسسة"}
       </button>
     </form>
@@ -57,8 +57,8 @@ export function AuthForm({ mode }: { mode: Mode }) {
 function Field(props: { name: string; label: string; type?: string; minLength?: number; autoComplete?: string }) {
   return (
     <label className="block space-y-2">
-      <span className="text-sm font-medium text-slate-700">{props.label}</span>
-      <input {...props} required className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100" />
+      <span className="text-sm font-medium text-stone-300">{props.label}</span>
+      <input {...props} required className="w-full rounded-2xl border border-stone-700 bg-stone-950/70 px-4 py-3 text-stone-100 outline-none transition placeholder:text-stone-600 focus:border-emerald-200/60 focus:ring-4 focus:ring-emerald-100/10" />
     </label>
   );
 }

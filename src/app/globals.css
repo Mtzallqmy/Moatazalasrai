@@ -2,10 +2,63 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  color-scheme: dark;
+  --bg: #111714;
+  --surface: #18201c;
+  --surface-soft: #202a25;
+  --border: #314038;
+  --text: #f3f7f4;
+  --muted: #a7b4ac;
+  --sage: #91a88f;
+  --sand: #c8b89a;
+  --rose: #b89591;
+  --accent: #9fb39a;
+}
+
 html {
   direction: rtl;
+  scroll-behavior: smooth;
 }
 
 body {
-  font-family: system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top right, rgba(145, 168, 143, 0.12), transparent 32rem),
+    radial-gradient(circle at bottom left, rgba(200, 184, 154, 0.08), transparent 28rem),
+    var(--bg);
+  color: var(--text);
+  font-family: "Noto Sans Arabic", "IBM Plex Sans Arabic", "Segoe UI", Tahoma, Arial, sans-serif;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+:lang(en), [dir="ltr"], code, pre, .font-latin {
+  font-family: Inter, "Segoe UI", Arial, sans-serif;
+}
+
+::selection {
+  background: rgba(159, 179, 154, 0.28);
+}
+
+@layer components {
+  .app-shell {
+    @apply min-h-screen text-stone-100;
+  }
+
+  .glass-panel {
+    @apply border border-stone-700/70 bg-stone-900/70 shadow-2xl shadow-black/10 backdrop-blur;
+  }
+
+  .soft-card {
+    @apply rounded-3xl border border-stone-700/70 bg-stone-900/65 shadow-lg shadow-black/10;
+  }
+
+  .primary-button {
+    @apply inline-flex items-center justify-center rounded-2xl bg-emerald-200 px-5 py-3 font-semibold text-emerald-950 transition hover:bg-emerald-100 focus:outline-none focus:ring-2 focus:ring-emerald-200/60;
+  }
+
+  .secondary-button {
+    @apply inline-flex items-center justify-center rounded-2xl border border-stone-600 px-5 py-3 font-semibold text-stone-100 transition hover:border-stone-500 hover:bg-stone-800/80 focus:outline-none focus:ring-2 focus:ring-stone-500/50;
+  }
 }
