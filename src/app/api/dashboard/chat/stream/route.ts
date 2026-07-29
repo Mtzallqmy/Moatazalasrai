@@ -39,6 +39,7 @@ export async function POST(request: Request) {
         eq(conversations.id, body.conversationId),
         eq(conversations.organizationId, session.organizationId),
         isNull(conversations.archivedAt),
+        isNull(conversations.deletedAt),
         eq(agents.status, "published"),
       ))
       .limit(1);
@@ -49,11 +50,21 @@ export async function POST(request: Request) {
       conversation.id,
       body.attachmentIds,
     );
+    if (body.clientRequestId) {
+      const [duplicate] = await db().select({ id: messages.id }).from(messages).where(and(
+        eq(messages.conversationId, conversation.id),
+        eq(messages.clientRequestId, body.clientRequestId),
+      )).limit(1);
+      if (duplicate) throw new ApiError(409, "DUPLICATE_MESSAGE", "تم استقبال هذه الرسالة سابقًا.");
+    }
     const [userMessage] = await db().transaction(async (tx) => {
       const [created] = await tx.insert(messages).values({
         conversationId: conversation.id,
         role: "user",
         content: body.message,
+        clientRequestId: body.clientRequestId,
+        providerCredentialId: body.providerCredentialId,
+        model: body.model,
         metadata: { requestId, attachmentIds: body.attachmentIds },
       }).returning();
       if (created && body.attachmentIds.length > 0) {
@@ -77,6 +88,9 @@ export async function POST(request: Request) {
             message: `${body.message}${attachmentData.text}`,
             requestId,
             requestSignal: request.signal,
+            providerCredentialId: body.providerCredentialId,
+            model: body.model,
+            inputKind: body.attachmentIds.length > 0 && body.inputKind === "text" ? "file" : body.inputKind,
           })) {
             controller.enqueue(encoder.encode(sse(event.type, event)));
           }
