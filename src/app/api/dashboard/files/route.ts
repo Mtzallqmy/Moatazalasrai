@@ -1,7 +1,7 @@
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { attachments, auditLogs } from "@/db/schema";
-import { requireSession } from "@/lib/auth/authorization";
+import { can, requireSession } from "@/lib/auth/authorization";
 import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError } from "@/lib/http/api";
 import { storeAttachment } from "@/lib/storage/attachments";
 
@@ -11,12 +11,14 @@ export async function GET(request: Request) {
   const requestId = getRequestId(request);
   try {
     const session = await requireSession("files:read");
+    const ownFilesOnly = session.role === "member";
     const url = new URL(request.url);
     const id = url.searchParams.get("id");
     if (id) {
       const [file] = await db().select().from(attachments).where(and(
         eq(attachments.id, id),
         eq(attachments.organizationId, session.organizationId),
+        ownFilesOnly ? eq(attachments.uploadedByUserId, session.userId) : undefined,
         isNull(attachments.deletedAt),
       )).limit(1);
       if (!file) throw new ApiError(404, "ATTACHMENT_NOT_FOUND", "الملف غير موجود.");
@@ -40,7 +42,11 @@ export async function GET(request: Request) {
       sha256: attachments.sha256,
       source: attachments.source,
       createdAt: attachments.createdAt,
-    }).from(attachments).where(and(eq(attachments.organizationId, session.organizationId), isNull(attachments.deletedAt)))
+    }).from(attachments).where(and(
+      eq(attachments.organizationId, session.organizationId),
+      ownFilesOnly ? eq(attachments.uploadedByUserId, session.userId) : undefined,
+      isNull(attachments.deletedAt),
+    ))
       .orderBy(desc(attachments.createdAt)).limit(100);
     return apiSuccess(rows, requestId);
   } catch (error) {
@@ -52,7 +58,8 @@ export async function PATCH(request: Request) {
   const requestId = getRequestId(request);
   try {
     assertSameOrigin(request);
-    const session = await requireSession("files:manage");
+    const session = await requireSession();
+    if (!can(session.role, "files:manage")) throw new ApiError(403, "FORBIDDEN", "لا تملك صلاحية أرشفة الملفات.");
     const body = await request.json() as { id?: string; action?: string };
     if (!body.id || !["archive", "restore"].includes(body.action ?? "")) {
       throw new ApiError(400, "FILE_ACTION_INVALID", "عملية الملف غير صالحة.");
@@ -87,13 +94,18 @@ export async function DELETE(request: Request) {
   const requestId = getRequestId(request);
   try {
     assertSameOrigin(request);
-    const session = await requireSession("files:manage");
+    const session = await requireSession();
     const body = await request.json() as { id?: string };
     if (!body.id) throw new ApiError(400, "FILE_ID_REQUIRED", "معرف الملف مطلوب.");
     const fileId = body.id;
     const [deleted] = await db().transaction(async (tx) => {
       const [file] = await tx.update(attachments).set({ deletedAt: new Date(), updatedAt: new Date() })
-        .where(and(eq(attachments.id, fileId), eq(attachments.organizationId, session.organizationId), isNull(attachments.deletedAt)))
+        .where(and(
+          eq(attachments.id, fileId),
+          eq(attachments.organizationId, session.organizationId),
+          can(session.role, "files:manage") ? undefined : eq(attachments.uploadedByUserId, session.userId),
+          isNull(attachments.deletedAt),
+        ))
         .returning({ id: attachments.id, filename: attachments.filename });
       if (!file) throw new ApiError(404, "ATTACHMENT_NOT_FOUND", "الملف غير موجود.");
       await tx.insert(auditLogs).values({
@@ -117,7 +129,7 @@ export async function POST(request: Request) {
   const requestId = getRequestId(request);
   try {
     assertSameOrigin(request);
-    const session = await requireSession("files:manage");
+    const session = await requireSession("files:upload");
     const contentLength = Number(request.headers.get("content-length") ?? 0);
     if (contentLength > 11 * 1024 * 1024) throw new ApiError(413, "PAYLOAD_TOO_LARGE", "حجم الطلب أكبر من الحد.");
     const form = await request.formData();
@@ -128,6 +140,7 @@ export async function POST(request: Request) {
       organizationId: session.organizationId,
       conversationId: conversationId || undefined,
       uploadedByUserId: session.userId,
+      restrictConversationToUserId: session.role === "member" ? session.userId : undefined,
       source: "web",
       filename: file.name,
       mimeType: file.type || "application/octet-stream",

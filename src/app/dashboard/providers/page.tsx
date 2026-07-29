@@ -10,7 +10,8 @@ import { currentSession } from "@/lib/auth/session";
 export default async function ProvidersPage() {
   const session = await currentSession();
   if (!session) redirect("/login");
-  if (!session.organizationId) redirect("/select-organization");
+  if (!session.organizationId || !session.role) redirect("/select-organization");
+  if (!["owner", "admin", "developer"].includes(session.role)) redirect("/forbidden");
   const rows = await db().select({
     id: providerCredentials.id,
     provider: providerCredentials.provider,

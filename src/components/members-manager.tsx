@@ -3,9 +3,9 @@
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 
-type Role = "owner" | "admin" | "developer" | "operator" | "viewer";
+type Role = "owner" | "admin" | "developer" | "operator" | "viewer" | "member";
 type Member = { id: string; userId: string; name: string | null; email: string; role: Role; createdAt: string };
-const assignableRoles: Exclude<Role, "owner">[] = ["admin", "developer", "operator", "viewer"];
+const assignableRoles: Exclude<Role, "owner">[] = ["member", "viewer", "operator", "developer", "admin"];
 
 export function MembersManager({ initialMembers, currentUserId, currentRole }: { initialMembers: Member[]; currentUserId: string; currentRole: Role }) {
   const router = useRouter();

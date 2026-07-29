@@ -82,6 +82,7 @@ export async function storeAttachment(input: {
   organizationId: string;
   conversationId?: string;
   uploadedByUserId?: string;
+  restrictConversationToUserId?: string;
   source: "web" | "api" | "telegram";
   filename: string;
   mimeType: string;
@@ -98,6 +99,7 @@ export async function storeAttachment(input: {
     const [conversation] = await db().select({ id: conversations.id }).from(conversations).where(and(
       eq(conversations.id, input.conversationId),
       eq(conversations.organizationId, input.organizationId),
+      input.restrictConversationToUserId ? eq(conversations.createdByUserId, input.restrictConversationToUserId) : undefined,
       isNull(conversations.deletedAt),
     )).limit(1);
     if (!conversation) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة.");

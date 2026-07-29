@@ -2,6 +2,7 @@
 
 import { FormEvent, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { agentTemplates, type AgentTemplate } from "@/lib/agents/templates";
 
 type Provider = { id: string; name: string; provider: string; discoveredModels: string[] };
 type Agent = {
@@ -26,7 +27,7 @@ type Version = {
 };
 type Details = { agent: Agent; versions: Version[] };
 
-export function AgentManager({ providers, initialAgents }: { providers: Provider[]; initialAgents: Agent[] }) {
+export function AgentManager({ providers, initialAgents, canManage }: { providers: Provider[]; initialAgents: Agent[]; canManage: boolean }) {
   const router = useRouter();
   const [providerId, setProviderId] = useState(providers[0]?.id ?? "");
   const [agents, setAgents] = useState(initialAgents);
@@ -37,6 +38,40 @@ export function AgentManager({ providers, initialAgents }: { providers: Provider
   const [editProviderId, setEditProviderId] = useState("");
   const models = useMemo(() => providers.find((item) => item.id === providerId)?.discoveredModels ?? [], [providerId, providers]);
   const editModels = useMemo(() => providers.find((item) => item.id === editProviderId)?.discoveredModels ?? [], [editProviderId, providers]);
+
+  async function createFromTemplate(template: AgentTemplate) {
+    const model = models[0];
+    if (!providerId || !model || loading) {
+      setMessage("أضف مزودًا متحققًا ونموذجًا متاحًا قبل تفعيل القالب.");
+      return;
+    }
+    setLoading(true);
+    setMessage(null);
+    try {
+      const response = await fetch("/api/dashboard/agents", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: template.name,
+          description: template.description,
+          providerCredentialId: providerId,
+          model,
+          instructions: template.instructions,
+          temperature: template.temperature,
+          maxOutputTokens: template.maxOutputTokens,
+          publish: true,
+        }),
+      });
+      const result = await response.json().catch(() => null) as { success?: boolean; error?: { message?: string } } | null;
+      if (!response.ok || !result?.success) throw new Error(result?.error?.message ?? "تعذر إنشاء الوكيل من القالب.");
+      setMessage(`تم إنشاء ونشر «${template.name}» وربطه بالنموذج ${model}.`);
+      router.refresh();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : "تعذر إنشاء الوكيل من القالب.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -170,8 +205,25 @@ export function AgentManager({ providers, initialAgents }: { providers: Provider
 
   const latest = details?.versions[0];
   return (
-    <div className="grid gap-5 xl:grid-cols-[420px_1fr]">
-      <form onSubmit={create} className="soft-card grid content-start gap-4 p-5">
+    <>
+      <section className="soft-card mb-5 overflow-hidden p-5 sm:p-6">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div><p className="eyebrow">Agent Library</p><h2 className="mt-2 text-2xl font-black">وكلاء جاهزون لمهام حقيقية</h2><p className="mt-2 max-w-3xl text-sm leading-7" style={{ color: "var(--text-secondary)" }}>قوالب أصلية مستوحاة من أفضل أنماط منصات الوكلاء: تخطيط وتنفيذ، بناء تطبيقات، بحث موثق، هندسة برمجيات، مراجعة GitHub، تحليل بيانات ومستندات وعمليات.</p></div>
+          {canManage ? <label className="grid min-w-64 gap-2 text-xs">مزود القوالب<select value={providerId} onChange={(event) => setProviderId(event.target.value)} className="form-control text-sm">{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} — {provider.provider}</option>)}</select></label> : null}
+        </div>
+        <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {agentTemplates.map((template) => (
+            <article key={template.id} className={`agent-template agent-template-${template.accent}`}>
+              <div className="flex items-center justify-between"><span className="template-icon">{template.icon}</span><span className="status-badge status-neutral">{template.category}</span></div>
+              <h3 className="mt-4 font-black">{template.name}</h3>
+              <p className="mt-2 text-sm leading-6" style={{ color: "var(--text-secondary)" }}>{template.description}</p>
+              {canManage ? <button type="button" disabled={loading || models.length === 0} onClick={() => createFromTemplate(template)} className="secondary-button mt-4 w-full px-3 py-2 text-xs">إنشاء ونشر</button> : null}
+            </article>
+          ))}
+        </div>
+      </section>
+      <div className={`grid gap-5 ${canManage ? "xl:grid-cols-[420px_1fr]" : ""}`}>
+      {canManage ? <form onSubmit={create} className="soft-card grid content-start gap-4 p-5">
         <h2 className="text-lg font-bold">إنشاء وكيل فعلي</h2>
         {providers.length === 0 ? <p className="rounded-2xl border border-amber-200/20 bg-amber-200/10 p-3 text-sm text-amber-100">أضف مزودًا وافحصه أولًا؛ لا يمكن إنشاء وكيل دون نموذج محفوظ.</p> : null}
         <label className="grid gap-2 text-sm">الاسم<input name="name" required maxLength={100} className="form-control" /></label>
@@ -186,7 +238,7 @@ export function AgentManager({ providers, initialAgents }: { providers: Provider
         <label className="flex items-center gap-2 text-sm text-stone-300"><input name="publish" type="checkbox" /> نشر الوكيل مباشرة</label>
         <button disabled={loading || providers.length === 0 || models.length === 0} className="primary-button disabled:opacity-50">{loading ? "جارٍ الحفظ..." : "إنشاء الوكيل"}</button>
         {message ? <p role="status" className="rounded-2xl border border-stone-700 p-3 text-sm">{message}</p> : null}
-      </form>
+      </form> : null}
       <section className="soft-card p-5">
         <h2 className="text-lg font-bold">الوكلاء المحفوظون</h2>
         {agents.length === 0 ? (
@@ -202,18 +254,18 @@ export function AgentManager({ providers, initialAgents }: { providers: Provider
                 <p className="mt-2 text-xs text-stone-500">الإصدار الحالي: {agent.currentVersion}</p>
                 <p className="mt-3 font-mono text-xs text-emerald-100" dir="ltr">{agent.model}</p>
                 {agent.description ? <p className="mt-3 text-sm leading-7 text-stone-400">{agent.description}</p> : null}
-                <div className="mt-4 flex flex-wrap gap-2">
+                {canManage ? <div className="mt-4 flex flex-wrap gap-2">
                   <button disabled={busyId !== null} onClick={() => openEditor(agent)} className="secondary-button px-3 py-2 text-xs">تعديل وإصدارات</button>
                   {agent.status !== "published" ? <button disabled={busyId !== null} onClick={() => changeStatus(agent, "published")} className="secondary-button px-3 py-2 text-xs">نشر</button> : null}
                   {agent.status !== "archived" ? <button disabled={busyId !== null} onClick={() => changeStatus(agent, "archived")} className="danger-button px-3 py-2 text-xs">أرشفة</button> : <button disabled={busyId !== null} onClick={() => changeStatus(agent, "draft")} className="secondary-button px-3 py-2 text-xs">استعادة كمسودة</button>}
-                </div>
+                </div> : <a href={`/dashboard/chat`} className="primary-button mt-4 w-full px-3 py-2 text-xs">ابدأ محادثة</a>}
               </article>
             ))}
           </div>
         )}
       </section>
 
-      {details && latest ? (
+      {canManage && details && latest ? (
         <div className="modal-backdrop" role="presentation">
           <section className="modal-card max-h-[90vh] overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="agent-editor-title">
             <h2 id="agent-editor-title" className="text-xl font-bold">تعديل الوكيل وسجل الإصدارات</h2>
@@ -247,6 +299,7 @@ export function AgentManager({ providers, initialAgents }: { providers: Provider
           </section>
         </div>
       ) : null}
-    </div>
+      </div>
+    </>
   );
 }

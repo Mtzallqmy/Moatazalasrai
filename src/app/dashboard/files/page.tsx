@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { DashboardShell } from "@/components/dashboard-shell";
@@ -18,7 +18,10 @@ export default async function FilesPage() {
     sizeBytes: attachments.sizeBytes,
     source: attachments.source,
     createdAt: attachments.createdAt,
-  }).from(attachments).where(eq(attachments.organizationId, session.organizationId))
+  }).from(attachments).where(and(
+    eq(attachments.organizationId, session.organizationId),
+    session.role === "member" ? eq(attachments.uploadedByUserId, session.userId) : undefined,
+  ))
     .orderBy(desc(attachments.createdAt)).limit(100);
   return (
     <DashboardShell session={session} activePath="/dashboard/files" title="الملفات" description="ملفات المؤسسة المحفوظة فعليًا مع عزل الصلاحيات وإمكانية العودة إلى المحادثة.">

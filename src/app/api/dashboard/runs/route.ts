@@ -1,7 +1,10 @@
 import { z } from "zod";
+import { and, eq } from "drizzle-orm";
+import { db } from "@/db";
+import { conversations, runs } from "@/db/schema";
 import { cancelAgentRun, getRunEvents, listOrganizationRuns } from "@/lib/agents/runtime";
 import { requireSession } from "@/lib/auth/authorization";
-import { apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
+import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { paginationSchema, runCancelSchema, uuidSchema } from "@/lib/http/contracts";
 
 const runStatusSchema = z.enum(["queued", "running", "completed", "failed", "cancelled"]);
@@ -43,6 +46,17 @@ export async function DELETE(request: Request) {
     assertSameOrigin(request);
     const session = await requireSession("agents:run");
     const body = await parseJson(request, runCancelSchema, 4 * 1024);
+    if (session.role === "member") {
+      const [owned] = await db().select({ id: runs.id }).from(runs)
+        .innerJoin(conversations, eq(conversations.id, runs.conversationId))
+        .where(and(
+          eq(runs.id, body.runId),
+          eq(runs.organizationId, session.organizationId),
+          eq(conversations.createdByUserId, session.userId),
+        ))
+        .limit(1);
+      if (!owned) throw new ApiError(404, "RUN_NOT_FOUND", "عملية التشغيل غير موجودة.");
+    }
     const result = await cancelAgentRun(session.organizationId, body.runId);
     return apiSuccess(result, requestId);
   } catch (error) {

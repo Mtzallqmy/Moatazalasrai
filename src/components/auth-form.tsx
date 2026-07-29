@@ -37,10 +37,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
   return (
     <form onSubmit={submit} className="space-y-5">
       {mode === "register" && (
-        <>
-          <Field name="name" label="الاسم الكامل" minLength={2} autoComplete="name" />
-          <Field name="organizationName" label="اسم المؤسسة" minLength={2} autoComplete="organization" />
-        </>
+        <Field name="name" label="الاسم الكامل" minLength={2} autoComplete="name" />
       )}
       <Field name="email" label="البريد الإلكتروني" type="email" autoComplete="email" />
       <Field name="password" label="كلمة المرور" type="password" minLength={mode === "login" ? 1 : 12} autoComplete={mode === "login" ? "current-password" : "new-password"} />
@@ -48,7 +45,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
       {error && <p role="alert" className="rounded-2xl border border-rose-200/20 bg-rose-200/10 px-4 py-3 text-sm text-rose-100">{error}</p>}
 
       <button disabled={loading} className="primary-button w-full disabled:cursor-not-allowed disabled:opacity-60">
-        {loading ? "جارٍ التنفيذ..." : mode === "login" ? "تسجيل الدخول" : "إنشاء الحساب والمؤسسة"}
+        {loading ? "جارٍ التنفيذ..." : mode === "login" ? "تسجيل الدخول" : "إنشاء حساب مستخدم"}
       </button>
     </form>
   );

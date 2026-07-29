@@ -23,13 +23,14 @@ export async function POST(request: Request) {
       throw new ApiError(409, "REGISTRATION_UNAVAILABLE", "تعذر إنشاء الحساب بهذه البيانات.");
     }
 
+    const [platformOrganization] = await db().select({ id: organizations.id })
+      .from(organizations)
+      .where(eq(organizations.publicRegistrationEnabled, true))
+      .limit(1);
+    if (!platformOrganization) {
+      throw new ApiError(503, "REGISTRATION_CLOSED", "التسجيل العام غير مفعّل حاليًا. راجع مدير المنصة.");
+    }
     const passwordHash = await hashPassword(body.password);
-    const slugBase = body.organizationName
-      .toLowerCase()
-      .replace(/[^a-z0-9\u0600-\u06ff]+/g, "-")
-      .replace(/^-|-$/g, "")
-      .slice(0, 40) || "org";
-    const slug = `${slugBase}-${crypto.randomUUID().slice(0, 8)}`;
 
     const created = await db().transaction(async (tx) => {
       const [user] = await tx.insert(users).values({
@@ -39,27 +40,21 @@ export async function POST(request: Request) {
       }).returning({ id: users.id });
       if (!user) throw new Error("USER_CREATE_FAILED");
 
-      const [organization] = await tx.insert(organizations).values({
-        name: body.organizationName,
-        slug,
-      }).returning({ id: organizations.id });
-      if (!organization) throw new Error("ORGANIZATION_CREATE_FAILED");
-
       await tx.insert(organizationMembers).values({
-        organizationId: organization.id,
+        organizationId: platformOrganization.id,
         userId: user.id,
-        role: "owner",
+        role: "member",
       });
       await tx.insert(auditLogs).values({
-        organizationId: organization.id,
+        organizationId: platformOrganization.id,
         actorType: "user",
         actorId: user.id,
         action: "auth.register",
         resourceType: "user",
         resourceId: user.id,
-        metadata: { requestId },
+        metadata: { requestId, assignedRole: "member" },
       });
-      return { userId: user.id, organizationId: organization.id };
+      return { userId: user.id, organizationId: platformOrganization.id, role: "member" as const };
     });
 
     await createSession({

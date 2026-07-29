@@ -355,10 +355,12 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
     }
   }
 
+  const activeConversation = conversations.find((item) => item.id === conversationId);
+
   return (
-    <div className="grid gap-5 xl:grid-cols-[330px_1fr]">
-      <aside className="soft-card p-4">
-        <h2 className="font-bold">المحادثات</h2>
+    <div className="grid gap-5 xl:grid-cols-[310px_minmax(0,1fr)]">
+      <aside className="soft-card p-4 xl:sticky xl:top-5 xl:max-h-[calc(100vh-2.5rem)] xl:overflow-y-auto">
+        <div className="flex items-center justify-between"><div><p className="eyebrow">Workspace</p><h2 className="mt-1 font-black">المحادثات</h2></div><span className="nav-icon">✦</span></div>
         <div className="mt-4 grid gap-2">
           <input value={search} onChange={(event) => setSearch(event.target.value)} className="form-control" placeholder="بحث في المحادثات…" aria-label="بحث في المحادثات" />
           <select value={agentId} onChange={(event) => setAgentId(event.target.value)} className="form-control">
@@ -369,15 +371,15 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
         {agents.length === 0 ? <p className="mt-3 text-sm text-amber-100">انشر وكيلًا أولًا.</p> : null}
         <div className="mt-5 space-y-2">
           {conversations.filter((row) => `${row.title ?? ""} ${row.agentName}`.toLowerCase().includes(search.trim().toLowerCase())).map((row) => (
-            <article key={row.id} className={`rounded-2xl border p-2 ${row.id === conversationId ? "border-emerald-200/40 bg-emerald-100/10" : "border-stone-700 bg-stone-950/40"}`}>
+            <article key={row.id} className={`conversation-row ${row.id === conversationId ? "conversation-row-active" : ""}`}>
               <button onClick={() => selectConversation(row.id)} className="w-full px-1 py-1 text-right text-sm">
                 <span className="block truncate font-semibold">{row.title || "محادثة"}</span>
-                <span className="mt-1 block text-xs text-stone-500">{row.agentName}</span>
+                <span className="mt-1 block text-xs" style={{ color: "var(--text-secondary)" }}>{row.agentName}</span>
               </button>
-              <div className="mt-2 flex gap-1 border-t border-stone-700/70 pt-2">
-                <button className="rounded-lg px-2 py-1 text-xs text-stone-400 hover:bg-stone-800" onClick={() => renameConversation(row)}>تسمية</button>
-                <button className="rounded-lg px-2 py-1 text-xs text-stone-400 hover:bg-stone-800" onClick={() => archiveConversation(row)}>أرشفة</button>
-                <button className="rounded-lg px-2 py-1 text-xs text-rose-200 hover:bg-rose-950/40" onClick={() => deleteConversation(row)}>حذف</button>
+              <div className="mt-2 flex gap-1 border-t pt-2" style={{ borderColor: "var(--border)" }}>
+                <button className="chat-action" onClick={() => renameConversation(row)}>✎ تسمية</button>
+                <button className="chat-action" onClick={() => archiveConversation(row)}>▣ أرشفة</button>
+                <button className="chat-action chat-action-danger" onClick={() => deleteConversation(row)}>⌫ حذف</button>
               </div>
             </article>
           ))}
@@ -385,14 +387,13 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
         </div>
       </aside>
       <section className="soft-card flex min-h-[680px] flex-col overflow-hidden">
-        <div className="border-b border-stone-700 p-4">
-          <h2 className="font-bold">دردشة الوكيل</h2>
-          <p className="mt-1 text-xs text-stone-500">الرد يُعرض تدريجيًا، ويُحفظ مع سجل التشغيل بعد اكتماله فقط.</p>
+        <div className="chat-header border-b p-4 sm:p-5" style={{ borderColor: "var(--border)" }}>
+          <div className="flex items-center gap-3"><span className="brand-mark !mb-0 !h-10 !w-10">AI</span><div><h2 className="font-black">{activeConversation?.title || "دردشة الوكيل"}</h2><p className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>{activeConversation?.agentName ? `الوكيل: ${activeConversation.agentName}` : "اختر محادثة أو أنشئ واحدة"} — بث مباشر وحفظ تلقائي</p></div></div>
         </div>
         <div className="flex-1 space-y-4 overflow-y-auto p-4 sm:p-6" aria-live="polite">
           {loadingMessages ? <div className="skeleton h-20 rounded-3xl" /> : null}
           {messages.map((message) => (
-            <article key={message.id} className="max-w-[92%] rounded-2xl border px-4 py-3 text-sm leading-7 sm:max-w-[82%]" style={{
+            <article key={message.id} className={`chat-message ${message.role === "user" ? "chat-message-user" : "chat-message-assistant"}`} style={{
               marginRight: message.role === "user" ? "auto" : undefined,
               marginLeft: message.role === "assistant" ? "auto" : undefined,
               background: message.role === "user" ? "var(--primary-soft)" : "var(--surface-soft)",
@@ -425,7 +426,7 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
           ))}
           <div ref={scrollAnchor} />
         </div>
-        <form onSubmit={send} className="border-t border-stone-700 p-4">
+        <form onSubmit={send} className="chat-composer border-t p-4" style={{ borderColor: "var(--border)" }}>
           <textarea
             name="message"
             required
@@ -446,7 +447,7 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
           {attachments.length > 0 ? (
             <div className="mt-3 flex flex-wrap gap-2">
               {attachments.map((file) => (
-                <span key={file.id} className="rounded-xl border border-stone-700 bg-stone-900 px-3 py-2 text-xs">
+                <span key={file.id} className="rounded-xl border px-3 py-2 text-xs" style={{ borderColor: "var(--border)", background: "var(--surface-soft)" }}>
                   {file.filename} ({Math.ceil(file.sizeBytes / 1024)}KB)
                   <button type="button" className="mr-2 text-rose-200" aria-label={`حذف ${file.filename}`} onClick={() => removePendingAttachment(file)}>×</button>
                 </span>

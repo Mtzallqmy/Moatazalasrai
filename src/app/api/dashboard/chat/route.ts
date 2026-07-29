@@ -16,7 +16,11 @@ export async function GET(request: Request) {
       const id = uuidSchema.parse(conversationId);
       const [owned] = await db().select({ id: conversations.id })
         .from(conversations)
-        .where(and(eq(conversations.id, id), eq(conversations.organizationId, session.organizationId)))
+        .where(and(
+          eq(conversations.id, id),
+          eq(conversations.organizationId, session.organizationId),
+          session.role === "member" ? eq(conversations.createdByUserId, session.userId) : undefined,
+        ))
         .limit(1);
       if (!owned) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة.");
       const [rows, totals] = await Promise.all([
@@ -58,6 +62,7 @@ export async function GET(request: Request) {
     const archived = url.searchParams.get("archived") === "true";
     const where = and(
       eq(conversations.organizationId, session.organizationId),
+      session.role === "member" ? eq(conversations.createdByUserId, session.userId) : undefined,
       archived ? isNotNull(conversations.archivedAt) : isNull(conversations.archivedAt),
       isNull(conversations.deletedAt),
     );
@@ -105,6 +110,7 @@ export async function POST(request: Request) {
       const [conversation] = await db().insert(conversations).values({
         organizationId: session.organizationId,
         agentId: agent.id,
+        createdByUserId: session.userId,
         title: `محادثة مع ${agent.name}`,
       }).returning();
       return apiSuccess(conversation, requestId, 201);
@@ -113,6 +119,7 @@ export async function POST(request: Request) {
     const ownedWhere = and(
       eq(conversations.id, body.conversationId),
       eq(conversations.organizationId, session.organizationId),
+      session.role === "member" ? eq(conversations.createdByUserId, session.userId) : undefined,
     );
     if (body.action === "delete") {
       const [deleted] = await db().update(conversations).set({ deletedAt: new Date(), updatedAt: new Date() })
