@@ -79,7 +79,7 @@ export async function authenticateApiKey(request: Request): Promise<ApiPrincipal
     .limit(1);
   if (!mobile) return null;
   const mobileScopes = mobile.role === "owner" || mobile.role === "admin"
-    ? ["agents:read", "agents:write", "chat:write", "conversations:read", "conversations:write", "files:read", "files:write", "runs:read", "runs:write", "integrations:read", "providers:read", "mcp:read", "teams:read", "teams:write"]
+    ? ["agents:read", "agents:write", "chat:write", "conversations:read", "conversations:write", "files:read", "files:write", "runs:read", "runs:write", "integrations:read", "integrations:write", "providers:read", "providers:write", "mcp:read", "mcp:write", "teams:read", "teams:write"]
     : mobile.role === "developer"
       ? ["agents:read", "agents:write", "chat:write", "conversations:read", "conversations:write", "files:read", "files:write", "runs:read", "runs:write", "integrations:read", "providers:read", "mcp:read", "teams:read"]
       : ["agents:read", "chat:write", "conversations:read", "conversations:write", "files:read", "files:write", "runs:read", "runs:write", "teams:read"];

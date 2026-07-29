@@ -34,12 +34,14 @@ class MoatazAiApp extends ConsumerWidget {
       localizationsDelegates: GlobalMaterialLocalizations.delegates,
       theme: ThemeData(
         useMaterial3: true,
+        fontFamily: 'Noto Sans Arabic',
+        fontFamilyFallback: const ['Noto Kufi Arabic', 'sans-serif'],
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF0F8F86),
+          seedColor: const Color(0xFF168E84),
           brightness: Brightness.light,
-          surface: const Color(0xFFF4F7FB),
+          surface: const Color(0xFFF5F8F8),
         ),
-        scaffoldBackgroundColor: const Color(0xFFF4F7FB),
+        scaffoldBackgroundColor: const Color(0xFFF5F8F8),
         cardTheme: const CardThemeData(
           elevation: 0,
           margin: EdgeInsets.zero,
@@ -55,7 +57,7 @@ class MoatazAiApp extends ConsumerWidget {
         ),
         filledButtonTheme: FilledButtonThemeData(
           style: FilledButton.styleFrom(
-            backgroundColor: const Color(0xFF0F8F86),
+            backgroundColor: const Color(0xFF087D75),
             foregroundColor: Colors.white,
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),

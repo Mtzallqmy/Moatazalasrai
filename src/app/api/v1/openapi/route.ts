@@ -62,6 +62,8 @@ export function GET() {
       { name: "Agent Teams" },
       { name: "Files" },
       { name: "Integrations" },
+      { name: "Mobile Workspace" },
+      { name: "Tools" },
     ],
     security: [{ bearerAuth: [] }],
     components: {
@@ -113,6 +115,7 @@ export function GET() {
             deviceId: { type: "string", minLength: 8 },
             deviceName: { type: "string" },
             organizationId: uuid,
+            rememberSession: { type: "boolean", default: true },
           },
         },
         TokenPair: {
@@ -167,6 +170,22 @@ export function GET() {
           body: { $ref: "#/components/schemas/MobileLogin" },
         }),
       },
+      "/api/mobile/v1/auth/register": {
+        post: operation({
+          operationId: "mobileRegister",
+          summary: "إنشاء حساب عضو وإصدار جلسة جهاز",
+          tag: "Mobile Auth",
+          auth: false,
+          body: { ...object, required: ["name", "email", "password", "deviceId"], properties: {
+            name: { type: "string", minLength: 2, maxLength: 100 },
+            email: { type: "string", format: "email" },
+            password: { type: "string", minLength: 12, maxLength: 128 },
+            deviceId: { type: "string", minLength: 8 },
+            deviceName: { type: "string" },
+            rememberSession: { type: "boolean", default: true },
+          } },
+        }),
+      },
       "/api/mobile/v1/auth/refresh": {
         post: operation({
           operationId: "mobileRefresh",
@@ -188,9 +207,16 @@ export function GET() {
       "/api/mobile/v1/me": {
         get: operation({ operationId: "mobileMe", summary: "هوية المستخدم ونطاقاته", tag: "Mobile Auth" }),
       },
+      "/api/mobile/v1/workspace": {
+        get: operation({ operationId: "mobileWorkspace", summary: "المؤسسة والصلاحيات والأعضاء والتدقيق وMCP", tag: "Mobile Workspace" }),
+      },
       "/api/v1/agents": {
         get: operation({ operationId: "listAgents", summary: "عرض الوكلاء المنشورين", tag: "Agents" }),
         post: operation({ operationId: "createAgent", summary: "إنشاء وكيل", tag: "Agents", created: true, body: { type: "object" } }),
+      },
+      "/api/v1/agent-templates": {
+        get: operation({ operationId: "listAgentTemplates", summary: "عرض مكتبة الوكلاء الإنتاجية", tag: "Agents" }),
+        post: operation({ operationId: "installAgentTemplate", summary: "تثبيت قالب وربطه بمزود متحقق", tag: "Agents", created: true, body: { type: "object" } }),
       },
       "/api/v1/conversations": {
         get: operation({
@@ -239,6 +265,17 @@ export function GET() {
       },
       "/api/v1/github": {
         post: operation({ operationId: "githubRead", summary: "عرض المستودعات أو قراءة ملف", tag: "Integrations", body: { type: "object" } }),
+      },
+      "/api/v1/mcp": {
+        get: operation({ operationId: "listMcp", summary: "عرض خوادم وأدوات MCP المكتشفة", tag: "Tools" }),
+        post: operation({ operationId: "mutateMcp", summary: "ربط أو مزامنة أو اختبار أداة MCP", tag: "Tools", body: { type: "object" } }),
+        delete: operation({ operationId: "deleteMcpServer", summary: "حذف اتصال MCP", tag: "Tools" }),
+      },
+      "/api/v1/youtube": {
+        post: operation({ operationId: "importYoutubeTranscript", summary: "تفريغ YouTube إلى مرفق محادثة عبر موصل خارجي", tag: "Tools", created: true, body: { type: "object" } }),
+      },
+      "/api/v1/site-audit": {
+        post: operation({ operationId: "auditPublicSite", summary: "فحص دفاعي لصفحة عامة مصرح بها", tag: "Tools", created: true, body: { type: "object" } }),
       },
     },
   }, { headers: { "cache-control": "public, max-age=300" } });

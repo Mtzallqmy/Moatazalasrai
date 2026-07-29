@@ -6,7 +6,7 @@ on:
       version:
         description: Release version without the android-v prefix
         required: true
-        default: "1.1.0"
+        default: "1.2.0"
         type: string
       api_base_url:
         description: Production API base URL
@@ -22,7 +22,9 @@ on:
       - ".github/workflows/android-release.yml"
       - "apps/mobile/**"
       - "src/app/api/mobile/**"
+      - "src/app/api/v1/**"
       - "src/lib/auth/mobile.ts"
+      - "src/lib/agents/templates.ts"
 
 permissions:
   contents: write
@@ -147,4 +149,6 @@ jobs:
             - المعمارية: arm64-v8a
             - الملف: APK واحد جاهز للتثبيت
             - الخادم: ${{ inputs.api_base_url || 'https://moatazalasrai-production.up.railway.app' }}
+            - الجلسة: استعادة مشفرة اختيارية وتجديد تلقائي
+            - المحادثات: محفوظة ومتزامنة مع الملفات والصور والأدوات
           files: apps/mobile/${{ env.apk }}

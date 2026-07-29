@@ -61,6 +61,8 @@ npm run dev
 | `AI_MEMORY_ENABLED` / `AI_RAG_ENABLED` / `AI_TOOLS_ENABLED` | لا | تفعيل تدريجي بعد migration |
 | `AI_WORKER_ENABLED` | لخدمة Worker | يفعّل في Worker فقط |
 | `JOB_*` | لا | polling وlock timeout والمحاولات وحجم الدفعة |
+| `YOUTUBE_TRANSCRIPT_API_URL` | لميزة YouTube | موصل HTTPS يعيد `transcript` من طلب JSON يحوي `url` |
+| `YOUTUBE_TRANSCRIPT_API_KEY` | حسب الموصل | Bearer token لا يرسل إلى التطبيق ولا يُحفظ في المصدر |
 
 توليد مفتاح التشفير:
 
@@ -106,7 +108,9 @@ POST /api/mobile/v1/auth/refresh
 Authorization: Bearer mat_<SHORT_LIVED_ACCESS_TOKEN>
 ```
 
-وتظل مفاتيح المنصة ذات النطاقات متاحة للتكاملات الخادمية. المسارات الأساسية: `/api/v1/agents`, `/api/v1/conversations`, `/api/v1/chat`, `/api/v1/files`, `/api/v1/runs`, `/api/v1/teams`, `/api/v1/team-runs`, `/api/v1/integrations`, `/api/v1/github`.
+وتظل مفاتيح المنصة ذات النطاقات متاحة للتكاملات الخادمية. تشمل المسارات الأساسية
+تسجيل عضو جديد، واستعادة الجلسة، والوكلاء وقوالبهم، والمحادثات والملفات، والتشغيلات
+والفرق، والمزودات، وMCP، والتكاملات، وتفريغ YouTube، والفحص الدفاعي للمواقع.
 
 تطبيق Flutter:
 
