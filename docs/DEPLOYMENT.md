@@ -22,8 +22,10 @@ docker run --rm -p 3000:3000 --env-file .env moataz-agent-platform
 
 - اربط المستودع.
 - اضبط `APP_URL`, `DATABASE_URL`, `CREDENTIAL_ENCRYPTION_KEY` و`NODE_ENV=production`.
-- طبّق `npm run db:migrate` في خطوة مستقلة قبل النسخة التي تحتاج migration جديدة.
-- `railway.json` يستخدم `/api/ready`.
+- يشغّل `railway.json` الأمر `npm run db:migrate` كـPre-deploy Command مرة واحدة قبل بدء النسخة الجديدة.
+- بعد نجاح الـmigration يبدأ التطبيق، ثم يستخدم Railway `/api/ready` قبل تحويل المرور.
+- إذا فشلت خطوة Pre-deploy فتحقق من `DATABASE_URL` وسجل migration؛ لا تستبدل readiness بفحص سطحي لإخفاء قاعدة غير مهيأة.
+- يمكن زيادة مهلة جملة migration عبر `MIGRATION_TIMEOUT_MS` عند وجود قاعدة بعيدة بطيئة.
 
 ## Cloudflare/OpenNext
 

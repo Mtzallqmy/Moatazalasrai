@@ -6,6 +6,7 @@
   },
   "deploy": {
     "numReplicas": 1,
+    "preDeployCommand": "npm run db:migrate",
     "healthcheckPath": "/api/ready",
     "healthcheckTimeout": 120,
     "restartPolicyType": "ON_FAILURE",
