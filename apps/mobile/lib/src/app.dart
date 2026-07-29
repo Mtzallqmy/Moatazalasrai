@@ -35,7 +35,7 @@ class MoatazAiApp extends ConsumerWidget {
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF245BFF),
+          seedColor: const Color(0xFF0F8F86),
           brightness: Brightness.light,
           surface: const Color(0xFFF4F7FB),
         ),
@@ -52,6 +52,14 @@ class MoatazAiApp extends ConsumerWidget {
           filled: true,
           fillColor: Colors.white,
           border: OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(14))),
+        ),
+        filledButtonTheme: FilledButtonThemeData(
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFF0F8F86),
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          ),
         ),
       ),
       routerConfig: router,

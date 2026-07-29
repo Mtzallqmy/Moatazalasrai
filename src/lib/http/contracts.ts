@@ -120,6 +120,11 @@ export const accountMutationSchema = z.discriminatedUnion("action", [
   }).strict(),
 ]);
 
+export const chatAppearanceSchema = z.object({
+  theme: z.enum(["moataz", "whatsapp", "telegram"]),
+  wallpaper: z.enum(["clean", "soft-grid", "doodles", "bubbles"]),
+}).strict();
+
 export const integrationCreateSchema = z.object({
   kind: z.enum(["telegram", "github"]),
   name: z.string().trim().min(2).max(80),

@@ -61,8 +61,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       children: [
                         const CircleAvatar(
                           radius: 28,
-                          backgroundColor: Color(0xFFE9EFFF),
-                          foregroundColor: Color(0xFF245BFF),
+                          backgroundColor: Color(0xFFE2F4F2),
+                          foregroundColor: Color(0xFF0F8F86),
                           child: Icon(Icons.hub_outlined, size: 28),
                         ),
                         const SizedBox(height: 18),

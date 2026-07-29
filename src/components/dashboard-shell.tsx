@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { OrganizationSwitcher } from "@/components/organization-switcher";
 import { DashboardNavigation, type DashboardSession } from "@/components/dashboard-navigation";
+import { SiteFooter } from "@/components/site-footer";
 
 export function DashboardShell({ session, activePath, title, description, children }: {
   session: DashboardSession;
@@ -29,7 +30,7 @@ export function DashboardShell({ session, activePath, title, description, childr
           </div>
         </header>
         <div className="dashboard-content">{children}</div>
-        <footer className="dashboard-footer">معتز AI — منصة تشغيل الوكلاء الذكية</footer>
+        <SiteFooter compact />
       </section>
     </main>
   );

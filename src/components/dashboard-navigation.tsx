@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-  Activity, Bot, Boxes, Braces, ChevronDown, CircleGauge, Database,
+  Activity, Bot, Boxes, Braces, CircleGauge, Database,
   FileText, Home, KeyRound, Menu, MessageSquare, Moon, Network,
-  PlayCircle, Search, Settings, ShieldCheck, Users, Workflow, X,
+  PlayCircle, Search, Settings, ShieldCheck, Sun, Users, Workflow, X,
 } from "lucide-react";
 import { LogoutButton } from "@/components/logout-button";
 
@@ -42,7 +42,8 @@ function ThemeButton() {
   }
   return (
     <button className="icon-button" type="button" onClick={toggle} aria-label="تبديل المظهر">
-      <Moon size={18} />
+      <Moon className="theme-icon-light" size={18} />
+      <Sun className="theme-icon-dark" size={18} />
     </button>
   );
 }
@@ -63,14 +64,14 @@ function Sidebar({ session, activePath, close }: {
           <span>مركز العمليات الذكية</span>
         </div>
       </div>
-      <button className="workspace-switcher" type="button">
+      <div className="workspace-switcher">
         <span className="workspace-avatar">{(session.organizationName || "م").slice(0, 1)}</span>
         <span className="min-w-0">
           <b>مساحة العمل</b>
           <small>{session.organizationName ?? "المؤسسة"}</small>
         </span>
-        <ChevronDown size={16} aria-hidden="true" />
-      </button>
+        <span className="workspace-status-dot" aria-label="مساحة العمل النشطة" />
+      </div>
       <nav className="sidebar-nav">
         <p className="nav-section-label">العمل</p>
         {navigation.filter((item) => !("roles" in item) || (item.roles as readonly string[]).includes(session.role ?? "")).map((item) => {
@@ -99,6 +100,12 @@ function Sidebar({ session, activePath, close }: {
 
 export function DashboardNavigation({ session, activePath }: { session: DashboardSession; activePath: string }) {
   const [open, setOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const router = useRouter();
+  const allowedNavigation = navigation.filter((item) => !("roles" in item) || (item.roles as readonly string[]).includes(session.role ?? ""));
+  const searchResults = allowedNavigation.filter((item) => item.label.includes(query.trim()));
+
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
@@ -109,6 +116,24 @@ export function DashboardNavigation({ session, activePath }: { session: Dashboar
       window.removeEventListener("keydown", onKey);
     };
   }, [open]);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setSearchOpen(true);
+      }
+      if (event.key === "Escape") setSearchOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  function navigate(href: string) {
+    setSearchOpen(false);
+    setQuery("");
+    router.push(href);
+  }
+
   return (
     <>
       <div className="desktop-sidebar"><Sidebar session={session} activePath={activePath} /></div>
@@ -117,7 +142,7 @@ export function DashboardNavigation({ session, activePath }: { session: Dashboar
           <Menu size={21} />
         </button>
         <Link href="/dashboard" className="mobile-brand"><CircleGauge size={20} /> معتز AI</Link>
-        <div className="mobile-bar-actions"><button className="icon-button" type="button" aria-label="بحث"><Search size={18} /></button><ThemeButton /></div>
+        <div className="mobile-bar-actions"><button className="icon-button" type="button" aria-label="بحث" onClick={() => setSearchOpen(true)}><Search size={18} /></button><ThemeButton /></div>
       </header>
       <div className={`mobile-drawer${open ? " mobile-drawer-open" : ""}`} aria-hidden={!open}>
         <button className="drawer-backdrop" type="button" onClick={() => setOpen(false)} aria-label="إغلاق القائمة" />
@@ -127,13 +152,31 @@ export function DashboardNavigation({ session, activePath }: { session: Dashboar
         </div>
       </div>
       <div className="desktop-utility">
-        <label className="dashboard-search">
+        <button className="dashboard-search" type="button" onClick={() => setSearchOpen(true)}>
           <Search size={17} aria-hidden="true" />
-          <input type="search" placeholder="ابحث في مساحة العمل…" aria-label="البحث في مساحة العمل" />
+          <span>ابحث في مساحة العمل…</span>
           <kbd>⌘ K</kbd>
-        </label>
+        </button>
         <div className="utility-actions"><ThemeButton /><span className="utility-separator" /><span className="role-badge"><KeyRound size={14} /> {session.role ?? "viewer"}</span></div>
       </div>
+      {searchOpen ? (
+        <div className="command-overlay" role="presentation" onMouseDown={() => setSearchOpen(false)}>
+          <section className="command-palette" role="dialog" aria-modal="true" aria-label="البحث في مساحة العمل" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="command-input">
+              <Search size={19} aria-hidden="true" />
+              <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="اكتب اسم الصفحة…" aria-label="عبارة البحث" />
+              <button type="button" onClick={() => setSearchOpen(false)} aria-label="إغلاق"><X size={18} /></button>
+            </div>
+            <div className="command-results">
+              {searchResults.map((item) => {
+                const Icon = item.icon;
+                return <button type="button" key={item.href} onClick={() => navigate(item.href)}><span className="nav-icon"><Icon size={17} /></span><span>{item.label}</span></button>;
+              })}
+              {searchResults.length === 0 ? <p>لا توجد صفحة مطابقة.</p> : null}
+            </div>
+          </section>
+        </div>
+      ) : null}
     </>
   );
 }

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SiteFooter } from "@/components/site-footer";
 
 const pillars = [
   { title: "عزل مؤسسي حقيقي", desc: "كل مستخدم يعمل داخل مؤسسة محددة، وتُقيّد الاستعلامات والموارد بمعرّف المؤسسة." },
@@ -64,7 +65,7 @@ export default function HomePage() {
           ))}
         </section>
 
-        <footer className="border-t py-8 text-center text-sm" style={{ borderColor: "var(--border)", color: "var(--text-secondary)" }}>برمجة وتطوير معتز العلقمي</footer>
+        <SiteFooter />
       </div>
     </main>
   );

@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import "@fontsource-variable/noto-sans-arabic";
+import "@fontsource-variable/alexandria";
 import "./globals.css";
 
 export const metadata: Metadata = {
