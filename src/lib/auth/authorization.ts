@@ -13,22 +13,29 @@ export type Permission =
   | "members:read"
   | "members:manage"
   | "audit:read"
-  | "organization:manage";
+  | "organization:manage"
+  | "integrations:read"
+  | "integrations:manage"
+  | "files:read"
+  | "files:manage";
 
 const permissions: Record<Role, ReadonlySet<Permission>> = {
   owner: new Set([
     "providers:read", "providers:manage", "agents:read", "agents:manage", "agents:run",
     "runs:read", "members:read", "members:manage", "audit:read", "organization:manage",
+    "integrations:read", "integrations:manage", "files:read", "files:manage",
   ]),
   admin: new Set([
     "providers:read", "providers:manage", "agents:read", "agents:manage", "agents:run",
     "runs:read", "members:read", "members:manage", "audit:read", "organization:manage",
+    "integrations:read", "integrations:manage", "files:read", "files:manage",
   ]),
   developer: new Set([
     "providers:read", "providers:manage", "agents:read", "agents:manage", "agents:run", "runs:read",
+    "integrations:read", "files:read", "files:manage",
   ]),
-  operator: new Set(["providers:read", "agents:read", "agents:run", "runs:read"]),
-  viewer: new Set(["providers:read", "agents:read", "runs:read"]),
+  operator: new Set(["providers:read", "agents:read", "agents:run", "runs:read", "integrations:read", "files:read", "files:manage"]),
+  viewer: new Set(["providers:read", "agents:read", "runs:read", "integrations:read", "files:read"]),
 };
 
 export function can(role: Role, permission: Permission): boolean {
