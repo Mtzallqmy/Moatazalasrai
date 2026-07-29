@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:moataz_ai_mobile/src/core/api_client.dart';
 import 'package:moataz_ai_mobile/src/features/dashboard/platform_repository.dart';
 
 class ChatSheet extends ConsumerStatefulWidget {
@@ -68,7 +69,9 @@ class _ChatSheetState extends ConsumerState<ChatSheet> {
         _chatTheme = previousTheme;
         _wallpaper = previousWallpaper;
       });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.toString())));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(ApiClient.userMessage(error))),
+      );
     } finally {
       if (mounted) setState(() => _savingAppearance = false);
     }
@@ -168,7 +171,11 @@ class _ChatSheetState extends ConsumerState<ChatSheet> {
       final message = result['message'] as Map<String, dynamic>?;
       if (message != null && mounted) setState(() => _messages.add(message));
     } catch (error) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.toString())));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(ApiClient.userMessage(error))),
+        );
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }

@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { agentVersions, agents, providerCredentials } from "@/db/schema";
 import { authenticateApiKey, requireApiScope } from "@/lib/auth/api-key";
@@ -14,7 +14,37 @@ export async function GET(request: Request) {
     const rows = await db().select().from(agents)
       .where(eq(agents.organizationId, principal.organizationId))
       .orderBy(desc(agents.updatedAt));
-    return apiSuccess({ agents: rows }, requestId);
+    const linked = rows.length === 0 ? [] : await db().select({
+      agentId: agentVersions.agentId,
+      version: agentVersions.version,
+      model: agentVersions.model,
+      provider: providerCredentials.provider,
+      providerEnabled: providerCredentials.enabled,
+      providerStatus: providerCredentials.validationStatus,
+      discoveredModels: providerCredentials.discoveredModels,
+      circuitOpenUntil: providerCredentials.circuitOpenUntil,
+      lastErrorCode: providerCredentials.lastErrorCode,
+    }).from(agentVersions)
+      .innerJoin(providerCredentials, eq(providerCredentials.id, agentVersions.providerCredentialId))
+      .where(inArray(agentVersions.agentId, rows.map((agent) => agent.id)));
+    const runtimeByAgent = new Map(linked.map((entry) => [`${entry.agentId}:${entry.version}`, entry]));
+    const now = new Date();
+    const safeRows = rows.map((agent) => {
+      const runtime = runtimeByAgent.get(`${agent.id}:${agent.currentVersion}`);
+      const modelAvailable = runtime?.discoveredModels.includes(runtime.model) ?? false;
+      const cooldown = Boolean(runtime?.circuitOpenUntil && runtime.circuitOpenUntil > now);
+      const runtimeStatus = !runtime || !runtime.providerEnabled || runtime.providerStatus !== "verified" || !modelAvailable
+        ? "unavailable"
+        : cooldown ? "cooldown" : "ready";
+      return {
+        ...agent,
+        runtimeStatus,
+        runtimeModel: runtime?.model ?? null,
+        runtimeProvider: runtime?.provider ?? null,
+        runtimeErrorCode: runtime?.lastErrorCode ?? null,
+      };
+    });
+    return apiSuccess({ agents: safeRows }, requestId);
   } catch (error) {
     return handleApiError(error, requestId, "/api/v1/agents");
   }

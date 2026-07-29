@@ -1,12 +1,13 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
-import { auditLogs, providerCredentials } from "@/db/schema";
+import { auditLogs, modelCatalog, providerCredentials } from "@/db/schema";
 import { authenticateApiKey, requireApiScope } from "@/lib/auth/api-key";
 import { ApiError, apiFailure, apiSuccess, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { providerInputSchema } from "@/lib/http/contracts";
 import { defaultBaseUrl, validateProvider } from "@/lib/providers/registry";
 import { ProviderError } from "@/lib/providers/types";
 import { encryptSecret, maskSecret } from "@/lib/security/encryption";
+import { inferModelCapabilities, isFreeTierModel } from "@/server/models/capabilities";
 
 export async function GET(request: Request) {
   const requestId = getRequestId(request);
@@ -51,27 +52,41 @@ export async function POST(request: Request) {
       signal: request.signal,
     });
     const encryptedSecret = encryptSecret(body.apiKey);
-    const [created] = await db().insert(providerCredentials).values({
-      organizationId: principal.organizationId,
-      provider: body.provider,
-      name: body.name,
-      baseUrl: discovery.normalizedBaseUrl,
-      encryptedSecret,
-      secretHint: maskSecret(body.apiKey),
-      discoveredModels: discovery.models,
-      validationStatus: "verified",
-      lastValidatedAt: new Date(),
-      lastValidationLatencyMs: discovery.latencyMs,
-    }).returning({
-      id: providerCredentials.id,
-      provider: providerCredentials.provider,
-      name: providerCredentials.name,
-      baseUrl: providerCredentials.baseUrl,
-      secretHint: providerCredentials.secretHint,
-      discoveredModels: providerCredentials.discoveredModels,
-      validationStatus: providerCredentials.validationStatus,
-      lastValidatedAt: providerCredentials.lastValidatedAt,
-      enabled: providerCredentials.enabled,
+    const created = await db().transaction(async (tx) => {
+      const [credential] = await tx.insert(providerCredentials).values({
+        organizationId: principal.organizationId,
+        provider: body.provider,
+        name: body.name,
+        baseUrl: discovery.normalizedBaseUrl,
+        encryptedSecret,
+        secretHint: maskSecret(body.apiKey),
+        discoveredModels: discovery.models,
+        validationStatus: "verified",
+        lastValidatedAt: new Date(),
+        lastValidationLatencyMs: discovery.latencyMs,
+      }).returning({
+        id: providerCredentials.id,
+        provider: providerCredentials.provider,
+        name: providerCredentials.name,
+        baseUrl: providerCredentials.baseUrl,
+        secretHint: providerCredentials.secretHint,
+        discoveredModels: providerCredentials.discoveredModels,
+        validationStatus: providerCredentials.validationStatus,
+        lastValidatedAt: providerCredentials.lastValidatedAt,
+        enabled: providerCredentials.enabled,
+      });
+      if (!credential) throw new Error("PROVIDER_CREATE_FAILED");
+      if (discovery.models.length > 0) {
+        await tx.insert(modelCatalog).values(discovery.models.map((model) => ({
+          organizationId: principal.organizationId,
+          providerCredentialId: credential.id,
+          model,
+          capabilities: inferModelCapabilities(body.provider, model),
+          freeTierEligible: isFreeTierModel(model),
+          latencyMs: discovery.latencyMs,
+        }))).onConflictDoNothing();
+      }
+      return credential;
     });
 
     if (!created) throw new Error("PROVIDER_CREATE_FAILED");

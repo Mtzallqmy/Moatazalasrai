@@ -26,4 +26,11 @@ describe("model router", () => {
   it("returns null when no safe model is available", () => {
     expect(selectBestModel([{ ...base, available: false }], "analysis")).toBeNull();
   });
+
+  it("does not assume an unspecified capability is supported", () => {
+    expect(selectBestModel([{
+      ...base,
+      capabilities: { text: true },
+    }], "image")).toBeNull();
+  });
 });

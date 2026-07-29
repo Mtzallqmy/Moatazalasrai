@@ -6,6 +6,7 @@ import { authenticateApiKey, requireApiScope } from "@/lib/auth/api-key";
 import { apiFailure, apiSuccess, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { chatStreamSchema } from "@/lib/http/contracts";
 import { attachmentContext } from "@/lib/storage/attachments";
+import { inputKindForAttachments } from "@/server/files/input-kind";
 
 export async function POST(request: Request) {
   const requestId = getRequestId(request);
@@ -29,6 +30,9 @@ export async function POST(request: Request) {
       mediaType: file.mimeType as "image/jpeg" | "image/png" | "image/webp" | "image/gif",
       data: Buffer.from(file.content).toString("base64"),
     }));
+    const effectiveInputKind = context.rows.length > 0
+      ? inputKindForAttachments(context.rows.map((file) => file.mimeType))
+      : body.inputKind;
     const [userMessage] = await db().insert(messages).values({
       conversationId: conversation.id,
       role: "user",
@@ -47,6 +51,7 @@ export async function POST(request: Request) {
       conversationId: conversation.id,
       message: `${body.message}${context.text}`,
       requestId,
+      inputKind: effectiveInputKind,
       media,
     });
     return apiSuccess({ run: result.run, message: result.assistantMessage }, requestId, 201);

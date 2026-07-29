@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const requestHeaders = new Headers(request.headers);
   const existing = requestHeaders.get("x-request-id");
   const requestId = existing && /^[a-zA-Z0-9._:-]{1,100}$/.test(existing)

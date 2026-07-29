@@ -1,6 +1,7 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:moataz_ai_mobile/src/core/api_client.dart';
 import 'package:moataz_ai_mobile/src/features/dashboard/platform_repository.dart';
 
 class ConversationScreen extends ConsumerStatefulWidget {
@@ -138,6 +139,7 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
     if ((text.isEmpty && _pendingFiles.isEmpty) || _busy) return;
     final content = text.isEmpty ? 'حلل الملفات المرفقة وقدم النتيجة بوضوح.' : text;
     final attachmentIds = _pendingFiles.map((file) => file['id'] as String).toList();
+    final inputKind = PlatformRepository.inputKindForFiles(_pendingFiles);
     setState(() {
       _busy = true;
       _messages.add({
@@ -155,6 +157,7 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
         conversationId,
         content,
         attachmentIds: attachmentIds,
+        inputKind: inputKind,
       );
       final saved = await ref.read(platformRepositoryProvider).messages(conversationId);
       if (mounted) {
@@ -241,7 +244,9 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
     }
   }
 
-  void _show(Object error) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.toString())));
+  void _show(Object error) => ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text(ApiClient.userMessage(error))),
+  );
 
   void _scrollToEnd() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
