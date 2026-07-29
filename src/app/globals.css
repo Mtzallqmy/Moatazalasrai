@@ -3,17 +3,49 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: dark;
-  --bg: #111714;
-  --surface: #18201c;
-  --surface-soft: #202a25;
-  --border: #314038;
-  --text: #f3f7f4;
-  --muted: #a7b4ac;
-  --sage: #91a88f;
-  --sand: #c8b89a;
-  --rose: #b89591;
-  --accent: #9fb39a;
+  color-scheme: light;
+  --background: #f4f6fb;
+  --surface: #ffffff;
+  --surface-soft: #eef2f8;
+  --surface-elevated: #ffffff;
+  --border: #dbe2ec;
+  --border-strong: #c6d0df;
+  --text-primary: #182133;
+  --text-secondary: #5b677a;
+  --primary: #5266d5;
+  --primary-hover: #4357c3;
+  --primary-soft: #eef0ff;
+  --success: #19875f;
+  --warning: #ad6b00;
+  --danger: #c2415a;
+  --info: #2778c4;
+  --focus: #6679e8;
+  --selected: #e8ebff;
+  --shadow: 0 16px 45px rgba(32, 45, 72, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --background: #151a24;
+    --surface: #1d2430;
+    --surface-soft: #242d3b;
+    --surface-elevated: #283241;
+    --border: #344053;
+    --border-strong: #46546a;
+    --text-primary: #f1f4fa;
+    --text-secondary: #aeb8c8;
+    --primary: #8e9cff;
+    --primary-hover: #a6b0ff;
+    --primary-soft: #2a3157;
+    --success: #67d6a8;
+    --warning: #f3bd63;
+    --danger: #ff91a5;
+    --info: #74b8f2;
+    --focus: #9aa7ff;
+    --selected: #303962;
+    --shadow: 0 18px 52px rgba(3, 7, 18, 0.22);
+  }
 }
 
 html {
@@ -24,10 +56,10 @@ html {
 body {
   min-height: 100vh;
   background:
-    radial-gradient(circle at top right, rgba(145, 168, 143, 0.12), transparent 32rem),
-    radial-gradient(circle at bottom left, rgba(200, 184, 154, 0.08), transparent 28rem),
-    var(--bg);
-  color: var(--text);
+    radial-gradient(circle at top right, color-mix(in srgb, var(--primary) 10%, transparent), transparent 32rem),
+    radial-gradient(circle at bottom left, color-mix(in srgb, var(--info) 7%, transparent), transparent 28rem),
+    var(--background);
+  color: var(--text-primary);
   font-family: "Noto Sans Arabic", "IBM Plex Sans Arabic", "Segoe UI", Tahoma, Arial, sans-serif;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -38,28 +70,40 @@ body {
 }
 
 ::selection {
-  background: rgba(159, 179, 154, 0.28);
+  background: color-mix(in srgb, var(--primary) 24%, transparent);
 }
 
 @layer components {
   .app-shell {
-    @apply min-h-screen text-stone-100;
+    @apply min-h-screen;
+    color: var(--text-primary);
   }
 
   .glass-panel {
     @apply border border-stone-700/70 bg-stone-900/70 shadow-2xl shadow-black/10 backdrop-blur;
+    border-color: var(--border);
+    background: color-mix(in srgb, var(--surface) 94%, transparent);
+    box-shadow: var(--shadow);
   }
 
   .soft-card {
     @apply rounded-3xl border border-stone-700/70 bg-stone-900/65 shadow-lg shadow-black/10;
+    border-color: var(--border);
+    background: var(--surface);
+    box-shadow: var(--shadow);
   }
 
   .primary-button {
     @apply inline-flex items-center justify-center rounded-2xl bg-emerald-200 px-5 py-3 font-semibold text-emerald-950 transition hover:bg-emerald-100 focus:outline-none focus:ring-2 focus:ring-emerald-200/60;
+    background: var(--primary);
+    color: white;
   }
 
   .secondary-button {
     @apply inline-flex items-center justify-center rounded-2xl border border-stone-600 px-5 py-3 font-semibold text-stone-100 transition hover:border-stone-500 hover:bg-stone-800/80 focus:outline-none focus:ring-2 focus:ring-stone-500/50;
+    border-color: var(--border-strong);
+    color: var(--text-primary);
+    background: var(--surface);
   }
 
   .danger-button {
@@ -68,6 +112,9 @@ body {
 
   .form-control {
     @apply rounded-2xl border border-stone-700 bg-stone-950/70 px-4 py-3 text-stone-100 outline-none transition placeholder:text-stone-600 focus:border-emerald-200/60 focus:ring-4 focus:ring-emerald-100/10 disabled:cursor-not-allowed disabled:opacity-60;
+    border-color: var(--border);
+    background: var(--surface-soft);
+    color: var(--text-primary);
   }
 
   .status-badge {

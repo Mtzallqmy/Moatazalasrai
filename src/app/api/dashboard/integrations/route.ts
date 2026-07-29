@@ -10,9 +10,9 @@ import {
   integrationUpdateSchema,
 } from "@/lib/http/contracts";
 import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
-import { verifyGitHubToken } from "@/lib/integrations/github";
-import { configureTelegramWebhook, verifyTelegramToken } from "@/lib/integrations/telegram";
+import { configureTelegramWebhook } from "@/lib/integrations/telegram";
 import { decryptSecret, encryptSecret, hashApiKey, maskSecret } from "@/lib/security/encryption";
+import { integrationAdapter } from "@/server/integrations/registry";
 
 export const runtime = "nodejs";
 
@@ -53,12 +53,8 @@ async function validateAgent(organizationId: string, agentId?: string | null) {
 }
 
 async function verifyIntegration(kind: "telegram" | "github", token: string) {
-  if (kind === "telegram") {
-    const bot = await verifyTelegramToken(token);
-    return { botUsername: bot.username, botName: bot.first_name };
-  }
-  const identity = await verifyGitHubToken(token);
-  return { login: identity.login, accountName: identity.name };
+  const adapter = integrationAdapter(kind);
+  return adapter.validateConfig(adapter.configSchema.parse({ token }));
 }
 
 export async function GET(request: Request) {

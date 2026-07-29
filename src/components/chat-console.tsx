@@ -24,6 +24,8 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
   const [retryText, setRetryText] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [search, setSearch] = useState("");
+  const [draft, setDraft] = useState("");
   const streamController = useRef<AbortController | null>(null);
   const scrollAnchor = useRef<HTMLDivElement | null>(null);
 
@@ -44,6 +46,23 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
       .finally(() => setLoadingMessages(false));
     return () => controller.abort();
   }, [conversationId]);
+
+  useEffect(() => {
+    if (!conversationId) return;
+    const timeout = window.setTimeout(() => {
+      setDraft(localStorage.getItem(`chat-draft:${conversationId}`) ?? "");
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (!conversationId) return;
+    const timeout = window.setTimeout(() => {
+      if (draft) localStorage.setItem(`chat-draft:${conversationId}`, draft);
+      else localStorage.removeItem(`chat-draft:${conversationId}`);
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [conversationId, draft]);
 
   useEffect(() => {
     scrollAnchor.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -222,6 +241,7 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
       }
       await readEventStream(response, optimisticId);
       setAttachments([]);
+      setDraft("");
     } catch (cause) {
       if (cause instanceof DOMException && cause.name === "AbortError") {
         setError("تم إيقاف التوليد.");
@@ -242,6 +262,7 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
     const text = String(new FormData(form).get("message") ?? "").trim();
     if (!text) return;
     form.reset();
+    setDraft("");
     await sendText(text);
   }
 
@@ -261,6 +282,7 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
       <aside className="soft-card p-4">
         <h2 className="font-bold">المحادثات</h2>
         <div className="mt-4 grid gap-2">
+          <input value={search} onChange={(event) => setSearch(event.target.value)} className="form-control" placeholder="بحث في المحادثات…" aria-label="بحث في المحادثات" />
           <select value={agentId} onChange={(event) => setAgentId(event.target.value)} className="form-control">
             {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
           </select>
@@ -268,7 +290,7 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
         </div>
         {agents.length === 0 ? <p className="mt-3 text-sm text-amber-100">انشر وكيلًا أولًا.</p> : null}
         <div className="mt-5 space-y-2">
-          {conversations.map((row) => (
+          {conversations.filter((row) => `${row.title ?? ""} ${row.agentName}`.toLowerCase().includes(search.trim().toLowerCase())).map((row) => (
             <article key={row.id} className={`rounded-2xl border p-2 ${row.id === conversationId ? "border-emerald-200/40 bg-emerald-100/10" : "border-stone-700 bg-stone-950/40"}`}>
               <button onClick={() => selectConversation(row.id)} className="w-full px-1 py-1 text-right text-sm">
                 <span className="block truncate font-semibold">{row.title || "محادثة"}</span>
@@ -292,14 +314,40 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
         <div className="flex-1 space-y-4 overflow-y-auto p-4 sm:p-6" aria-live="polite">
           {loadingMessages ? <div className="skeleton h-20 rounded-3xl" /> : null}
           {messages.map((message) => (
-            <article key={message.id} className={`max-w-[88%] rounded-3xl px-4 py-3 text-sm leading-7 ${message.role === "user" ? "mr-auto bg-emerald-100 text-emerald-950" : "ml-auto border border-stone-700 bg-stone-900"}`}>
+            <article key={message.id} className="max-w-[92%] rounded-2xl border px-4 py-3 text-sm leading-7 sm:max-w-[82%]" style={{
+              marginRight: message.role === "user" ? "auto" : undefined,
+              marginLeft: message.role === "assistant" ? "auto" : undefined,
+              background: message.role === "user" ? "var(--primary-soft)" : "var(--surface-soft)",
+              borderColor: "var(--border)",
+              color: "var(--text-primary)",
+            }}>
               <p className="whitespace-pre-wrap">{message.content || (loading ? "…" : "")}</p>
+              <div className="mt-2 flex items-center gap-3 text-[11px]" style={{ color: "var(--text-secondary)" }}>
+                <time>{new Date(message.createdAt).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" })}</time>
+                {message.content ? <button type="button" onClick={() => navigator.clipboard.writeText(message.content)}>نسخ</button> : null}
+              </div>
             </article>
           ))}
           <div ref={scrollAnchor} />
         </div>
         <form onSubmit={send} className="border-t border-stone-700 p-4">
-          <textarea name="message" required maxLength={30000} rows={3} disabled={!conversationId || loading} placeholder="اكتب طلبك الحقيقي للوكيل..." className="form-control w-full resize-none" />
+          <textarea
+            name="message"
+            required
+            maxLength={30000}
+            rows={3}
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
+            disabled={!conversationId || loading}
+            placeholder="اكتب طلبك… Enter للإرسال وShift+Enter لسطر جديد"
+            className="form-control w-full resize-none"
+          />
           {attachments.length > 0 ? (
             <div className="mt-3 flex flex-wrap gap-2">
               {attachments.map((file) => (
