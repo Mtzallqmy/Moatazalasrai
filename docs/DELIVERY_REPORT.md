@@ -4,7 +4,7 @@
 
 ## النتيجة
 
-تحول المستودع من نموذج أولي محدود إلى أساس SaaS عربي متعدد المؤسسات يعمل على Next.js App Router وReact وTypeScript وTailwind وDrizzle وPostgreSQL/Neon. لا توجد فوترة أو اشتراكات، ولا بيانات تجريبية أو backend وهمي.
+تحول المستودع من نموذج أولي محدود إلى أساس SaaS عربي متعدد المؤسسات يعمل على Next.js App Router وReact وTypeScript وTailwind وDrizzle وPostgreSQL على Railway. لا توجد فوترة أو اشتراكات، ولا بيانات تجريبية أو backend وهمي.
 
 ## المشكلات التي عُثر عليها
 
