@@ -67,7 +67,7 @@ jobs:
           elif [[ -n "${{ inputs.version }}" ]]; then
             version="${{ inputs.version }}"
           else
-            version="$(sed -n 's/^version:[[:space:]]*\\([^+[:space:]]*\\).*/\\1/p' pubspec.yaml | head -n 1)"
+            version="$(awk -F'[ +]' '/^version:/{print $2; exit}' pubspec.yaml)"
           fi
           if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
             echo "Invalid semantic version: ${version}" >&2
