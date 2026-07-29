@@ -1,6 +1,6 @@
 # منصة معتز للوكلاء الذكيين
 
-منصة SaaS عربية، متعددة المؤسسات، لبناء وكلاء ذكاء اصطناعي وتشغيلهم باستخدام مفاتيح المستخدم (BYOK). المشروع مبني على Next.js App Router وReact وTypeScript وTailwind وDrizzle وPostgreSQL/Neon.
+منصة SaaS عربية، متعددة المؤسسات، لبناء وكلاء ذكاء اصطناعي وتشغيلهم باستخدام مفاتيح المستخدم (BYOK). المشروع مبني على Next.js App Router وReact وTypeScript وTailwind وDrizzle وPostgreSQL، ومسار النشر الإنتاجي مهيأ لـRailway.
 
 لا يتضمن المشروع دفعًا أو اشتراكات أو أسعارًا أو فوترة.
 
@@ -22,7 +22,7 @@
 ## المتطلبات
 
 - Node.js 20.11 أو أحدث.
-- قاعدة PostgreSQL/Neon مستقلة.
+- خدمة PostgreSQL داخل مشروع Railway نفسه.
 - مفتاح تشفير 32 بايت بصيغة Base64.
 
 ```bash
@@ -38,7 +38,7 @@ npm run dev
 
 | المتغير | مطلوب | الاستخدام |
 |---|---:|---|
-| `DATABASE_URL` | نعم | اتصال PostgreSQL/Neon وقت التشغيل، ولا يُستخدم أثناء build |
+| `DATABASE_URL` | نعم | مرجع اتصال PostgreSQL الذي يحقنه Railway وقت التشغيل، ولا يُستخدم أثناء build |
 | `CREDENTIAL_ENCRYPTION_KEY` | نعم | مفتاح Base64 بطول 32 بايت لتشفير مفاتيح المزودات |
 | `APP_URL` | في الإنتاج | أصل HTTPS الموثوق لحماية CSRF |
 | `BOOTSTRAP_ADMIN_TOKEN` | اختياري | تهيئة API للمنصة مرة واحدة؛ التسجيل العادي لا يحتاجه |
@@ -81,7 +81,7 @@ npm run test:e2e
 
 ## النشر
 
-المسار الأساسي هو Docker/Railway مع Node runtime. شغّل migrations كخطوة إصدار مستقلة، ثم انشر التطبيق، وافحص:
+المسار الأساسي هو Docker/Railway مع Node runtime. يشغّل Railway migrations تلقائيًا قبل الإصدار، ثم يبدأ التطبيق ويفحص:
 
 - `/api/health`: liveness دون اتصال عميق بالخدمات.
 - `/api/ready`: جاهزية قاعدة البيانات والمخطط.
