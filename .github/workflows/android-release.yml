@@ -36,6 +36,8 @@ jobs:
     name: Build one arm64 APK
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    env:
+      HAS_RELEASE_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
     defaults:
       run:
         working-directory: apps/mobile
@@ -81,7 +83,7 @@ jobs:
         run: flutter pub get
 
       - name: Configure release signing
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        if: ${{ env.HAS_RELEASE_KEYSTORE == 'true' }}
         shell: bash
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
