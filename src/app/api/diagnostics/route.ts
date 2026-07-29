@@ -1,6 +1,7 @@
-import { sql } from "drizzle-orm";
+import { and, count, eq, gte, inArray, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { db } from "@/db";
+import { integrations, providerCredentials, runs } from "@/db/schema";
 import { currentSession } from "@/lib/auth/session";
 import { env } from "@/lib/config/env";
 import { decryptSecret, encryptSecret } from "@/lib/security/encryption";
@@ -83,6 +84,38 @@ export async function GET(request: Request) {
     }),
     runCheck("session", () => `جلسة صالحة للمستخدم ${session.email}`),
     runCheck("tenant-scope", () => `المؤسسة الحالية: ${session.organizationId}`),
+    runCheck("providers", async () => {
+      const [totalRows, degradedRows] = await Promise.all([
+        db().select({ value: count() }).from(providerCredentials).where(eq(providerCredentials.organizationId, session.organizationId)),
+        db().select({ value: count() }).from(providerCredentials).where(and(
+          eq(providerCredentials.organizationId, session.organizationId),
+          inArray(providerCredentials.validationStatus, ["pending", "failed"]),
+        )),
+      ]);
+      return `${totalRows[0]?.value ?? 0} مزود؛ ${degradedRows[0]?.value ?? 0} يحتاج انتباهًا`;
+    }),
+    runCheck("integrations", async () => {
+      const [totalRows, failedRows] = await Promise.all([
+        db().select({ value: count() }).from(integrations).where(eq(integrations.organizationId, session.organizationId)),
+        db().select({ value: count() }).from(integrations).where(and(
+          eq(integrations.organizationId, session.organizationId),
+          eq(integrations.status, "failed"),
+        )),
+      ]);
+      return `${totalRows[0]?.value ?? 0} تكامل؛ ${failedRows[0]?.value ?? 0} فاشل`;
+    }),
+    runCheck("runs-24h", async () => {
+      const since = new Date(Date.now() - 24 * 60 * 60_000);
+      const [totalRows, failedRows] = await Promise.all([
+        db().select({ value: count() }).from(runs).where(and(eq(runs.organizationId, session.organizationId), gte(runs.createdAt, since))),
+        db().select({ value: count() }).from(runs).where(and(
+          eq(runs.organizationId, session.organizationId),
+          gte(runs.createdAt, since),
+          inArray(runs.status, ["failed", "cancelled"]),
+        )),
+      ]);
+      return `${totalRows[0]?.value ?? 0} تشغيل؛ ${failedRows[0]?.value ?? 0} فشل/إلغاء`;
+    }),
   ]);
 
   const failed = checks.filter((check) => check.status === "fail").length;
