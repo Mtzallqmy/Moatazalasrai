@@ -21,7 +21,9 @@ export const ALLOWED_ATTACHMENT_TYPES = new Set([
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   "application/zip",
   "application/vnd.rar",
+  "application/x-rar-compressed",
   "application/x-7z-compressed",
+  "application/octet-stream",
   "audio/mpeg",
   "audio/wav",
   "audio/ogg",
@@ -29,8 +31,51 @@ export const ALLOWED_ATTACHMENT_TYPES = new Set([
   "video/webm",
 ]);
 
+const MIME_FAMILIES: Record<string, Set<string>> = {
+  ".jpg": new Set(["image/jpeg"]),
+  ".jpeg": new Set(["image/jpeg"]),
+  ".png": new Set(["image/png"]),
+  ".webp": new Set(["image/webp"]),
+  ".gif": new Set(["image/gif"]),
+  ".pdf": new Set(["application/pdf"]),
+  ".docx": new Set(["application/vnd.openxmlformats-officedocument.wordprocessingml.document"]),
+  ".xlsx": new Set(["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]),
+  ".pptx": new Set(["application/vnd.openxmlformats-officedocument.presentationml.presentation"]),
+  ".txt": new Set(["text/plain"]),
+  ".md": new Set(["text/markdown", "text/plain"]),
+  ".csv": new Set(["text/csv", "application/csv", "text/plain"]),
+  ".json": new Set(["application/json", "text/json", "text/plain"]),
+  ".zip": new Set(["application/zip", "application/x-zip-compressed", "application/octet-stream"]),
+  ".rar": new Set(["application/vnd.rar", "application/x-rar-compressed", "application/octet-stream"]),
+  ".7z": new Set(["application/x-7z-compressed", "application/octet-stream"]),
+  ".mp3": new Set(["audio/mpeg", "audio/mp3", "application/octet-stream"]),
+  ".wav": new Set(["audio/wav", "audio/x-wav", "application/octet-stream"]),
+  ".ogg": new Set(["audio/ogg", "application/ogg", "application/octet-stream"]),
+  ".m4a": new Set(["audio/mp4", "audio/x-m4a", "application/octet-stream"]),
+  ".mp4": new Set(["video/mp4", "application/octet-stream"]),
+  ".webm": new Set(["video/webm", "application/octet-stream"]),
+  ".mov": new Set(["video/quicktime", "application/octet-stream"]),
+};
+
 function cleanFilename(value: string) {
   return value.replace(/[^\p{L}\p{N}._ -]/gu, "_").slice(0, 180) || "file";
+}
+
+export function validateDeclaredMime(filename: string, mimeType: string) {
+  const normalized = mimeType.split(";", 1)[0].trim().toLowerCase();
+  const dot = filename.lastIndexOf(".");
+  const ext = dot >= 0 ? filename.slice(dot).toLowerCase() : "";
+  const allowed = MIME_FAMILIES[ext];
+  if (!allowed || !ALLOWED_ATTACHMENT_TYPES.has(normalized) && normalized !== "application/x-zip-compressed"
+    && normalized !== "application/csv" && normalized !== "text/json" && normalized !== "audio/mp3"
+    && normalized !== "audio/x-wav" && normalized !== "application/ogg" && normalized !== "audio/mp4"
+    && normalized !== "audio/x-m4a" && normalized !== "video/quicktime") {
+    throw new ApiError(415, "FILE_MIME_UNSUPPORTED", "نوع الملف المعلن غير مدعوم.");
+  }
+  if (!allowed.has(normalized)) {
+    throw new ApiError(415, "FILE_MIME_MISMATCH", "نوع الملف المعلن لا يطابق امتداده.");
+  }
+  return normalized;
 }
 
 export async function storeAttachment(input: {
@@ -47,7 +92,8 @@ export async function storeAttachment(input: {
   if (input.content.byteLength > MAX_ATTACHMENT_BYTES) {
     throw new ApiError(413, "FILE_TOO_LARGE", "الحد الأقصى للملف 10 ميجابايت.");
   }
-  const processed = processFile(input.filename, input.mimeType, input.content);
+  const declaredMime = validateDeclaredMime(input.filename, input.mimeType);
+  const processed = processFile(input.filename, declaredMime, input.content);
   if (input.conversationId) {
     const [conversation] = await db().select({ id: conversations.id }).from(conversations).where(and(
       eq(conversations.id, input.conversationId),
@@ -63,7 +109,7 @@ export async function storeAttachment(input: {
     uploadedByUserId: input.uploadedByUserId,
     source: input.source,
     filename: cleanFilename(input.filename),
-    mimeType: input.mimeType,
+    mimeType: declaredMime,
     sizeBytes: input.content.byteLength,
     sha256,
     content: input.content,

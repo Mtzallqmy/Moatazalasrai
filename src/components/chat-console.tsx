@@ -6,6 +6,7 @@ type Agent = { id: string; name: string };
 type Conversation = { id: string; title: string | null; agentId: string; agentName: string; updatedAt: string };
 type Message = { id: string; role: "user" | "assistant"; content: string; createdAt: string; model?: string | null; editedAt?: string | null; metadata?: Record<string, unknown>; attachments?: Attachment[] };
 type Attachment = { id: string; filename: string; mimeType: string; sizeBytes: number; processingStatus?: string };
+type FailedUpload = { id: string; file: File; message: string };
 type ModelOption = { providerCredentialId: string; providerName: string; model: string; freeTierEligible: boolean };
 type Api<T> = { success?: boolean; data?: T; error?: { code?: string; message?: string; requestId?: string } };
 
@@ -25,6 +26,7 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
   const [retryText, setRetryText] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [failedUploads, setFailedUploads] = useState<FailedUpload[]>([]);
   const [search, setSearch] = useState("");
   const [draft, setDraft] = useState("");
   const [models, setModels] = useState<ModelOption[]>([]);
@@ -196,28 +198,62 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
     }
   }
 
-  async function uploadFiles(files: FileList | null) {
+  async function uploadOne(file: File, failedId?: string) {
+    const form = new FormData();
+    form.set("conversationId", conversationId);
+    form.set("file", file);
+    const response = await fetch("/api/dashboard/files", { method: "POST", body: form });
+    const payload = await response.json().catch(() => null) as Api<Attachment> | null;
+    if (!response.ok || !payload?.success || !payload.data) {
+      throw new Error(payload?.error?.message ?? `تعذر رفع ${file.name}.`);
+    }
+    setAttachments((current) => current.some((item) => item.id === payload.data!.id)
+      ? current
+      : [...current, payload.data!].slice(0, 8));
+    if (failedId) setFailedUploads((items) => items.filter((item) => item.id !== failedId));
+  }
+
+  async function uploadFiles(files: FileList | File[] | null) {
     if (!files || !conversationId) return;
     const selected = Array.from(files).slice(0, Math.max(0, 8 - attachments.length));
     if (selected.length === 0) return;
     setUploading(true);
     setError(null);
+    const results = await Promise.allSettled(selected.map((file) => uploadOne(file)));
+    const failures = results.flatMap((result, index) => result.status === "rejected"
+      ? [{ id: crypto.randomUUID(), file: selected[index], message: result.reason instanceof Error ? result.reason.message : "تعذر رفع الملف." }]
+      : []);
+    if (failures.length) {
+      setFailedUploads((items) => [...items, ...failures]);
+      setError(`فشل رفع ${failures.length} ملف. يمكنك إعادة محاولة كل ملف أدناه.`);
+    }
+    setUploading(false);
+  }
+
+  async function removePendingAttachment(file: Attachment) {
+    setAttachments((items) => items.filter((item) => item.id !== file.id));
+    const response = await fetch("/api/dashboard/files", {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: file.id }),
+    });
+    if (!response.ok) {
+      setAttachments((items) => [...items, file]);
+      const payload = await response.json().catch(() => null) as Api<never> | null;
+      setError(payload?.error?.message ?? `تعذر حذف ${file.filename}.`);
+    }
+  }
+
+  async function retryUpload(item: FailedUpload) {
+    setUploading(true);
+    setError(null);
     try {
-      const uploaded: Attachment[] = [];
-      for (const file of selected) {
-        const form = new FormData();
-        form.set("conversationId", conversationId);
-        form.set("file", file);
-        const response = await fetch("/api/dashboard/files", { method: "POST", body: form });
-        const payload = await response.json().catch(() => null) as Api<Attachment> | null;
-        if (!response.ok || !payload?.success || !payload.data) {
-          throw new Error(payload?.error?.message ?? `تعذر رفع ${file.name}.`);
-        }
-        uploaded.push(payload.data);
-      }
-      setAttachments((current) => [...current, ...uploaded].slice(0, 8));
+      await uploadOne(item.file, item.id);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "تعذر رفع الملفات.");
+      setFailedUploads((items) => items.map((failed) => failed.id === item.id
+        ? { ...failed, message: cause instanceof Error ? cause.message : "تعذر رفع الملف." }
+        : failed));
+      setError(cause instanceof Error ? cause.message : "تعذر رفع الملف.");
     } finally {
       setUploading(false);
     }
@@ -412,8 +448,21 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
               {attachments.map((file) => (
                 <span key={file.id} className="rounded-xl border border-stone-700 bg-stone-900 px-3 py-2 text-xs">
                   {file.filename} ({Math.ceil(file.sizeBytes / 1024)}KB)
-                  <button type="button" className="mr-2 text-rose-200" onClick={() => setAttachments((items) => items.filter((item) => item.id !== file.id))}>×</button>
+                  <button type="button" className="mr-2 text-rose-200" aria-label={`حذف ${file.filename}`} onClick={() => removePendingAttachment(file)}>×</button>
                 </span>
+              ))}
+            </div>
+          ) : null}
+          {failedUploads.length > 0 ? (
+            <div className="mt-3 grid gap-2">
+              {failedUploads.map((item) => (
+                <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border px-3 py-2 text-xs" style={{ borderColor: "var(--danger)", background: "var(--surface-soft)" }}>
+                  <span><strong>{item.file.name}</strong> — {item.message}</span>
+                  <span className="flex gap-2">
+                    <button type="button" className="secondary-button px-3 py-1" disabled={uploading} onClick={() => retryUpload(item)}>إعادة المحاولة</button>
+                    <button type="button" className="danger-button px-3 py-1" onClick={() => setFailedUploads((items) => items.filter((failed) => failed.id !== item.id))}>إزالة</button>
+                  </span>
+                </div>
               ))}
             </div>
           ) : null}

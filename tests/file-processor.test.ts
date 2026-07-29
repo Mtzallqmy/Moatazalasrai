@@ -1,6 +1,7 @@
 import { zipSync, strToU8 } from "fflate";
 import { describe, expect, it } from "vitest";
 import { detectFile, processFile } from "@/server/files/processor";
+import { validateDeclaredMime } from "@/lib/storage/attachments";
 
 describe("file processor", () => {
   it("extracts and indexes safe text files", () => {
@@ -34,5 +35,17 @@ describe("file processor", () => {
   it("accepts a valid GIF signature", () => {
     const result = processFile("pixel.gif", "image/gif", Buffer.from("GIF89a-test"));
     expect(result.category).toBe("image");
+  });
+});
+
+describe("attachment MIME validation", () => {
+  it("accepts browser-compatible MIME aliases for supported files", () => {
+    expect(validateDeclaredMime("archive.zip", "application/x-zip-compressed")).toBe("application/x-zip-compressed");
+    expect(validateDeclaredMime("notes.md", "text/plain; charset=utf-8")).toBe("text/plain");
+  });
+
+  it("rejects extension and declared MIME mismatches before storage", () => {
+    expect(() => validateDeclaredMime("photo.jpg", "application/pdf")).toThrow(/لا يطابق امتداده/);
+    expect(() => validateDeclaredMime("payload.exe", "application/octet-stream")).toThrow(/غير مدعوم/);
   });
 });

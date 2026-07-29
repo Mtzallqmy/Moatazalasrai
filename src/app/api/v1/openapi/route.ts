@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 
 const operations = {
   "/api/v1/agents": { get: "List agents", post: "Create agent" },
-  "/api/v1/conversations": { get: "List conversations or messages", post: "Create conversation" },
+  "/api/v1/conversations": { get: "List conversations or messages", post: "Create conversation", patch: "Rename, archive, restore, pin, or move a conversation", delete: "Soft-delete a conversation" },
+  "/api/v1/messages": { patch: "Edit, delete, or restore a message" },
   "/api/v1/chat": { post: "Send a message with optional attachment IDs" },
   "/api/v1/files": { get: "List or download files", post: "Upload multipart file" },
   "/api/v1/runs": { get: "List runs", post: "Execute agent run" },
