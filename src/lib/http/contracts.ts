@@ -87,6 +87,8 @@ export const chatStreamSchema = z.object({
   providerCredentialId: uuidSchema.optional(),
   model: z.string().trim().min(1).max(200).optional(),
   inputKind: z.enum(["text", "image", "file", "coding", "summary", "analysis", "audio", "video"]).default("text"),
+  knowledgeBaseId: uuidSchema.optional(),
+  useMemory: z.boolean().default(false),
 }).strict();
 
 export const runCancelSchema = z.object({ runId: uuidSchema }).strict();

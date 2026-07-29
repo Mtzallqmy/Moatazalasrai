@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 
 type Agent = { id: string; name: string };
 type Conversation = { id: string; title: string | null; agentId: string; agentName: string; updatedAt: string };
-type Message = { id: string; role: "user" | "assistant"; content: string; createdAt: string; model?: string | null; editedAt?: string | null; metadata?: Record<string, unknown> };
+type Message = { id: string; role: "user" | "assistant"; content: string; createdAt: string; model?: string | null; editedAt?: string | null; metadata?: Record<string, unknown>; attachments?: Attachment[] };
 type Attachment = { id: string; filename: string; mimeType: string; sizeBytes: number; processingStatus?: string };
 type ModelOption = { providerCredentialId: string; providerName: string; model: string; freeTierEligible: boolean };
 type Api<T> = { success?: boolean; data?: T; error?: { code?: string; message?: string; requestId?: string } };
@@ -231,6 +231,7 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
       role: "user",
       content: text.trim(),
       createdAt: new Date().toISOString(),
+      attachments: [...attachments],
     };
     setMessages((current) => [...current, optimistic]);
     setLoading(true);
@@ -363,6 +364,20 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
               color: "var(--text-primary)",
             }}>
               <p className="whitespace-pre-wrap">{message.content || (loading ? "…" : "")}</p>
+              {message.attachments?.length ? (
+                <div className="mt-3 grid gap-2">
+                  {message.attachments.map((file) => (
+                    <a key={file.id} href={`/api/dashboard/files?id=${encodeURIComponent(file.id)}`}
+                      className="flex items-center justify-between gap-3 rounded-xl border px-3 py-2 text-xs"
+                      style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
+                      <span className="min-w-0 truncate">📎 {file.filename}</span>
+                      <span className="shrink-0" style={{ color: file.processingStatus === "ready" ? "var(--success)" : "var(--warning)" }}>
+                        {file.processingStatus === "ready" ? "جاهز ومفهرس" : file.processingStatus ?? "محفوظ"}
+                      </span>
+                    </a>
+                  ))}
+                </div>
+              ) : null}
               <div className="mt-2 flex items-center gap-3 text-[11px]" style={{ color: "var(--text-secondary)" }}>
                 <time>{new Date(message.createdAt).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" })}</time>
                 {message.content ? <button type="button" onClick={() => navigator.clipboard.writeText(message.content)}>نسخ</button> : null}

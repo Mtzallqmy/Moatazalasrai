@@ -22,6 +22,10 @@ export const integrationKind = pgEnum("integration_kind", ["telegram", "github"]
 export const integrationStatus = pgEnum("integration_status", ["pending", "verified", "failed"]);
 export const attachmentSource = pgEnum("attachment_source", ["web", "api", "telegram"]);
 export const fileProcessingStatus = pgEnum("file_processing_status", ["pending", "processing", "ready", "failed", "quarantined"]);
+export const memoryKind = pgEnum("memory_kind", ["semantic", "procedural", "episodic"]);
+export const documentStatus = pgEnum("document_status", ["uploaded", "processing", "ready", "failed", "deleted"]);
+export const jobStatus = pgEnum("job_status", ["queued", "running", "completed", "failed", "cancelled"]);
+export const toolApprovalStatus = pgEnum("tool_approval_status", ["pending", "approved", "rejected", "consumed", "expired"]);
 const bytea = customType<{ data: Buffer }>({ dataType: () => "bytea" });
 
 export const organizations = pgTable("organizations", {
@@ -356,6 +360,89 @@ export const modelCatalog = pgTable("model_catalog", {
   uniqueIndex("model_catalog_provider_model_unique_idx").on(table.providerCredentialId, table.model),
   index("model_catalog_org_available_idx").on(table.organizationId, table.available, table.freeTierEligible),
 ]);
+
+export const agentMemories = pgTable("agent_memories", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
+  agentId: uuid("agent_id").references(() => agents.id, { onDelete: "cascade" }),
+  kind: memoryKind("kind").notNull(),
+  content: text("content").notNull(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  importanceMilli: integer("importance_milli").notNull().default(500),
+  enabled: boolean("enabled").notNull().default(true),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [index("agent_memories_scope_idx").on(table.organizationId, table.userId, table.agentId, table.enabled)]);
+
+export const knowledgeBases = pgTable("knowledge_bases", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [uniqueIndex("knowledge_bases_org_name_unique").on(table.organizationId, table.name)]);
+
+export const knowledgeDocuments = pgTable("knowledge_documents", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  knowledgeBaseId: uuid("knowledge_base_id").notNull().references(() => knowledgeBases.id, { onDelete: "cascade" }),
+  attachmentId: uuid("attachment_id").notNull().references(() => attachments.id, { onDelete: "cascade" }),
+  title: text("title").notNull(), mimeType: text("mime_type").notNull(), byteSize: integer("byte_size").notNull(),
+  checksumSha256: text("checksum_sha256").notNull(),
+  status: documentStatus("status").notNull().default("uploaded"),
+  errorCode: text("error_code"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("knowledge_documents_org_kb_checksum_unique").on(table.organizationId, table.knowledgeBaseId, table.checksumSha256),
+  index("knowledge_documents_scope_idx").on(table.organizationId, table.knowledgeBaseId, table.status),
+]);
+
+export const knowledgeChunks = pgTable("knowledge_chunks", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  documentId: uuid("document_id").notNull().references(() => knowledgeDocuments.id, { onDelete: "cascade" }),
+  chunkIndex: integer("chunk_index").notNull(), content: text("content").notNull(),
+  tokenEstimate: integer("token_estimate").notNull(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("knowledge_chunks_doc_index_unique").on(table.documentId, table.chunkIndex),
+  index("knowledge_chunks_scope_idx").on(table.organizationId, table.documentId),
+]);
+
+export const backgroundJobs = pgTable("background_jobs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  type: text("type").notNull(), status: jobStatus("status").notNull().default("queued"),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+  result: jsonb("result").$type<Record<string, unknown>>(),
+  attempts: integer("attempts").notNull().default(0), maxAttempts: integer("max_attempts").notNull().default(5),
+  availableAt: timestamp("available_at", { withTimezone: true }).defaultNow().notNull(),
+  lockedAt: timestamp("locked_at", { withTimezone: true }), lockedBy: text("locked_by"),
+  lastErrorCode: text("last_error_code"), completedAt: timestamp("completed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("background_jobs_claim_idx").on(table.status, table.availableAt, table.lockedAt),
+  index("background_jobs_scope_idx").on(table.organizationId, table.createdAt),
+]);
+
+export const toolApprovals = pgTable("tool_approvals", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  runId: uuid("run_id").references(() => runs.id, { onDelete: "cascade" }),
+  toolId: text("tool_id").notNull(), inputDigest: text("input_digest").notNull(),
+  status: toolApprovalStatus("status").notNull().default("pending"),
+  requestedByUserId: uuid("requested_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  decidedByUserId: uuid("decided_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  decidedAt: timestamp("decided_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [index("tool_approvals_scope_idx").on(table.organizationId, table.status, table.expiresAt)]);
 
 export type Agent = typeof agents.$inferSelect;
 export type AgentVersion = typeof agentVersions.$inferSelect;

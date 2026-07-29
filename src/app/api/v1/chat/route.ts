@@ -22,6 +22,11 @@ export async function POST(request: Request) {
     )).limit(1);
     if (!conversation) return apiFailure(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة.", requestId);
     const context = await attachmentContext(principal.organizationId, conversation.id, body.attachmentIds);
+    const media = context.rows.filter((file) => ["image/jpeg", "image/png", "image/webp", "image/gif"].includes(file.mimeType)).map((file) => ({
+      type: "image" as const,
+      mediaType: file.mimeType as "image/jpeg" | "image/png" | "image/webp" | "image/gif",
+      data: Buffer.from(file.content).toString("base64"),
+    }));
     const [userMessage] = await db().insert(messages).values({
       conversationId: conversation.id,
       role: "user",
@@ -40,6 +45,7 @@ export async function POST(request: Request) {
       conversationId: conversation.id,
       message: `${body.message}${context.text}`,
       requestId,
+      media,
     });
     return apiSuccess({ run: result.run, message: result.assistantMessage }, requestId, 201);
   } catch (error) {

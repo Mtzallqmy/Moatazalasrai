@@ -15,7 +15,8 @@ import { selectBestModel, type InputKind } from "@/server/models/router";
 import { decryptSecret } from "@/lib/security/encryption";
 import { ApiError } from "@/lib/http/api";
 import { generateWithProvider, streamWithProvider } from "@/lib/providers/registry";
-import { ProviderError, type ProviderMessage, type ProviderUsage } from "@/lib/providers/types";
+import { ProviderError, type ProviderContentPart, type ProviderMessage, type ProviderUsage } from "@/lib/providers/types";
+import { safeTelemetry } from "@/ai/observability/telemetry";
 
 const activeControllers = new Map<string, AbortController>();
 const MAX_CONTEXT_TOKENS_ESTIMATE = 24_000;
@@ -30,7 +31,7 @@ function safeProviderError(error: unknown) {
   return new ProviderError("RUN_FAILED", "تعذر إكمال تشغيل الوكيل.", 502);
 }
 
-async function contextMessages(conversationId: string, instructions: string, maxOutputTokens: number) {
+async function contextMessages(conversationId: string, instructions: string, maxOutputTokens: number, media: ProviderContentPart[] = []) {
   const rows = await db().select({
     role: messages.role,
     content: messages.content,
@@ -49,10 +50,21 @@ async function contextMessages(conversationId: string, instructions: string, max
     selected.push(message);
   }
   selected.reverse();
+  const history: ProviderMessage[] = selected.map((message) => ({ role: message.role, content: message.content }));
+  if (media.length) {
+    let latestUser = -1;
+    for (let index = history.length - 1; index >= 0; index -= 1) {
+      if (history[index]?.role === "user") { latestUser = index; break; }
+    }
+    if (latestUser >= 0) history[latestUser] = {
+      ...history[latestUser]!,
+      content: [{ type: "text", text: String(history[latestUser]!.content) }, ...media],
+    };
+  }
   return {
     messages: [
       { role: "system", content: instructions },
-      ...selected.map((message) => ({ role: message.role, content: message.content })),
+      ...history,
     ] satisfies ProviderMessage[],
     estimatedInputTokens: used,
   };
@@ -67,6 +79,7 @@ export async function prepareAgentRun(input: {
   providerCredentialId?: string;
   model?: string;
   inputKind?: InputKind;
+  media?: ProviderContentPart[];
 }) {
   const [agent] = await db().select().from(agents).where(and(
     eq(agents.id, input.agentId),
@@ -139,7 +152,7 @@ export async function prepareAgentRun(input: {
     .limit(1);
   if (!conversation) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة أو مؤرشفة.");
 
-  const context = await contextMessages(conversation.id, version.instructions, version.maxOutputTokens);
+  const context = await contextMessages(conversation.id, version.instructions, version.maxOutputTokens, input.media);
   const [run] = await db().transaction(async (tx) => {
     const [created] = await tx.insert(runs).values({
       organizationId: input.organizationId,
@@ -191,6 +204,7 @@ async function completeRun(input: {
   model: string;
 }) {
   const completedAt = new Date();
+  console.info(JSON.stringify(safeTelemetry({ operation: "agent.run", runId: input.runId, providerCredentialId: input.providerCredentialId, model: input.model, status: "ok" })));
   return db().transaction(async (tx) => {
     const [assistantMessage] = await tx.insert(messages).values({
       conversationId: input.conversationId,
@@ -233,6 +247,7 @@ async function completeRun(input: {
 }
 
 async function failRun(runId: string, error: ProviderError) {
+  console.error(JSON.stringify(safeTelemetry({ operation: "agent.run", runId, status: "error", errorCode: error.code })));
   const failureCountRows = await db().select({ providerCredentialId: agentVersions.providerCredentialId })
     .from(runs)
     .innerJoin(agentVersions, eq(agentVersions.id, runs.agentVersionId))
@@ -279,6 +294,7 @@ export async function executeAgentRun(input: {
   message: string;
   conversationId: string;
   requestId?: string;
+  media?: ProviderContentPart[];
 }) {
   const requestId = input.requestId ?? crypto.randomUUID();
   const prepared = await prepareAgentRun({ ...input, requestId });
@@ -324,6 +340,7 @@ export async function* streamAgentRun(input: {
   providerCredentialId?: string;
   model?: string;
   inputKind?: InputKind;
+  media?: ProviderContentPart[];
 }) {
   const prepared = await prepareAgentRun(input);
   await beginProviderRequest(prepared.run.id);

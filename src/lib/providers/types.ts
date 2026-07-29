@@ -1,5 +1,8 @@
 export type ProviderKind = "openai" | "anthropic" | "gemini" | "openai_compatible";
-export type ProviderMessage = { role: "system" | "user" | "assistant"; content: string };
+export type ProviderContentPart =
+  | { type: "text"; text: string }
+  | { type: "image"; mediaType: "image/jpeg" | "image/png" | "image/webp" | "image/gif"; data: string };
+export type ProviderMessage = { role: "system" | "user" | "assistant"; content: string | ProviderContentPart[] };
 
 export type ProviderRequest = {
   apiKey: string;

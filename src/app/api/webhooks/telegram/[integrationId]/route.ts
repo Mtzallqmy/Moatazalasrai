@@ -3,8 +3,10 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import {
   agents,
+  attachments,
   conversations,
   integrations,
+  messages,
   telegramChats,
   telegramUpdates,
 } from "@/db/schema";
@@ -17,6 +19,7 @@ import {
 } from "@/lib/integrations/telegram";
 import { decryptSecret, secureHashEquals } from "@/lib/security/encryption";
 import { storeAttachment } from "@/lib/storage/attachments";
+import { attachmentContext } from "@/lib/storage/attachments";
 
 export const runtime = "nodejs";
 
@@ -180,7 +183,7 @@ async function processUpdate(input: {
           await sendTelegramMessage({ token, chatId, text: "تم إنشاء محادثة جديدة." });
         } else {
           const file = telegramFile(message);
-          let fileNote = "";
+          const attachmentIds: string[] = [];
           if (file) {
             const downloaded = await downloadTelegramFile(token, file.fileId);
             const stored = await storeAttachment({
@@ -192,14 +195,32 @@ async function processUpdate(input: {
               content: downloaded.content,
               telegramFileId: file.fileId,
             });
-            fileNote = `\n\n[مرفق محفوظ: ${stored.filename}، ${stored.mimeType}]`;
+            attachmentIds.push(stored.id);
           }
-          const prompt = `${text || "حلّل الملف المرفق."}${fileNote}`;
+          const indexed = await attachmentContext(input.integration.organizationId, conversationId, attachmentIds);
+          const media = indexed.rows.filter((item) => ["image/jpeg", "image/png", "image/webp", "image/gif"].includes(item.mimeType)).map((item) => ({
+            type: "image" as const,
+            mediaType: item.mimeType as "image/jpeg" | "image/png" | "image/webp" | "image/gif",
+            data: Buffer.from(item.content).toString("base64"),
+          }));
+          const promptText = text || "حلّل الملف المرفق واذكر ما وجدته فيه.";
+          const [userMessage] = await db().insert(messages).values({
+            conversationId, role: "user", content: promptText,
+            metadata: { source: "telegram", attachmentIds, telegramMessageId: message.message_id },
+          }).returning({ id: messages.id });
+          if (userMessage && attachmentIds.length) {
+            await db().update(attachments).set({ messageId: userMessage.id }).where(and(
+              eq(attachments.organizationId, input.integration.organizationId),
+              eq(attachments.id, attachmentIds[0]!),
+            ));
+          }
+          const prompt = `${promptText}${indexed.text}`;
           const completed = await executeAgentRun({
             organizationId: input.integration.organizationId,
             agentId,
             conversationId,
             message: prompt,
+            media,
           });
           await sendTelegramMessage({
             token,
@@ -218,7 +239,7 @@ async function processUpdate(input: {
     await sendTelegramMessage({
       token,
       chatId,
-      text: "تعذر إكمال الطلب الآن. تحقق من إعداد الوكيل والمزود ثم حاول مجددًا.",
+      text: `تعذر إكمال الطلب (${errorCode}). راجع حالة الوكيل والمزود أو أعد المحاولة برسالة جديدة.`,
     }).catch(() => undefined);
     console.error(JSON.stringify({
       level: "error",
