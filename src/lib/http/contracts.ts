@@ -79,6 +79,7 @@ export const conversationActionSchema = z.discriminatedUnion("action", [
 export const chatStreamSchema = z.object({
   conversationId: uuidSchema,
   message: z.string().trim().min(1).max(30_000),
+  attachmentIds: z.array(uuidSchema).max(8).default([]),
 }).strict();
 
 export const runCancelSchema = z.object({ runId: uuidSchema }).strict();
@@ -109,3 +110,21 @@ export const accountMutationSchema = z.discriminatedUnion("action", [
     newPassword: z.string().min(12).max(128),
   }).strict(),
 ]);
+
+export const integrationCreateSchema = z.object({
+  kind: z.enum(["telegram", "github"]),
+  name: z.string().trim().min(2).max(80),
+  token: z.string().trim().min(8).max(2000),
+  agentId: uuidSchema.optional(),
+}).strict();
+
+export const integrationUpdateSchema = z.object({
+  id: uuidSchema,
+  name: z.string().trim().min(2).max(80).optional(),
+  token: z.string().trim().min(8).max(2000).optional(),
+  agentId: uuidSchema.nullable().optional(),
+  enabled: z.boolean().optional(),
+  activateWebhook: z.boolean().optional(),
+}).strict().refine((value) => Object.keys(value).length > 1, "No integration changes supplied.");
+
+export const integrationDeleteSchema = z.object({ id: uuidSchema }).strict();
