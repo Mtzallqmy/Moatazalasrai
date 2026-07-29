@@ -32,6 +32,7 @@ export async function GET(request: Request) {
       const [agent] = await db().select().from(agents).where(and(
         eq(agents.id, agentId),
         eq(agents.organizationId, session.organizationId),
+        session.role === "member" ? eq(agents.status, "published") : undefined,
       )).limit(1);
       if (!agent) throw new ApiError(404, "AGENT_NOT_FOUND", "الوكيل غير موجود.");
       const versions = await db().select({
@@ -48,7 +49,10 @@ export async function GET(request: Request) {
     }
 
     const query = paginationSchema.parse(Object.fromEntries(url.searchParams));
-    const where = eq(agents.organizationId, session.organizationId);
+    const where = and(
+      eq(agents.organizationId, session.organizationId),
+      session.role === "member" ? eq(agents.status, "published") : undefined,
+    );
     const [rows, totals] = await Promise.all([
       db().select({
         id: agents.id,

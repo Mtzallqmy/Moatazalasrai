@@ -22,7 +22,11 @@ export async function PATCH(request: Request) {
       const [owned] = await tx.select({ id: messages.id, role: messages.role })
         .from(messages)
         .innerJoin(conversations, eq(conversations.id, messages.conversationId))
-        .where(and(eq(messages.id, body.messageId), eq(conversations.organizationId, session.organizationId)))
+        .where(and(
+          eq(messages.id, body.messageId),
+          eq(conversations.organizationId, session.organizationId),
+          session.role === "member" ? eq(conversations.createdByUserId, session.userId) : undefined,
+        ))
         .limit(1);
       if (!owned) throw new ApiError(404, "MESSAGE_NOT_FOUND", "الرسالة غير موجودة.");
       if (body.action === "edit" && owned.role !== "user") {

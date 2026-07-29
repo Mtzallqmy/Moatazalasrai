@@ -18,4 +18,15 @@ describe("RBAC policy", () => {
     expect(can("developer", "members:read")).toBe(false);
     expect(can("viewer", "audit:read")).toBe(false);
   });
+
+  it("limits ordinary members to platform use without administration", () => {
+    expect(can("member", "agents:read")).toBe(true);
+    expect(can("member", "agents:run")).toBe(true);
+    expect(can("member", "files:upload")).toBe(true);
+    expect(can("member", "providers:read")).toBe(false);
+    expect(can("member", "agents:manage")).toBe(false);
+    expect(can("member", "members:read")).toBe(false);
+    expect(can("member", "organization:manage")).toBe(false);
+    expect(can("member", "integrations:read")).toBe(false);
+  });
 });

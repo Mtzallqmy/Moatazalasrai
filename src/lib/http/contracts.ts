@@ -3,7 +3,7 @@ import { z } from "zod";
 export const uuidSchema = z.uuid();
 export const providerKindSchema = z.enum(["openai", "anthropic", "gemini", "openai_compatible"]);
 export const agentStatusSchema = z.enum(["draft", "published", "archived"]);
-export const roleSchema = z.enum(["owner", "admin", "developer", "operator", "viewer"]);
+export const roleSchema = z.enum(["owner", "admin", "developer", "operator", "viewer", "member"]);
 
 export const paginationSchema = z.object({
   page: z.coerce.number().int().min(1).max(10_000).default(1),
@@ -14,7 +14,7 @@ export const registerSchema = z.object({
   name: z.string().trim().min(2).max(100),
   email: z.string().trim().max(320).pipe(z.email()).transform((value) => value.toLowerCase()),
   password: z.string().min(12).max(128),
-  organizationName: z.string().trim().min(2).max(120),
+  organizationName: z.string().trim().min(2).max(120).optional(),
 }).strict();
 
 export const loginSchema = z.object({

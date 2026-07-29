@@ -12,17 +12,17 @@ type SessionSummary = {
 };
 
 const navigation = [
-  { label: "نظرة عامة", href: "/dashboard" },
-  { label: "المزودون والنماذج", href: "/dashboard/providers" },
-  { label: "الوكلاء", href: "/dashboard/agents" },
-  { label: "الدردشة", href: "/dashboard/chat", roles: ["owner", "admin", "developer", "operator"] },
-  { label: "الملفات", href: "/dashboard/files" },
-  { label: "التكاملات والأدوات", href: "/dashboard/integrations", roles: ["owner", "admin"] },
-  { label: "عمليات التشغيل", href: "/dashboard/runs" },
-  { label: "الأعضاء والصلاحيات", href: "/dashboard/members", roles: ["owner", "admin"] },
-  { label: "سجل التدقيق", href: "/dashboard/audit", roles: ["owner", "admin"] },
-  { label: "التشخيص", href: "/dashboard/diagnostics", roles: ["owner", "admin"] },
-  { label: "الإعدادات", href: "/dashboard/settings" },
+  { label: "نظرة عامة", href: "/dashboard", icon: "⌂" },
+  { label: "الدردشة", href: "/dashboard/chat", icon: "✦", roles: ["owner", "admin", "developer", "operator", "member"] },
+  { label: "الوكلاء", href: "/dashboard/agents", icon: "◈" },
+  { label: "الملفات", href: "/dashboard/files", icon: "▤", roles: ["owner", "admin", "developer", "operator", "member"] },
+  { label: "المزودون والنماذج", href: "/dashboard/providers", icon: "◉", roles: ["owner", "admin", "developer"] },
+  { label: "عمليات التشغيل", href: "/dashboard/runs", icon: "↗", roles: ["owner", "admin", "developer", "operator"] },
+  { label: "التكاملات والأدوات", href: "/dashboard/integrations", icon: "⌘", roles: ["owner", "admin"] },
+  { label: "الأعضاء والصلاحيات", href: "/dashboard/members", icon: "♙", roles: ["owner", "admin"] },
+  { label: "سجل التدقيق", href: "/dashboard/audit", icon: "✓", roles: ["owner", "admin"] },
+  { label: "التشخيص", href: "/dashboard/diagnostics", icon: "◌", roles: ["owner", "admin"] },
+  { label: "حسابي", href: "/dashboard/settings", icon: "⚙" },
 ] as const;
 
 function Navigation({ activePath, role }: { activePath: string; role: string | null }) {
@@ -31,9 +31,11 @@ function Navigation({ activePath, role }: { activePath: string; role: string | n
       {navigation.filter((item) => !("roles" in item) || (item.roles as readonly string[]).includes(role ?? "")).map((item) => {
         const active = activePath === item.href;
         return <Link key={item.href} href={item.href} aria-current={active ? "page" : undefined}
-          className="rounded-2xl border px-3 py-2.5 font-medium transition"
+          className="nav-link group"
           style={active ? { color: "var(--primary)", background: "var(--selected)", borderColor: "color-mix(in srgb, var(--primary) 20%, var(--border))" }
-            : { color: "var(--text-secondary)", borderColor: "transparent" }}>{item.label}</Link>;
+            : { color: "var(--text-secondary)", borderColor: "transparent" }}>
+          <span className="nav-icon" aria-hidden="true">{item.icon}</span><span>{item.label}</span>
+        </Link>;
       })}
     </nav>
   );
@@ -50,12 +52,12 @@ export function DashboardShell({ session, activePath, title, description, childr
     <main className="app-shell">
       <div className="mx-auto grid min-h-screen max-w-[1500px] gap-5 px-4 py-5 lg:grid-cols-[260px_1fr] lg:px-6">
         <details className="glass-panel rounded-3xl p-4 lg:hidden">
-          <summary className="cursor-pointer font-bold">القائمة — {title}</summary>
+          <summary className="flex cursor-pointer list-none items-center justify-between font-bold"><span>القائمة — {title}</span><span className="nav-icon">☰</span></summary>
           <div className="mt-4"><Navigation activePath={activePath} role={session.role} /></div>
         </details>
         <aside className="glass-panel hidden rounded-3xl p-4 lg:sticky lg:top-5 lg:block lg:h-[calc(100vh-2.5rem)]">
           <div className="border-b px-2 pb-5" style={{ borderColor: "var(--border)" }}>
-            <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-2xl font-latin text-sm font-black text-white" style={{ background: "linear-gradient(135deg,var(--primary),var(--accent))" }}>MA</div>
+            <div className="brand-mark mb-3">MA</div>
             <p className="font-latin text-sm font-bold tracking-wide" style={{ color: "var(--text-primary)" }} dir="ltr">{platformIdentity.productName}</p>
             <p className="mt-2 text-xs leading-5" style={{ color: "var(--text-secondary)" }}>{session.organizationName ?? "المؤسسة"}</p>
           </div>
@@ -68,7 +70,7 @@ export function DashboardShell({ session, activePath, title, description, childr
           </div>
         </aside>
         <section className="min-w-0">
-          <header className="glass-panel rounded-3xl p-5 sm:p-7">
+          <header className="glass-panel page-hero rounded-3xl p-5 sm:p-7">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <p className="mb-2 text-xs" style={{ color: "var(--text-secondary)" }}><Link href="/dashboard">لوحة التحكم</Link> / {title}</p>

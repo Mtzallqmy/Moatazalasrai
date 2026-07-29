@@ -12,7 +12,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
-export const memberRole = pgEnum("member_role", ["owner", "admin", "developer", "operator", "viewer"]);
+export const memberRole = pgEnum("member_role", ["owner", "admin", "developer", "operator", "viewer", "member"]);
 export const agentStatus = pgEnum("agent_status", ["draft", "published", "archived"]);
 export const runStatus = pgEnum("run_status", ["queued", "running", "completed", "failed", "cancelled"]);
 export const providerKind = pgEnum("provider_kind", ["openai", "anthropic", "gemini", "openai_compatible"]);
@@ -36,6 +36,7 @@ export const organizations = pgTable("organizations", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   defaultProviderCredentialId: uuid("default_provider_credential_id"),
   defaultModel: text("default_model"),
+  publicRegistrationEnabled: boolean("public_registration_enabled").notNull().default(false),
 });
 
 export const users = pgTable("users", {
@@ -69,7 +70,7 @@ export const organizationMembers = pgTable("organization_members", {
   id: uuid("id").defaultRandom().primaryKey(),
   organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  role: memberRole("role").notNull().default("viewer"),
+  role: memberRole("role").notNull().default("member"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
@@ -162,6 +163,7 @@ export const conversations = pgTable("conversations", {
   archivedAt: timestamp("archived_at", { withTimezone: true }),
   folderId: uuid("folder_id"),
   pinnedAt: timestamp("pinned_at", { withTimezone: true }),
+  createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),

@@ -4,7 +4,7 @@ export interface ToolExecutionContext extends RuntimeContext { approvedByUser: b
 export interface RegisteredTool<TInput = unknown, TOutput = unknown> {
   id: string; name: string; description: string; inputSchema: z.ZodType<TInput>;
   risk: ToolRisk; approvalMode: ApprovalMode; timeoutMs: number;
-  requiredRoles: Array<"owner" | "admin" | "developer" | "operator" | "viewer">;
+  requiredRoles: Array<"owner" | "admin" | "developer" | "operator" | "viewer" | "member">;
   execute(input: TInput, context: ToolExecutionContext): Promise<TOutput>;
 }
 export class ToolRegistry {

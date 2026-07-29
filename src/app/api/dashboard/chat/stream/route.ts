@@ -40,6 +40,7 @@ export async function POST(request: Request) {
       .where(and(
         eq(conversations.id, body.conversationId),
         eq(conversations.organizationId, session.organizationId),
+        session.role === "member" ? eq(conversations.createdByUserId, session.userId) : undefined,
         isNull(conversations.archivedAt),
         isNull(conversations.deletedAt),
         eq(agents.status, "published"),
