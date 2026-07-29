@@ -18,7 +18,7 @@ dependencies:
   go_router: ^16.0.0
   uuid: ^4.5.1
   file_picker: ^8.1.7
-  font_awesome_flutter: ^10.8.0
+  font_awesome_flutter: ^11.0.0
   http_parser: ^4.1.2
 
 dev_dependencies:
