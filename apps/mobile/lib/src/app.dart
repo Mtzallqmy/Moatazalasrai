@@ -22,8 +22,8 @@ class MoatazAiApp extends ConsumerWidget {
         return null;
       },
       routes: [
-        GoRoute(path: '/login', builder: (_, __) => const LoginScreen()),
-        GoRoute(path: '/dashboard', builder: (_, __) => const DashboardScreen()),
+        GoRoute(path: '/login', builder: (_, _) => const LoginScreen()),
+        GoRoute(path: '/dashboard', builder: (_, _) => const DashboardScreen()),
       ],
     );
     return MaterialApp.router(
