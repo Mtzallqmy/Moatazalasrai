@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:moataz_ai_mobile/src/core/brand_config.dart';
 import 'package:moataz_ai_mobile/src/features/auth/auth_repository.dart';
 import 'package:moataz_ai_mobile/src/widgets/brand_mark.dart';
@@ -190,7 +191,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     children: socialLinks.map((item) => IconButton(
                       tooltip: item.url.isEmpty ? '${item.label} — الرابط غير مضاف بعد' : item.label,
                       onPressed: item.url.isEmpty ? null : () {},
-                      icon: Icon(item.icon, size: 20),
+                      icon: FaIcon(item.icon, size: 20),
                     )).toList(),
                   ),
                   const SizedBox(height: 8),
