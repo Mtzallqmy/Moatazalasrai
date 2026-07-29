@@ -25,6 +25,16 @@ on:
       - "src/app/api/v1/**"
       - "src/lib/auth/mobile.ts"
       - "src/lib/agents/templates.ts"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/android-release.yml"
+      - "apps/mobile/**"
+      - "src/app/api/mobile/**"
+      - "src/app/api/v1/**"
+      - "src/lib/auth/mobile.ts"
+      - "src/lib/agents/templates.ts"
 
 permissions:
   contents: write
@@ -137,6 +147,7 @@ jobs:
           retention-days: 30
 
       - name: Create GitHub Release
+        if: ${{ github.event_name != 'pull_request' }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.release.outputs.tag }}
