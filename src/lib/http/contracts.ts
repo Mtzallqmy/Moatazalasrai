@@ -74,12 +74,19 @@ export const conversationActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("rename"), conversationId: uuidSchema, title: z.string().trim().min(1).max(120) }).strict(),
   z.object({ action: z.literal("archive"), conversationId: uuidSchema, archived: z.boolean() }).strict(),
   z.object({ action: z.literal("delete"), conversationId: uuidSchema }).strict(),
+  z.object({ action: z.literal("restore"), conversationId: uuidSchema }).strict(),
+  z.object({ action: z.literal("pin"), conversationId: uuidSchema, pinned: z.boolean() }).strict(),
+  z.object({ action: z.literal("move"), conversationId: uuidSchema, folderId: uuidSchema.nullable() }).strict(),
 ]);
 
 export const chatStreamSchema = z.object({
   conversationId: uuidSchema,
   message: z.string().trim().min(1).max(30_000),
   attachmentIds: z.array(uuidSchema).max(8).default([]),
+  clientRequestId: uuidSchema.optional(),
+  providerCredentialId: uuidSchema.optional(),
+  model: z.string().trim().min(1).max(200).optional(),
+  inputKind: z.enum(["text", "image", "file", "coding", "summary", "analysis", "audio", "video"]).default("text"),
 }).strict();
 
 export const runCancelSchema = z.object({ runId: uuidSchema }).strict();

@@ -4,8 +4,9 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 
 type Agent = { id: string; name: string };
 type Conversation = { id: string; title: string | null; agentId: string; agentName: string; updatedAt: string };
-type Message = { id: string; role: "user" | "assistant"; content: string; createdAt: string; metadata?: Record<string, unknown> };
-type Attachment = { id: string; filename: string; mimeType: string; sizeBytes: number };
+type Message = { id: string; role: "user" | "assistant"; content: string; createdAt: string; model?: string | null; editedAt?: string | null; metadata?: Record<string, unknown> };
+type Attachment = { id: string; filename: string; mimeType: string; sizeBytes: number; processingStatus?: string };
+type ModelOption = { providerCredentialId: string; providerName: string; model: string; freeTierEligible: boolean };
 type Api<T> = { success?: boolean; data?: T; error?: { code?: string; message?: string; requestId?: string } };
 
 export function ChatConsole({ agents, initialConversations, initialConversationId }: { agents: Agent[]; initialConversations: Conversation[]; initialConversationId?: string }) {
@@ -26,8 +27,17 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
   const [uploading, setUploading] = useState(false);
   const [search, setSearch] = useState("");
   const [draft, setDraft] = useState("");
+  const [models, setModels] = useState<ModelOption[]>([]);
+  const [selectedModel, setSelectedModel] = useState("auto");
   const streamController = useRef<AbortController | null>(null);
   const scrollAnchor = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    fetch("/api/dashboard/models").then(async (response) => {
+      const result = await response.json().catch(() => null) as Api<ModelOption[]> | null;
+      if (response.ok && result?.success) setModels(result.data ?? []);
+    }).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     if (!conversationId) return;
@@ -232,7 +242,17 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
       const response = await fetch("/api/dashboard/chat/stream", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ conversationId, message: text.trim(), attachmentIds: attachments.map((file) => file.id) }),
+        body: JSON.stringify({
+          conversationId,
+          message: text.trim(),
+          attachmentIds: attachments.map((file) => file.id),
+          clientRequestId: crypto.randomUUID(),
+          inputKind: attachments.length ? "file" : "text",
+          ...(selectedModel === "auto" ? {} : {
+            providerCredentialId: selectedModel.split(":", 1)[0],
+            model: selectedModel.slice(selectedModel.indexOf(":") + 1),
+          }),
+        }),
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -274,6 +294,27 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ runId }),
       }).catch(() => undefined);
+    }
+  }
+
+  async function mutateMessage(message: Message, action: "edit" | "delete") {
+    if (action === "delete" && !window.confirm("حذف هذه الرسالة؟")) return;
+    const content = action === "edit" ? window.prompt("عدّل الرسالة ثم أعد توليد الرد", message.content)?.trim() : undefined;
+    if (action === "edit" && !content) return;
+    const response = await fetch("/api/dashboard/messages", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action, messageId: message.id, ...(content ? { content } : {}) }),
+    });
+    const result = await response.json().catch(() => null) as Api<Message> | null;
+    if (!response.ok || !result?.success) {
+      setError(result?.error?.message ?? "تعذر تحديث الرسالة.");
+      return;
+    }
+    if (action === "delete") setMessages((items) => items.filter((item) => item.id !== message.id));
+    else {
+      setMessages((items) => items.map((item) => item.id === message.id ? { ...item, content: content ?? item.content, editedAt: new Date().toISOString() } : item));
+      await sendText(content!);
     }
   }
 
@@ -325,6 +366,9 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
               <div className="mt-2 flex items-center gap-3 text-[11px]" style={{ color: "var(--text-secondary)" }}>
                 <time>{new Date(message.createdAt).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" })}</time>
                 {message.content ? <button type="button" onClick={() => navigator.clipboard.writeText(message.content)}>نسخ</button> : null}
+                {message.role === "user" && !message.id.startsWith("local-") ? <button type="button" onClick={() => mutateMessage(message, "edit")}>تعديل وإعادة توليد</button> : null}
+                {!message.id.startsWith("stream-") && !message.id.startsWith("local-") ? <button type="button" onClick={() => mutateMessage(message, "delete")}>حذف</button> : null}
+                {message.model ? <span>{message.model}</span> : null}
               </div>
             </article>
           ))}
@@ -360,6 +404,12 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
           ) : null}
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-3">
+              <select className="form-control max-w-72 text-sm" value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} aria-label="النموذج">
+                <option value="auto">اختيار تلقائي حسب القدرات</option>
+                {models.map((item) => <option key={`${item.providerCredentialId}:${item.model}`} value={`${item.providerCredentialId}:${item.model}`}>
+                  {item.providerName} — {item.model}{item.freeTierEligible ? " (مجاني)" : ""}
+                </option>)}
+              </select>
               <label className="secondary-button cursor-pointer text-sm">
                 {uploading ? "جارٍ الرفع…" : "إرفاق ملفات"}
                 <input
@@ -367,7 +417,7 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
                   multiple
                   className="sr-only"
                   disabled={!conversationId || loading || uploading || attachments.length >= 8}
-                  accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.txt,.md,.csv,.json"
+                  accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.docx,.txt,.md,.csv,.json,.xlsx,.pptx,.mp3,.wav,.ogg,.m4a,.mp4,.webm,.mov,.zip,.rar,.7z"
                   onChange={(event) => {
                     uploadFiles(event.target.files);
                     event.target.value = "";

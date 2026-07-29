@@ -21,6 +21,7 @@ export const messageRole = pgEnum("message_role", ["user", "assistant"]);
 export const integrationKind = pgEnum("integration_kind", ["telegram", "github"]);
 export const integrationStatus = pgEnum("integration_status", ["pending", "verified", "failed"]);
 export const attachmentSource = pgEnum("attachment_source", ["web", "api", "telegram"]);
+export const fileProcessingStatus = pgEnum("file_processing_status", ["pending", "processing", "ready", "failed", "quarantined"]);
 const bytea = customType<{ data: Buffer }>({ dataType: () => "bytea" });
 
 export const organizations = pgTable("organizations", {
@@ -29,6 +30,8 @@ export const organizations = pgTable("organizations", {
   slug: text("slug").notNull().unique(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  defaultProviderCredentialId: uuid("default_provider_credential_id"),
+  defaultModel: text("default_model"),
 });
 
 export const users = pgTable("users", {
@@ -114,10 +117,23 @@ export const agents = pgTable("agents", {
   currentVersion: integer("current_version").notNull().default(1),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  defaultProviderCredentialId: uuid("default_provider_credential_id"),
+  defaultModel: text("default_model"),
 }, (table) => [
   index("agents_org_status_idx").on(table.organizationId, table.status),
   index("agents_org_updated_idx").on(table.organizationId, table.updatedAt),
 ]);
+
+export const conversationFolders = pgTable("conversation_folders", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [index("conversation_folders_org_updated_idx").on(table.organizationId, table.updatedAt)]);
 
 export const agentVersions = pgTable("agent_versions", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -140,6 +156,9 @@ export const conversations = pgTable("conversations", {
   agentId: uuid("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
   title: text("title"),
   archivedAt: timestamp("archived_at", { withTimezone: true }),
+  folderId: uuid("folder_id"),
+  pinnedAt: timestamp("pinned_at", { withTimezone: true }),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
@@ -154,6 +173,12 @@ export const messages = pgTable("messages", {
   role: messageRole("role").notNull(),
   content: text("content").notNull(),
   metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  parentMessageId: uuid("parent_message_id"),
+  clientRequestId: text("client_request_id"),
+  providerCredentialId: uuid("provider_credential_id"),
+  model: text("model"),
+  editedAt: timestamp("edited_at", { withTimezone: true }),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [index("messages_conversation_created_idx").on(table.conversationId, table.createdAt)]);
 
@@ -288,12 +313,48 @@ export const attachments = pgTable("attachments", {
   sha256: text("sha256").notNull(),
   content: bytea("content").notNull(),
   telegramFileId: text("telegram_file_id"),
+  detectedType: text("detected_type"),
+  processingStatus: fileProcessingStatus("processing_status").notNull().default("pending"),
+  extractedText: text("extracted_text"),
+  processingErrorCode: text("processing_error_code"),
+  archiveEntryCount: integer("archive_entry_count"),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
   index("attachments_org_created_idx").on(table.organizationId, table.createdAt),
   index("attachments_conversation_idx").on(table.conversationId, table.createdAt),
   index("attachments_message_idx").on(table.messageId),
   index("attachments_sha256_idx").on(table.organizationId, table.sha256),
+]);
+
+export const modelCatalog = pgTable("model_catalog", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  providerCredentialId: uuid("provider_credential_id").notNull().references(() => providerCredentials.id, { onDelete: "cascade" }),
+  model: text("model").notNull(),
+  capabilities: jsonb("capabilities").$type<{
+    text?: boolean;
+    vision?: boolean;
+    files?: boolean;
+    tools?: boolean;
+    structuredOutput?: boolean;
+    streaming?: boolean;
+    audio?: boolean;
+    coding?: boolean;
+  }>().notNull().default({}),
+  contextWindow: integer("context_window"),
+  maxOutputTokens: integer("max_output_tokens"),
+  freeTierEligible: boolean("free_tier_eligible").notNull().default(false),
+  available: boolean("available").notNull().default(true),
+  latencyMs: integer("latency_ms"),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("model_catalog_provider_model_unique_idx").on(table.providerCredentialId, table.model),
+  index("model_catalog_org_available_idx").on(table.organizationId, table.available, table.freeTierEligible),
 ]);
 
 export type Agent = typeof agents.$inferSelect;

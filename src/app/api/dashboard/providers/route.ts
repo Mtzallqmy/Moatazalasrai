@@ -1,6 +1,6 @@
 import { and, count, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { agentVersions, agents, auditLogs, providerCredentials } from "@/db/schema";
+import { agentVersions, agents, auditLogs, modelCatalog, providerCredentials } from "@/db/schema";
 import { requireSession } from "@/lib/auth/authorization";
 import { decryptSecret, encryptSecret, maskSecret } from "@/lib/security/encryption";
 import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
@@ -105,6 +105,15 @@ export async function POST(request: Request) {
         lastValidationLatencyMs: validation.latencyMs,
       }).returning(publicSelection);
       if (!credential) throw new Error("PROVIDER_CREATE_FAILED");
+      if (validation.models.length > 0) {
+        await tx.insert(modelCatalog).values(validation.models.map((model) => ({
+          organizationId: session.organizationId,
+          providerCredentialId: credential.id,
+          model,
+          capabilities: { text: true, streaming: true },
+          latencyMs: validation.latencyMs,
+        }))).onConflictDoNothing();
+      }
       await tx.insert(auditLogs).values({
         organizationId: session.organizationId,
         actorType: "user",
@@ -201,6 +210,17 @@ export async function PATCH(request: Request) {
     )).returning(publicSelection);
 
     if (!updated) throw new ApiError(404, "PROVIDER_NOT_FOUND", "اتصال المزود غير موجود.");
+    if (validation?.models.length) {
+      await db().insert(modelCatalog).values(validation.models.map((model) => ({
+        organizationId: session.organizationId,
+        providerCredentialId: updated.id,
+        model,
+        capabilities: { text: true, streaming: true },
+        latencyMs: validation.latencyMs,
+        available: true,
+        lastSeenAt: new Date(),
+      }))).onConflictDoNothing();
+    }
     await db().insert(auditLogs).values({
       organizationId: session.organizationId,
       actorType: "user",

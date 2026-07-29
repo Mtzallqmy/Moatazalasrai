@@ -26,12 +26,14 @@ export async function GET(request: Request) {
           content: messages.content,
           metadata: messages.metadata,
           createdAt: messages.createdAt,
+          model: messages.model,
+          editedAt: messages.editedAt,
         }).from(messages)
-          .where(eq(messages.conversationId, id))
+          .where(and(eq(messages.conversationId, id), isNull(messages.deletedAt)))
           .orderBy(desc(messages.createdAt))
           .limit(query.limit)
           .offset((query.page - 1) * query.limit),
-        db().select({ value: count() }).from(messages).where(eq(messages.conversationId, id)),
+        db().select({ value: count() }).from(messages).where(and(eq(messages.conversationId, id), isNull(messages.deletedAt))),
       ]);
       const total = totals[0]?.value ?? 0;
       return apiSuccess(rows.reverse(), requestId, 200, {
@@ -43,6 +45,7 @@ export async function GET(request: Request) {
     const where = and(
       eq(conversations.organizationId, session.organizationId),
       archived ? isNotNull(conversations.archivedAt) : isNull(conversations.archivedAt),
+      isNull(conversations.deletedAt),
     );
     const [rows, totals] = await Promise.all([
       db().select({
@@ -98,9 +101,28 @@ export async function POST(request: Request) {
       eq(conversations.organizationId, session.organizationId),
     );
     if (body.action === "delete") {
-      const [deleted] = await db().delete(conversations).where(ownedWhere).returning({ id: conversations.id });
+      const [deleted] = await db().update(conversations).set({ deletedAt: new Date(), updatedAt: new Date() })
+        .where(ownedWhere).returning({ id: conversations.id });
       if (!deleted) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة.");
       return apiSuccess({ deleted: true, id: deleted.id }, requestId);
+    }
+    if (body.action === "restore") {
+      const [restored] = await db().update(conversations).set({ deletedAt: null, archivedAt: null, updatedAt: new Date() })
+        .where(ownedWhere).returning();
+      if (!restored) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة.");
+      return apiSuccess(restored, requestId);
+    }
+    if (body.action === "pin") {
+      const [pinned] = await db().update(conversations).set({ pinnedAt: body.pinned ? new Date() : null, updatedAt: new Date() })
+        .where(ownedWhere).returning();
+      if (!pinned) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة.");
+      return apiSuccess(pinned, requestId);
+    }
+    if (body.action === "move") {
+      const [moved] = await db().update(conversations).set({ folderId: body.folderId, updatedAt: new Date() })
+        .where(ownedWhere).returning();
+      if (!moved) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة.");
+      return apiSuccess(moved, requestId);
     }
     const [updated] = await db().update(conversations).set(
       body.action === "rename"

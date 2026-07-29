@@ -5,10 +5,13 @@ import {
   agents,
   conversations,
   messages,
+  modelCatalog,
+  organizations,
   providerCredentials,
   runEvents,
   runs,
 } from "@/db/schema";
+import { selectBestModel, type InputKind } from "@/server/models/router";
 import { decryptSecret } from "@/lib/security/encryption";
 import { ApiError } from "@/lib/http/api";
 import { generateWithProvider, streamWithProvider } from "@/lib/providers/registry";
@@ -32,7 +35,7 @@ async function contextMessages(conversationId: string, instructions: string, max
     role: messages.role,
     content: messages.content,
   }).from(messages)
-    .where(eq(messages.conversationId, conversationId))
+    .where(and(eq(messages.conversationId, conversationId), isNull(messages.deletedAt)))
     .orderBy(desc(messages.createdAt))
     .limit(MAX_CONTEXT_MESSAGES);
 
@@ -61,6 +64,9 @@ export async function prepareAgentRun(input: {
   conversationId: string;
   message: string;
   requestId: string;
+  providerCredentialId?: string;
+  model?: string;
+  inputKind?: InputKind;
 }) {
   const [agent] = await db().select().from(agents).where(and(
     eq(agents.id, input.agentId),
@@ -75,15 +81,48 @@ export async function prepareAgentRun(input: {
     .limit(1);
   if (!version) throw new ApiError(409, "AGENT_VERSION_MISSING", "الإصدار المنشور للوكيل غير متاح.");
 
+  let selectedProviderId = input.providerCredentialId ?? version.providerCredentialId;
+  let selectedModel = input.model ?? version.model;
+  if (!input.providerCredentialId && !input.model && input.inputKind) {
+    const [organization, catalog] = await Promise.all([
+      db().select({
+        defaultProviderCredentialId: organizations.defaultProviderCredentialId,
+        defaultModel: organizations.defaultModel,
+      }).from(organizations).where(eq(organizations.id, input.organizationId)).limit(1),
+      db().select().from(modelCatalog).where(and(
+        eq(modelCatalog.organizationId, input.organizationId),
+        eq(modelCatalog.available, true),
+      )),
+    ]);
+    const routed = selectBestModel(catalog.map((entry) => ({
+      providerCredentialId: entry.providerCredentialId,
+      model: entry.model,
+      available: entry.available,
+      freeTierEligible: entry.freeTierEligible,
+      latencyMs: entry.latencyMs,
+      capabilities: entry.capabilities,
+      isAgentDefault: entry.providerCredentialId === (agent.defaultProviderCredentialId ?? version.providerCredentialId)
+        && entry.model === (agent.defaultModel ?? version.model),
+      isOrganizationDefault: entry.providerCredentialId === organization[0]?.defaultProviderCredentialId
+        && entry.model === organization[0]?.defaultModel,
+    })), input.inputKind);
+    if (routed) {
+      selectedProviderId = routed.providerCredentialId;
+      selectedModel = routed.model;
+    }
+  }
   const [credential] = await db().select().from(providerCredentials)
     .where(and(
-      eq(providerCredentials.id, version.providerCredentialId),
+      eq(providerCredentials.id, selectedProviderId),
       eq(providerCredentials.organizationId, input.organizationId),
       eq(providerCredentials.enabled, true),
       eq(providerCredentials.validationStatus, "verified"),
     ))
     .limit(1);
   if (!credential) throw new ApiError(422, "PROVIDER_UNAVAILABLE", "المزود معطل أو لم يجتز آخر فحص.");
+  if (!credential.discoveredModels.includes(selectedModel)) {
+    throw new ApiError(422, "MODEL_UNAVAILABLE", "النموذج غير موجود في قائمة النماذج المكتشفة للمزود.");
+  }
   if (credential.circuitOpenUntil && credential.circuitOpenUntil > new Date()) {
     throw new ApiError(503, "PROVIDER_COOLDOWN", "المزود في فترة تهدئة مؤقتة بعد إخفاقات متكررة.");
   }
@@ -95,6 +134,7 @@ export async function prepareAgentRun(input: {
       eq(conversations.organizationId, input.organizationId),
       eq(conversations.agentId, agent.id),
       isNull(conversations.archivedAt),
+      isNull(conversations.deletedAt),
     ))
     .limit(1);
   if (!conversation) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة أو مؤرشفة.");
@@ -110,7 +150,7 @@ export async function prepareAgentRun(input: {
       requestId: input.requestId,
       input: input.message,
       provider: credential.provider,
-      model: version.model,
+      model: selectedModel,
     }).returning();
     if (!created) throw new Error("RUN_CREATE_FAILED");
     await tx.insert(runEvents).values({
@@ -125,7 +165,7 @@ export async function prepareAgentRun(input: {
   return {
     run,
     credential,
-    version,
+    version: { ...version, model: selectedModel },
     context: context.messages,
     estimatedInputTokens: context.estimatedInputTokens,
   };
@@ -156,6 +196,8 @@ async function completeRun(input: {
       conversationId: input.conversationId,
       role: "assistant",
       content: input.text,
+      providerCredentialId: input.providerCredentialId,
+      model: input.model,
       metadata: { runId: input.runId, model: input.model },
     }).returning();
     const [completed] = await tx.update(runs).set({
@@ -279,6 +321,9 @@ export async function* streamAgentRun(input: {
   conversationId: string;
   requestId: string;
   requestSignal?: AbortSignal;
+  providerCredentialId?: string;
+  model?: string;
+  inputKind?: InputKind;
 }) {
   const prepared = await prepareAgentRun(input);
   await beginProviderRequest(prepared.run.id);

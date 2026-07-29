@@ -1,5 +1,11 @@
 # Third-Party Notices
 
+## fflate
+
+Copyright (c) 2023 Arjun Barrett.
+
+Licensed under the MIT License. Used for bounded in-process ZIP and Open XML package extraction after archive preflight validation.
+
 لا يحتوي هذا التحديث على كود منسوخ من منتجات أو مستودعات خارجية، ولم تُضف حزمة runtime جديدة.
 
 الحزم القائمة واستخداماتها وتراخيصها متاحة في سجلات npm الخاصة بها، وأبرزها Next.js وReact وDrizzle ORM وZod وpostgres.js. راجع `package-lock.json` للإصدارات الدقيقة.
