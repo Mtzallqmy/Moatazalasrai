@@ -1,10 +1,9 @@
-import 'package:flutter/widgets.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 class SocialLink {
   const SocialLink(this.label, this.icon, this.url);
   final String label;
-  final IconData icon;
+  final FaIconData icon;
   final String url;
 }
 
