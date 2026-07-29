@@ -1,0 +1,204 @@
+import { randomBytes } from "node:crypto";
+import { and, desc, eq } from "drizzle-orm";
+import { db } from "@/db";
+import { agents, auditLogs, integrations } from "@/db/schema";
+import { requireSession } from "@/lib/auth/authorization";
+import { env } from "@/lib/config/env";
+import {
+  integrationCreateSchema,
+  integrationDeleteSchema,
+  integrationUpdateSchema,
+} from "@/lib/http/contracts";
+import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
+import { verifyGitHubToken } from "@/lib/integrations/github";
+import { configureTelegramWebhook, verifyTelegramToken } from "@/lib/integrations/telegram";
+import { decryptSecret, encryptSecret, hashApiKey, maskSecret } from "@/lib/security/encryption";
+
+export const runtime = "nodejs";
+
+const publicFields = {
+  id: integrations.id,
+  kind: integrations.kind,
+  name: integrations.name,
+  tokenHint: integrations.tokenHint,
+  config: integrations.config,
+  status: integrations.status,
+  enabled: integrations.enabled,
+  lastVerifiedAt: integrations.lastVerifiedAt,
+  lastErrorCode: integrations.lastErrorCode,
+  createdAt: integrations.createdAt,
+  updatedAt: integrations.updatedAt,
+};
+
+function publicConfig(kind: "telegram" | "github", config: Record<string, unknown>) {
+  if (kind === "telegram") {
+    return {
+      botUsername: config.botUsername,
+      botName: config.botName,
+      agentId: config.agentId,
+      webhookActive: config.webhookActive === true,
+    };
+  }
+  return { login: config.login, accountName: config.accountName };
+}
+
+async function validateAgent(organizationId: string, agentId?: string | null) {
+  if (!agentId) return;
+  const [agent] = await db().select({ id: agents.id }).from(agents).where(and(
+    eq(agents.id, agentId),
+    eq(agents.organizationId, organizationId),
+    eq(agents.status, "published"),
+  )).limit(1);
+  if (!agent) throw new ApiError(422, "AGENT_UNAVAILABLE", "اختر وكيلًا منشورًا لتكامل Telegram.");
+}
+
+async function verifyIntegration(kind: "telegram" | "github", token: string) {
+  if (kind === "telegram") {
+    const bot = await verifyTelegramToken(token);
+    return { botUsername: bot.username, botName: bot.first_name };
+  }
+  const identity = await verifyGitHubToken(token);
+  return { login: identity.login, accountName: identity.name };
+}
+
+export async function GET(request: Request) {
+  const requestId = getRequestId(request);
+  try {
+    const session = await requireSession("integrations:read");
+    const rows = await db().select(publicFields).from(integrations)
+      .where(eq(integrations.organizationId, session.organizationId))
+      .orderBy(desc(integrations.updatedAt));
+    return apiSuccess(rows.map((row) => ({ ...row, config: publicConfig(row.kind, row.config) })), requestId);
+  } catch (error) {
+    return handleApiError(error, requestId, "/api/dashboard/integrations");
+  }
+}
+
+export async function POST(request: Request) {
+  const requestId = getRequestId(request);
+  try {
+    assertSameOrigin(request);
+    const session = await requireSession("integrations:manage");
+    const body = await parseJson(request, integrationCreateSchema, 12 * 1024);
+    await validateAgent(session.organizationId, body.agentId);
+    const verifiedConfig = await verifyIntegration(body.kind, body.token);
+    const webhookSecret = body.kind === "telegram" ? randomBytes(32).toString("base64url") : null;
+    const [created] = await db().insert(integrations).values({
+      organizationId: session.organizationId,
+      kind: body.kind,
+      name: body.name,
+      encryptedToken: encryptSecret(body.token),
+      tokenHint: maskSecret(body.token),
+      config: {
+        ...verifiedConfig,
+        ...(body.agentId ? { agentId: body.agentId } : {}),
+        ...(webhookSecret ? { webhookSecretHash: hashApiKey(webhookSecret), webhookActive: false } : {}),
+      },
+      status: "verified",
+      lastVerifiedAt: new Date(),
+    }).returning(publicFields);
+    if (!created) throw new Error("INTEGRATION_CREATE_FAILED");
+
+    let result = created;
+    if (body.kind === "telegram" && webhookSecret) {
+      const appUrl = env().appUrl;
+      if (!appUrl) throw new ApiError(409, "APP_URL_REQUIRED", "اضبط APP_URL قبل تفعيل Telegram.");
+      await configureTelegramWebhook({
+        token: body.token,
+        url: `${appUrl}/api/webhooks/telegram/${created.id}`,
+        secretToken: webhookSecret,
+      });
+      [result] = await db().update(integrations).set({
+        config: { ...created.config, webhookActive: true },
+        updatedAt: new Date(),
+      }).where(eq(integrations.id, created.id)).returning(publicFields);
+    }
+    await db().insert(auditLogs).values({
+      organizationId: session.organizationId,
+      actorType: "user",
+      actorId: session.userId,
+      action: "integration.created",
+      resourceType: "integration",
+      resourceId: created.id,
+      metadata: { kind: created.kind, requestId },
+    });
+    return apiSuccess({ ...result, config: publicConfig(result.kind, result.config) }, requestId, 201);
+  } catch (error) {
+    return handleApiError(error, requestId, "/api/dashboard/integrations");
+  }
+}
+
+export async function PATCH(request: Request) {
+  const requestId = getRequestId(request);
+  try {
+    assertSameOrigin(request);
+    const session = await requireSession("integrations:manage");
+    const body = await parseJson(request, integrationUpdateSchema, 12 * 1024);
+    const [current] = await db().select().from(integrations).where(and(
+      eq(integrations.id, body.id),
+      eq(integrations.organizationId, session.organizationId),
+    )).limit(1);
+    if (!current) throw new ApiError(404, "INTEGRATION_NOT_FOUND", "التكامل غير موجود.");
+    await validateAgent(session.organizationId, body.agentId);
+    const token = body.token ?? decryptSecret(current.encryptedToken);
+    const verifiedConfig = body.token ? await verifyIntegration(current.kind, token) : {};
+    let config: Record<string, unknown> = {
+      ...current.config,
+      ...verifiedConfig,
+      ...(body.agentId === undefined ? {} : { agentId: body.agentId }),
+    };
+    if (current.kind === "telegram" && body.activateWebhook) {
+      const webhookSecret = randomBytes(32).toString("base64url");
+      const appUrl = env().appUrl;
+      if (!appUrl) throw new ApiError(409, "APP_URL_REQUIRED", "اضبط APP_URL قبل تفعيل Telegram.");
+      await configureTelegramWebhook({
+        token,
+        url: `${appUrl}/api/webhooks/telegram/${current.id}`,
+        secretToken: webhookSecret,
+      });
+      config = { ...config, webhookSecretHash: hashApiKey(webhookSecret), webhookActive: true };
+    }
+    const [updated] = await db().update(integrations).set({
+      ...(body.name === undefined ? {} : { name: body.name }),
+      ...(body.enabled === undefined ? {} : { enabled: body.enabled }),
+      ...(body.token === undefined ? {} : {
+        encryptedToken: encryptSecret(body.token),
+        tokenHint: maskSecret(body.token),
+      }),
+      config,
+      status: "verified",
+      lastVerifiedAt: body.token ? new Date() : current.lastVerifiedAt,
+      lastErrorCode: null,
+      updatedAt: new Date(),
+    }).where(eq(integrations.id, current.id)).returning(publicFields);
+    return apiSuccess({ ...updated, config: publicConfig(updated.kind, updated.config) }, requestId);
+  } catch (error) {
+    return handleApiError(error, requestId, "/api/dashboard/integrations");
+  }
+}
+
+export async function DELETE(request: Request) {
+  const requestId = getRequestId(request);
+  try {
+    assertSameOrigin(request);
+    const session = await requireSession("integrations:manage");
+    const body = await parseJson(request, integrationDeleteSchema, 4 * 1024);
+    const [deleted] = await db().delete(integrations).where(and(
+      eq(integrations.id, body.id),
+      eq(integrations.organizationId, session.organizationId),
+    )).returning({ id: integrations.id, kind: integrations.kind });
+    if (!deleted) throw new ApiError(404, "INTEGRATION_NOT_FOUND", "التكامل غير موجود.");
+    await db().insert(auditLogs).values({
+      organizationId: session.organizationId,
+      actorType: "user",
+      actorId: session.userId,
+      action: "integration.deleted",
+      resourceType: "integration",
+      resourceId: deleted.id,
+      metadata: { kind: deleted.kind, requestId },
+    });
+    return apiSuccess({ deleted: true, id: deleted.id }, requestId);
+  } catch (error) {
+    return handleApiError(error, requestId, "/api/dashboard/integrations");
+  }
+}
