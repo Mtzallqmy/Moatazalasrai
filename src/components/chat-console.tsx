@@ -5,6 +5,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 type Agent = { id: string; name: string };
 type Conversation = { id: string; title: string | null; agentId: string; agentName: string; updatedAt: string };
 type Message = { id: string; role: "user" | "assistant"; content: string; createdAt: string; metadata?: Record<string, unknown> };
+type Attachment = { id: string; filename: string; mimeType: string; sizeBytes: number };
 type Api<T> = { success?: boolean; data?: T; error?: { code?: string; message?: string; requestId?: string } };
 
 export function ChatConsole({ agents, initialConversations, initialConversationId }: { agents: Agent[]; initialConversations: Conversation[]; initialConversationId?: string }) {
@@ -21,6 +22,8 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
   const [error, setError] = useState<string | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const [retryText, setRetryText] = useState<string | null>(null);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [uploading, setUploading] = useState(false);
   const streamController = useRef<AbortController | null>(null);
   const scrollAnchor = useRef<HTMLDivElement | null>(null);
 
@@ -51,6 +54,7 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
     setMessages([]);
     setRetryText(null);
     setError(null);
+    setAttachments([]);
     setLoadingMessages(true);
     setConversationId(id);
   }
@@ -163,6 +167,33 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
     }
   }
 
+  async function uploadFiles(files: FileList | null) {
+    if (!files || !conversationId) return;
+    const selected = Array.from(files).slice(0, Math.max(0, 8 - attachments.length));
+    if (selected.length === 0) return;
+    setUploading(true);
+    setError(null);
+    try {
+      const uploaded: Attachment[] = [];
+      for (const file of selected) {
+        const form = new FormData();
+        form.set("conversationId", conversationId);
+        form.set("file", file);
+        const response = await fetch("/api/dashboard/files", { method: "POST", body: form });
+        const payload = await response.json().catch(() => null) as Api<Attachment> | null;
+        if (!response.ok || !payload?.success || !payload.data) {
+          throw new Error(payload?.error?.message ?? `تعذر رفع ${file.name}.`);
+        }
+        uploaded.push(payload.data);
+      }
+      setAttachments((current) => [...current, ...uploaded].slice(0, 8));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "تعذر رفع الملفات.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
   async function sendText(text: string) {
     if (!conversationId || loading || !text.trim()) return;
     const optimisticId = `local-${crypto.randomUUID()}`;
@@ -182,7 +213,7 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
       const response = await fetch("/api/dashboard/chat/stream", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ conversationId, message: text.trim() }),
+        body: JSON.stringify({ conversationId, message: text.trim(), attachmentIds: attachments.map((file) => file.id) }),
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -190,6 +221,7 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
         throw new Error(result?.error?.message ?? "تعذر تشغيل الوكيل.");
       }
       await readEventStream(response, optimisticId);
+      setAttachments([]);
     } catch (cause) {
       if (cause instanceof DOMException && cause.name === "AbortError") {
         setError("تم إيقاف التوليد.");
@@ -268,15 +300,39 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
         </div>
         <form onSubmit={send} className="border-t border-stone-700 p-4">
           <textarea name="message" required maxLength={30000} rows={3} disabled={!conversationId || loading} placeholder="اكتب طلبك الحقيقي للوكيل..." className="form-control w-full resize-none" />
+          {attachments.length > 0 ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {attachments.map((file) => (
+                <span key={file.id} className="rounded-xl border border-stone-700 bg-stone-900 px-3 py-2 text-xs">
+                  {file.filename} ({Math.ceil(file.sizeBytes / 1024)}KB)
+                  <button type="button" className="mr-2 text-rose-200" onClick={() => setAttachments((items) => items.filter((item) => item.id !== file.id))}>×</button>
+                </span>
+              ))}
+            </div>
+          ) : null}
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-            <div>
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="secondary-button cursor-pointer text-sm">
+                {uploading ? "جارٍ الرفع…" : "إرفاق ملفات"}
+                <input
+                  type="file"
+                  multiple
+                  className="sr-only"
+                  disabled={!conversationId || loading || uploading || attachments.length >= 8}
+                  accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.txt,.md,.csv,.json"
+                  onChange={(event) => {
+                    uploadFiles(event.target.files);
+                    event.target.value = "";
+                  }}
+                />
+              </label>
               {error ? <p role="alert" className="text-sm text-rose-100">{error}</p> : null}
               {retryText && !loading ? <button type="button" className="mt-2 text-sm text-emerald-100 underline" onClick={() => sendText(retryText)}>إعادة المحاولة</button> : null}
             </div>
             {loading ? (
               <button type="button" onClick={stop} className="danger-button">إيقاف التوليد</button>
             ) : (
-              <button disabled={!conversationId} className="primary-button disabled:opacity-50">إرسال</button>
+              <button disabled={!conversationId || uploading} className="primary-button disabled:opacity-50">إرسال</button>
             )}
           </div>
         </form>
