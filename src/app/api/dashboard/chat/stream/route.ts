@@ -1,11 +1,12 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
-import { agents, conversations, messages } from "@/db/schema";
+import { agents, attachments, conversations, messages } from "@/db/schema";
 import { streamAgentRun } from "@/lib/agents/runtime";
 import { requireSession } from "@/lib/auth/authorization";
 import { ApiError, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { chatStreamSchema } from "@/lib/http/contracts";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
+import { attachmentContext } from "@/lib/storage/attachments";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,12 +44,26 @@ export async function POST(request: Request) {
       .limit(1);
     if (!conversation) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة أو الوكيل غير متاح.");
 
-    const [userMessage] = await db().insert(messages).values({
-      conversationId: conversation.id,
-      role: "user",
-      content: body.message,
-      metadata: { requestId },
-    }).returning();
+    const attachmentData = await attachmentContext(
+      session.organizationId,
+      conversation.id,
+      body.attachmentIds,
+    );
+    const [userMessage] = await db().transaction(async (tx) => {
+      const [created] = await tx.insert(messages).values({
+        conversationId: conversation.id,
+        role: "user",
+        content: body.message,
+        metadata: { requestId, attachmentIds: body.attachmentIds },
+      }).returning();
+      if (created && body.attachmentIds.length > 0) {
+        await tx.update(attachments).set({ messageId: created.id }).where(and(
+          eq(attachments.organizationId, session.organizationId),
+          inArray(attachments.id, body.attachmentIds),
+        ));
+      }
+      return [created];
+    });
 
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
@@ -59,7 +74,7 @@ export async function POST(request: Request) {
             organizationId: session.organizationId,
             agentId: conversation.agentId,
             conversationId: conversation.id,
-            message: body.message,
+            message: `${body.message}${attachmentData.text}`,
             requestId,
             requestSignal: request.signal,
           })) {
