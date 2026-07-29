@@ -42,26 +42,27 @@ class BrandMark extends StatelessWidget {
 class _BrandPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
+    final unit = size.shortestSide;
     final white = Paint()
       ..color = Colors.white
       ..style = PaintingStyle.stroke
-      ..strokeWidth = size * .075
+      ..strokeWidth = unit * .075
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
     final path = Path()
-      ..moveTo(size * .23, size * .69)
-      ..lineTo(size * .23, size * .32)
-      ..lineTo(size * .5, size * .58)
-      ..lineTo(size * .77, size * .32)
-      ..lineTo(size * .77, size * .69);
+      ..moveTo(unit * .23, unit * .69)
+      ..lineTo(unit * .23, unit * .32)
+      ..lineTo(unit * .5, unit * .58)
+      ..lineTo(unit * .77, unit * .32)
+      ..lineTo(unit * .77, unit * .69);
     canvas.drawPath(path, white);
     final node = Paint()..color = const Color(0xFFDDFBF6);
     for (final point in [
-      Offset(size * .23, size * .31),
-      Offset(size * .5, size * .58),
-      Offset(size * .77, size * .31),
+      Offset(unit * .23, unit * .31),
+      Offset(unit * .5, unit * .58),
+      Offset(unit * .77, unit * .31),
     ]) {
-      canvas.drawCircle(point, size * .075, node);
+      canvas.drawCircle(point, unit * .075, node);
     }
   }
 
