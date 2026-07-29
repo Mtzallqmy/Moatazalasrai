@@ -6,7 +6,9 @@ import { platformIdentity } from "@/lib/platform/identity";
 
 export default async function DiagnosticsPage() {
   const session = await currentSession();
-  if (!session?.organizationId) redirect("/login");
+  if (!session) redirect("/login");
+  if (!session.organizationId || !session.role) redirect("/select-organization");
+  if (!["owner", "admin"].includes(session.role)) redirect("/forbidden");
   if (!session.role || !new Set(["owner", "admin"]).has(session.role)) redirect("/dashboard");
 
   return (

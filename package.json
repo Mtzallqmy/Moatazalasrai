@@ -12,9 +12,11 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:e2e": "playwright test",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node scripts/migrate.mjs",
     "db:studio": "drizzle-kit studio",
+    "bootstrap:owner": "node scripts/bootstrap-owner.mjs",
     "cf:build": "opennextjs-cloudflare build",
     "cf:preview": "opennextjs-cloudflare preview",
     "cf:deploy": "opennextjs-cloudflare deploy"
@@ -22,11 +24,14 @@
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
     "drizzle-orm": "^0.45.2",
+    "ipaddr.js": "^2.2.0",
     "next": "16.2.12",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "zod": "^4.1.12"
   },
   "devDependencies": {
+    "@playwright/test": "^1.56.1",
     "@opennextjs/cloudflare": "^1.20.2",
     "@types/node": "^20.14.15",
     "@types/react": "^19.0.0",

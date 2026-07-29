@@ -41,6 +41,9 @@ export function env(): RuntimeEnvironment {
 
   const nodeEnv = parseNodeEnvironment(process.env.NODE_ENV);
   const appUrl = process.env.APP_URL?.trim();
+  if (nodeEnv === "production" && !appUrl) {
+    throw new Error("APP_URL is required in production.");
+  }
   if (nodeEnv === "production" && appUrl && !appUrl.startsWith("https://")) {
     throw new Error("APP_URL must use HTTPS in production.");
   }

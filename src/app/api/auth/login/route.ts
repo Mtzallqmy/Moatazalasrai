@@ -1,53 +1,56 @@
-import { eq } from "drizzle-orm";
-import { NextResponse } from "next/server";
+import { asc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, organizationMembers, users } from "@/db/schema";
 import { verifyPassword } from "@/lib/auth/password";
 import { createSession } from "@/lib/auth/session";
+import { apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson, ApiError } from "@/lib/http/api";
+import { loginSchema } from "@/lib/http/contracts";
+import { enforceRateLimit, requestClientKey } from "@/lib/security/rate-limit";
+
+export const runtime = "nodejs";
 
 export async function POST(request: Request) {
-  const requestId = request.headers.get("x-request-id") ?? crypto.randomUUID();
+  const requestId = getRequestId(request);
   try {
-    const body = (await request.json()) as { email?: string; password?: string };
-    const email = body.email?.trim().toLowerCase();
-    const password = body.password ?? "";
-    if (!email || !password) {
-      return NextResponse.json({ success: false, error: { code: "VALIDATION_ERROR", message: "أدخل البريد وكلمة المرور.", requestId } }, { status: 400 });
+    assertSameOrigin(request);
+    const body = await parseJson(request, loginSchema, 8 * 1024);
+    const clientKey = requestClientKey(request);
+    await enforceRateLimit({ scope: "auth.login.ip", key: clientKey, limit: 10, windowMs: 15 * 60_000 });
+    await enforceRateLimit({ scope: "auth.login.email", key: body.email, limit: 8, windowMs: 15 * 60_000 });
+
+    const [user] = await db().select().from(users).where(eq(users.email, body.email)).limit(1);
+    if (!user?.passwordHash || !(await verifyPassword(body.password, user.passwordHash))) {
+      throw new ApiError(401, "INVALID_CREDENTIALS", "بيانات الدخول غير صحيحة.");
     }
 
-    const rows = await db().select().from(users).where(eq(users.email, email)).limit(1);
-    const user = rows[0];
-    if (!user?.passwordHash || !(await verifyPassword(password, user.passwordHash))) {
-      return NextResponse.json({ success: false, error: { code: "INVALID_CREDENTIALS", message: "بيانات الدخول غير صحيحة.", requestId } }, { status: 401 });
-    }
+    const memberships = await db()
+      .select({ organizationId: organizationMembers.organizationId })
+      .from(organizationMembers)
+      .where(eq(organizationMembers.userId, user.id))
+      .orderBy(asc(organizationMembers.createdAt))
+      .limit(2);
+    const activeOrganizationId = memberships.length === 1 ? memberships[0].organizationId : undefined;
 
-    const membership = await db().select({ organizationId: organizationMembers.organizationId }).from(organizationMembers).where(eq(organizationMembers.userId, user.id)).limit(1);
-    const ipAddress = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-    const userAgent = request.headers.get("user-agent") ?? undefined;
-    const metadata: { ipAddress?: string; userAgent?: string } = {};
-    if (ipAddress) metadata.ipAddress = ipAddress;
-    if (userAgent) metadata.userAgent = userAgent;
-    await createSession(user.id, metadata);
-
-    const auditValues: {
-      organizationId?: string;
-      actorType: string;
-      actorId: string;
-      action: string;
-      resourceType: string;
-      metadata: Record<string, unknown>;
-    } = {
+    await createSession({
+      userId: user.id,
+      activeOrganizationId,
+      ipAddress: clientKey,
+      userAgent: request.headers.get("user-agent") ?? undefined,
+    });
+    await db().insert(auditLogs).values({
+      organizationId: activeOrganizationId,
       actorType: "user",
       actorId: user.id,
       action: "auth.login",
       resourceType: "session",
-      metadata: {},
-    };
-    if (membership[0]?.organizationId) auditValues.organizationId = membership[0].organizationId;
-    await db().insert(auditLogs).values(auditValues);
+      metadata: { requestId },
+    });
 
-    return NextResponse.json({ success: true, data: { user: { id: user.id, name: user.name, email: user.email } }, meta: { requestId } });
-  } catch {
-    return NextResponse.json({ success: false, error: { code: "LOGIN_FAILED", message: "تعذر تسجيل الدخول حاليًا.", requestId } }, { status: 500 });
+    return apiSuccess({
+      user: { id: user.id, name: user.name, email: user.email },
+      organizationSelectionRequired: memberships.length !== 1,
+    }, requestId);
+  } catch (error) {
+    return handleApiError(error, requestId, "/api/auth/login");
   }
 }

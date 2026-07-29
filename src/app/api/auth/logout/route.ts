@@ -1,8 +1,13 @@
-import { NextResponse } from "next/server";
 import { revokeCurrentSession } from "@/lib/auth/session";
+import { apiSuccess, assertSameOrigin, getRequestId, handleApiError } from "@/lib/http/api";
 
 export async function POST(request: Request) {
-  const requestId = request.headers.get("x-request-id") ?? crypto.randomUUID();
-  await revokeCurrentSession();
-  return NextResponse.json({ success: true, data: { loggedOut: true }, meta: { requestId } });
+  const requestId = getRequestId(request);
+  try {
+    assertSameOrigin(request);
+    await revokeCurrentSession();
+    return apiSuccess({ loggedOut: true }, requestId);
+  } catch (error) {
+    return handleApiError(error, requestId, "/api/auth/logout");
+  }
 }

@@ -25,7 +25,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result?.error?.message ?? "تعذر إكمال العملية.");
-      router.push("/dashboard");
+      router.push(result?.data?.organizationSelectionRequired ? "/select-organization" : "/dashboard");
       router.refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "حدث خطأ غير متوقع.");
@@ -43,7 +43,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
         </>
       )}
       <Field name="email" label="البريد الإلكتروني" type="email" autoComplete="email" />
-      <Field name="password" label="كلمة المرور" type="password" minLength={10} autoComplete={mode === "login" ? "current-password" : "new-password"} />
+      <Field name="password" label="كلمة المرور" type="password" minLength={mode === "login" ? 1 : 12} autoComplete={mode === "login" ? "current-password" : "new-password"} />
 
       {error && <p role="alert" className="rounded-2xl border border-rose-200/20 bg-rose-200/10 px-4 py-3 text-sm text-rose-100">{error}</p>}
 

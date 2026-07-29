@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { readdir, readFile } from "node:fs/promises";
+import path from "node:path";
 import { splitSqlStatements } from "../scripts/sql-utils.mjs";
 
 describe("splitSqlStatements", () => {
@@ -29,5 +31,15 @@ describe("splitSqlStatements", () => {
 
     expect(statements).toHaveLength(2);
     expect(() => splitSqlStatements("SELECT 'unterminated")).toThrow(/unterminated/i);
+  });
+
+  it("parses every committed migration", async () => {
+    const directory = path.resolve("drizzle");
+    const files = (await readdir(directory)).filter((name) => name.endsWith(".sql")).sort();
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) {
+      const statements = splitSqlStatements(await readFile(path.join(directory, file), "utf8"));
+      expect(statements.length, file).toBeGreaterThan(0);
+    }
   });
 });

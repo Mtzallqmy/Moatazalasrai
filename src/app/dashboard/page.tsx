@@ -8,7 +8,8 @@ import { currentSession } from "@/lib/auth/session";
 
 export default async function DashboardPage() {
   const session = await currentSession();
-  if (!session?.organizationId) redirect("/login");
+  if (!session) redirect("/login");
+  if (!session.organizationId) redirect("/select-organization");
   const organizationId = session.organizationId;
   const [agentCount, providerCount, runCount, recentRuns] = await Promise.all([
     db().select({ value: count() }).from(agents).where(eq(agents.organizationId, organizationId)),

@@ -1,50 +1,41 @@
-# Current-state audit
+# تدقيق الحالة الحالية
 
-Audit date: 2026-07-28
+تاريخ التدقيق: 2026-07-29
 
-## What exists
+## مشكلات النسخة المستلمة
 
-- Next.js 16 application with TypeScript and Tailwind.
-- PostgreSQL/Neon access through Drizzle ORM.
-- Multi-tenant schema foundations for organizations, members, provider credentials, agents, versions, conversations, runs, events, API keys, and audit logs.
-- Provider-neutral text generation adapters for OpenAI, Anthropic, and Gemini.
-- AES-256-GCM provider credential encryption.
-- Hashed platform API keys.
-- Docker and Railway deployment configuration.
+- README وصف مثال Tasks ومصادقة غير موجودة رغم أن الكود تغير.
+- تسجيل المؤسسة والوكيل كان ينشئ سجلات متعددة دون transaction متكاملة.
+- الجلسة اختارت أول عضوية ولم تحفظ مؤسسة نشطة، وكتبت `lastSeenAt` مع كل طلب.
+- التحقق من JSON وUUID وURLs كان يدويًا وغير موحد.
+- فحص المزود لم يمنع SSRF ولم يميز الأخطاء ولم يختبر التوليد قبل `verified`.
+- Gemini وضع المفتاح في query string.
+- طبقة المزودات لم توفر Streaming أو عقد Adapter كامل.
+- المحادثة أرسلت الرسالة الحالية فقط، ولم تنفذ Streaming أو إيقافًا.
+- usage المفقود كان يسجل صفرًا، وهو يوحي بقياس غير صحيح.
+- صفحة التشغيل لم تعرض الأحداث أو request IDs أو duration.
+- إدارة المزود لم تنفذ تعديل/تعطيل/حذف وإعادة فحص.
+- واجهات الأعضاء والتدقيق والإعدادات والمؤسسة النشطة غير موجودة.
+- migrations تضمنت جدول Tasks غير المستخدم وفهارس ناقصة.
 
-## Why the site currently behaves mainly as a presentation UI
+## التغييرات المنفذة
 
-The public landing page is implemented, while authenticated user-facing product flows are not. The current backend exposes platform bootstrap and API-key-protected JSON endpoints, but there is no user registration/login flow, session UI, dashboard shell, provider management UI, agent builder, playground, run explorer, or webhook UI.
+- API helpers موحدة، Zod، request ID، CSRF، rate limits، أخطاء منقحة وحدود body.
+- مؤسسة نشطة داخل الجلسة وRBAC مركزي وتبديل مؤسسة آمن.
+- migration إنتاجية للجداول والحقول والفهارس والقيود الجديدة.
+- Provider adapters حقيقية للمزودات الأربعة، حماية شبكة، اختبار نموذج، Streaming وتطبيع errors/usage.
+- CRUD فعلي للمزودات مع تشفير وتغيير مفتاح وإعادة فحص وتعطيل وحذف محمي من العلاقات.
+- إنشاء وتعديل ونشر وأرشفة الوكلاء مع إصدارات ثابتة.
+- محادثات محفوظة، budget للسياق، Streaming وإلغاء وإعادة محاولة وتسمية وأرشفة وحذف.
+- Runs وأحداث وفلاتر وpagination ومعرّفات طلب وusage nullable.
+- صفحات أعضاء وتدقيق وإعدادات واختيار مؤسسة و403 و404 وأخطاء.
+- اختبارات للوحدات والعقود وRBAC وSSRF وAdapters، واختبارات تكامل/E2E اختيارية لبيئة منفصلة.
 
-## Critical gaps
+## قيود مقصودة
 
-1. No end-user authentication, password reset, email verification, or session revocation.
-2. Membership roles exist in the schema but are not enforced through a reusable RBAC policy layer.
-3. No browser-accessible dashboard connected to the existing backend.
-4. Agent execution is synchronous and has no streaming, cancellation, queue, or worker isolation.
-5. Provider adapters do not yet implement model listing, credential validation, tools, retries, or normalized cost accounting.
-6. No webhook registration or delivery subsystem.
-7. No usage records, estimated-cost ledger, or quota enforcement.
-8. API responses are not yet standardized across all routes.
-9. Existing audit logging covers only selected sensitive actions.
-10. Automated coverage was limited and CI was absent.
-
-## Phase-1 changes
-
-This phase intentionally does not perform a high-risk monorepo rewrite. It establishes safety rails required before feature expansion:
-
-- centralized runtime environment validation;
-- dependency-free liveness and database-backed readiness probes;
-- Railway readiness configuration;
-- default security headers;
-- encryption, hashing, and environment validation tests;
-- CI for lint, typecheck, tests, and production build;
-- architecture and deployment documentation.
-
-## Migration decisions
-
-- Keep the current single-service deployment until authentication and domain boundaries are stable.
-- Preserve the current database schema and endpoints; extend them through additive migrations.
-- Introduce authenticated user sessions before building dashboard pages.
-- Introduce Redis only with the worker/webhook phase, avoiding an unused operational dependency.
-- Use feature-complete pull requests with mandatory CI instead of one unreviewable rewrite.
+- لا بريد ولا استعادة كلمة مرور ولا تأكيد بريد.
+- لا دفع أو اشتراكات أو فوترة.
+- لا Queue أو worker موزع؛ الإلغاء بين replicas يحتاج قناة مشتركة مستقبلًا.
+- لا تقدير تكلفة مالي لأن أسعار النماذج متغيرة ولم تُنفذ بيانات أسعار موثوقة.
+- لا tools أو `maxToolCalls` أو `maxModelCalls` في الواجهة أو Runtime؛ أزيلت الحقول بدل ادعاء دعمها.
+- الاختبار الحي للمزودات لا يعمل دون أسرار اختبار يزودها المشغل.
