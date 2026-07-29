@@ -19,6 +19,9 @@
     "db:migrate": "node scripts/migrate.mjs",
     "db:studio": "drizzle-kit studio",
     "bootstrap:owner": "node scripts/bootstrap-owner.mjs",
+    "worker": "node --import tsx src/ai/jobs/worker.ts",
+    "worker:dev": "AI_WORKER_ENABLED=true node --import tsx src/ai/jobs/worker.ts",
+    "verify:deployment": "node scripts/verify-deployment.mjs",
     "cf:build": "opennextjs-cloudflare build",
     "cf:preview": "opennextjs-cloudflare preview",
     "cf:deploy": "opennextjs-cloudflare deploy"
@@ -45,6 +48,7 @@
     "eslint-config-next": "16.2.12",
     "postcss": "^8.5.17",
     "tailwindcss": "^3.4.10",
+    "tsx": "^4.23.1",
     "typescript": "^5.5.4",
     "vitest": "^3.2.7",
     "wrangler": "^4.86.0"

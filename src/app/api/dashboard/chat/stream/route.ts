@@ -1,6 +1,8 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
-import { agents, attachments, conversations, messages } from "@/db/schema";
+import { agentMemories, agents, attachments, conversations, messages } from "@/db/schema";
+import { aiFeatureEnabled } from "@/ai/config";
+import { retrieveKnowledge } from "@/ai/rag/retriever";
 import { streamAgentRun } from "@/lib/agents/runtime";
 import { requireSession } from "@/lib/auth/authorization";
 import { ApiError, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
@@ -50,6 +52,26 @@ export async function POST(request: Request) {
       conversation.id,
       body.attachmentIds,
     );
+    const imageRows = attachmentData.rows.filter((file) => ["image/jpeg", "image/png", "image/webp", "image/gif"].includes(file.mimeType));
+    if (imageRows.reduce((sum, file) => sum + file.sizeBytes, 0) > 20 * 1024 * 1024) {
+      throw new ApiError(413, "VISION_PAYLOAD_TOO_LARGE", "إجمالي الصور المرسلة للنموذج يتجاوز 20 ميجابايت.");
+    }
+    const media = imageRows.map((file) => ({
+      type: "image" as const,
+      mediaType: file.mimeType as "image/jpeg" | "image/png" | "image/webp" | "image/gif",
+      data: Buffer.from(file.content).toString("base64"),
+    }));
+    const knowledge = body.knowledgeBaseId && aiFeatureEnabled("RAG")
+      ? await retrieveKnowledge({ organizationId: session.organizationId, knowledgeBaseId: body.knowledgeBaseId, query: body.message })
+      : { text: "", citations: [] };
+    const memoryRows = body.useMemory && aiFeatureEnabled("MEMORY")
+      ? await db().select({ content: agentMemories.content }).from(agentMemories).where(and(
+        eq(agentMemories.organizationId, session.organizationId),
+        eq(agentMemories.userId, session.userId),
+        eq(agentMemories.enabled, true),
+      )).limit(10)
+      : [];
+    const memoryText = memoryRows.length ? `\n\n[ذاكرة مصرح بها]\n${memoryRows.map((row) => row.content).join("\n")}` : "";
     if (body.clientRequestId) {
       const [duplicate] = await db().select({ id: messages.id }).from(messages).where(and(
         eq(messages.conversationId, conversation.id),
@@ -65,7 +87,11 @@ export async function POST(request: Request) {
         clientRequestId: body.clientRequestId,
         providerCredentialId: body.providerCredentialId,
         model: body.model,
-        metadata: { requestId, attachmentIds: body.attachmentIds },
+        metadata: {
+          requestId,
+          attachmentIds: body.attachmentIds,
+          attachments: attachmentData.rows.map((file) => ({ id: file.id, filename: file.filename, mimeType: file.mimeType, sizeBytes: file.sizeBytes, processingStatus: file.processingStatus })),
+        },
       }).returning();
       if (created && body.attachmentIds.length > 0) {
         await tx.update(attachments).set({ messageId: created.id }).where(and(
@@ -79,18 +105,25 @@ export async function POST(request: Request) {
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
-        controller.enqueue(encoder.encode(sse("message", { userMessage, requestId })));
+        controller.enqueue(encoder.encode(sse("message", {
+          userMessage: { ...userMessage, attachments: attachmentData.rows.map((file) => ({
+            id: file.id, filename: file.filename, mimeType: file.mimeType, sizeBytes: file.sizeBytes, processingStatus: file.processingStatus,
+          })) },
+          requestId,
+        })));
+        if (knowledge.citations.length) controller.enqueue(encoder.encode(sse("citations", { citations: knowledge.citations })));
         try {
           for await (const event of streamAgentRun({
             organizationId: session.organizationId,
             agentId: conversation.agentId,
             conversationId: conversation.id,
-            message: `${body.message}${attachmentData.text}`,
+            message: `${body.message}${attachmentData.text}${memoryText}${knowledge.text ? `\n\n[سياق معرفة موثق]\n${knowledge.text}` : ""}`,
             requestId,
             requestSignal: request.signal,
             providerCredentialId: body.providerCredentialId,
             model: body.model,
-            inputKind: body.attachmentIds.length > 0 && body.inputKind === "text" ? "file" : body.inputKind,
+            inputKind: media.length ? "image" : body.attachmentIds.length > 0 && body.inputKind === "text" ? "file" : body.inputKind,
+            media,
           })) {
             controller.enqueue(encoder.encode(sse(event.type, event)));
           }

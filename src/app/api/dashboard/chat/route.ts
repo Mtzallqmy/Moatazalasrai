@@ -1,6 +1,6 @@
-import { and, count, desc, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import { db } from "@/db";
-import { agents, conversations, messages } from "@/db/schema";
+import { agents, attachments, conversations, messages } from "@/db/schema";
 import { requireSession } from "@/lib/auth/authorization";
 import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { conversationActionSchema, paginationSchema, uuidSchema } from "@/lib/http/contracts";
@@ -36,7 +36,21 @@ export async function GET(request: Request) {
         db().select({ value: count() }).from(messages).where(and(eq(messages.conversationId, id), isNull(messages.deletedAt))),
       ]);
       const total = totals[0]?.value ?? 0;
-      return apiSuccess(rows.reverse(), requestId, 200, {
+      const messageIds = rows.map((row) => row.id);
+      const fileRows = messageIds.length ? await db().select({
+        id: attachments.id, messageId: attachments.messageId, filename: attachments.filename,
+        mimeType: attachments.mimeType, sizeBytes: attachments.sizeBytes,
+        processingStatus: attachments.processingStatus, processingErrorCode: attachments.processingErrorCode,
+      }).from(attachments).where(and(
+        eq(attachments.organizationId, session.organizationId),
+        inArray(attachments.messageId, messageIds),
+        isNull(attachments.deletedAt),
+      )) : [];
+      const enriched = rows.reverse().map((row) => ({
+        ...row,
+        attachments: fileRows.filter((file) => file.messageId === row.id),
+      }));
+      return apiSuccess(enriched, requestId, 200, {
         pagination: { ...query, total, pages: Math.ceil(total / query.limit) },
       });
     }

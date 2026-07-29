@@ -44,6 +44,12 @@ const requiredTables = [
   "telegram_chats",
   "telegram_updates",
   "attachments",
+  "agent_memories",
+  "knowledge_bases",
+  "knowledge_documents",
+  "knowledge_chunks",
+  "background_jobs",
+  "tool_approvals",
 ] as const;
 
 export async function checkDatabase(): Promise<{
@@ -73,6 +79,12 @@ export async function checkDatabase(): Promise<{
       ,to_regclass('public.telegram_chats')::text AS telegram_chats
       ,to_regclass('public.telegram_updates')::text AS telegram_updates
       ,to_regclass('public.attachments')::text AS attachments
+      ,to_regclass('public.agent_memories')::text AS agent_memories
+      ,to_regclass('public.knowledge_bases')::text AS knowledge_bases
+      ,to_regclass('public.knowledge_documents')::text AS knowledge_documents
+      ,to_regclass('public.knowledge_chunks')::text AS knowledge_chunks
+      ,to_regclass('public.background_jobs')::text AS background_jobs
+      ,to_regclass('public.tool_approvals')::text AS tool_approvals
   `;
   const state = rows[0] as Record<string, string | null> | undefined;
   const missingTables = requiredTables.filter((table) => !state?.[table]);

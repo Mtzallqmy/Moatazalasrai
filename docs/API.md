@@ -1,5 +1,18 @@
 # API
 
+## APIs التوسعة الاختيارية
+
+تعيد هذه المسارات `FEATURE_DISABLED` حتى تفعيل Feature Flag الموافق:
+
+- `GET|POST|DELETE /api/memories`
+- `GET|POST /api/knowledge-bases`
+- `GET|POST /api/knowledge-bases/:id/documents`
+- `GET /api/tools`
+- `GET|PATCH /api/tool-approvals`
+- `GET|DELETE /api/jobs`
+
+كل المعرفات تتحقق من المؤسسة النشطة، وكل mutation يطبق Same-Origin وZod وRBAC.
+
 كل API حديث يعيد أحد الشكلين:
 
 ```json

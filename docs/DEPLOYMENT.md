@@ -1,5 +1,13 @@
 # النشر
 
+## Worker مستقل على Railway
+
+أنشئ خدمة ثانية من المستودع نفسه، دون pre-deploy migration، واجعل Start Command هو `npm run worker`. اضبط `AI_WORKER_ENABLED=true` فيها فقط. تبقي خدمة Web الأمر `npm run db:migrate` في pre-deploy و`npm start` للتشغيل.
+
+ابدأ بـWorker replica واحدة. تشترك الخدمتان في `DATABASE_URL` و`CREDENTIAL_ENCRYPTION_KEY` الثابت. انشر أولًا والميزات معطلة، تحقق من `/api/health` و`/api/ready`، ثم فعّل RAG والأدوات والذاكرة تدريجيًا.
+
+للرجوع: عطّل Feature Flags، أوقف Worker، وأعد نشر Web commit السابق. لا تحذف الجداول أثناء الاستجابة للحادث.
+
 ## تسلسل الإصدار
 
 1. شغّل `npm ci`.

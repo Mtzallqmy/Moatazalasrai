@@ -4,7 +4,7 @@
 
 :root {
   color-scheme: light;
-  --background: #f4f6fb;
+  --background: #f6f7fb;
   --surface: #ffffff;
   --surface-soft: #eef2f8;
   --surface-elevated: #ffffff;
@@ -12,16 +12,19 @@
   --border-strong: #c6d0df;
   --text-primary: #182133;
   --text-secondary: #5b677a;
-  --primary: #5266d5;
-  --primary-hover: #4357c3;
-  --primary-soft: #eef0ff;
+  --primary: #5b5bd6;
+  --primary-hover: #4949bd;
+  --primary-soft: #efefff;
+  --accent: #0f9f86;
+  --accent-soft: #e7f8f4;
   --success: #19875f;
   --warning: #ad6b00;
   --danger: #c2415a;
   --info: #2778c4;
   --focus: #6679e8;
   --selected: #e8ebff;
-  --shadow: 0 16px 45px rgba(32, 45, 72, 0.08);
+  --shadow: 0 12px 36px rgba(41, 47, 76, 0.07);
+  --shadow-raised: 0 22px 70px rgba(41, 47, 76, 0.12);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -38,6 +41,8 @@
     --primary: #8e9cff;
     --primary-hover: #a6b0ff;
     --primary-soft: #2a3157;
+    --accent: #64d8bd;
+    --accent-soft: #183f3a;
     --success: #67d6a8;
     --warning: #f3bd63;
     --danger: #ff91a5;
@@ -56,8 +61,8 @@ html {
 body {
   min-height: 100vh;
   background:
-    radial-gradient(circle at top right, color-mix(in srgb, var(--primary) 10%, transparent), transparent 32rem),
-    radial-gradient(circle at bottom left, color-mix(in srgb, var(--info) 7%, transparent), transparent 28rem),
+    radial-gradient(circle at 92% 4%, color-mix(in srgb, var(--primary) 12%, transparent), transparent 30rem),
+    radial-gradient(circle at 5% 95%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 28rem),
     var(--background);
   color: var(--text-primary);
   font-family: "Noto Sans Arabic", "IBM Plex Sans Arabic", "Segoe UI", Tahoma, Arial, sans-serif;
@@ -80,57 +85,68 @@ body {
   }
 
   .glass-panel {
-    @apply border border-stone-700/70 bg-stone-900/70 shadow-2xl shadow-black/10 backdrop-blur;
+    @apply border backdrop-blur-xl;
     border-color: var(--border);
     background: color-mix(in srgb, var(--surface) 94%, transparent);
     box-shadow: var(--shadow);
   }
 
   .soft-card {
-    @apply rounded-3xl border border-stone-700/70 bg-stone-900/65 shadow-lg shadow-black/10;
+    @apply rounded-3xl border transition;
     border-color: var(--border);
     background: var(--surface);
     box-shadow: var(--shadow);
   }
+  .soft-card:hover {
+    border-color: color-mix(in srgb, var(--primary) 24%, var(--border));
+    box-shadow: var(--shadow-raised);
+  }
 
   .primary-button {
-    @apply inline-flex items-center justify-center rounded-2xl bg-emerald-200 px-5 py-3 font-semibold text-emerald-950 transition hover:bg-emerald-100 focus:outline-none focus:ring-2 focus:ring-emerald-200/60;
+    @apply inline-flex items-center justify-center rounded-2xl px-5 py-3 font-semibold transition focus:outline-none focus:ring-2;
     background: var(--primary);
     color: white;
   }
+  .primary-button:hover { background: var(--primary-hover); transform: translateY(-1px); }
 
   .secondary-button {
-    @apply inline-flex items-center justify-center rounded-2xl border border-stone-600 px-5 py-3 font-semibold text-stone-100 transition hover:border-stone-500 hover:bg-stone-800/80 focus:outline-none focus:ring-2 focus:ring-stone-500/50;
+    @apply inline-flex items-center justify-center rounded-2xl border px-5 py-3 font-semibold transition focus:outline-none focus:ring-2;
     border-color: var(--border-strong);
     color: var(--text-primary);
     background: var(--surface);
   }
+  .secondary-button:hover { background: var(--surface-soft); border-color: var(--primary); }
 
   .danger-button {
-    @apply inline-flex items-center justify-center rounded-2xl border border-rose-300/30 bg-rose-950/30 px-5 py-3 font-semibold text-rose-100 transition hover:border-rose-200/50 hover:bg-rose-950/60 focus:outline-none focus:ring-2 focus:ring-rose-300/40;
+    @apply inline-flex items-center justify-center rounded-2xl border px-5 py-3 font-semibold transition focus:outline-none focus:ring-2;
+    color: var(--danger);
+    border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
+    background: color-mix(in srgb, var(--danger) 8%, var(--surface));
   }
 
   .form-control {
-    @apply rounded-2xl border border-stone-700 bg-stone-950/70 px-4 py-3 text-stone-100 outline-none transition placeholder:text-stone-600 focus:border-emerald-200/60 focus:ring-4 focus:ring-emerald-100/10 disabled:cursor-not-allowed disabled:opacity-60;
+    @apply rounded-2xl border px-4 py-3 outline-none transition disabled:cursor-not-allowed disabled:opacity-60;
     border-color: var(--border);
     background: var(--surface-soft);
     color: var(--text-primary);
   }
+  .form-control::placeholder { color: color-mix(in srgb, var(--text-secondary) 70%, transparent); }
+  .form-control:focus { border-color: var(--primary); box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 12%, transparent); }
 
   .status-badge {
     @apply inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold;
   }
 
   .status-success {
-    @apply bg-emerald-100/10 text-emerald-100;
+    color: var(--success); background: color-mix(in srgb, var(--success) 12%, transparent);
   }
 
   .status-error {
-    @apply bg-rose-100/10 text-rose-100;
+    color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent);
   }
 
   .status-neutral {
-    @apply bg-stone-800 text-stone-300;
+    color: var(--text-secondary); background: var(--surface-soft);
   }
 
   .modal-backdrop {
@@ -138,11 +154,13 @@ body {
   }
 
   .modal-card {
-    @apply w-full max-w-2xl rounded-3xl border border-stone-700 bg-stone-900 p-5 shadow-2xl sm:p-7;
+    @apply w-full max-w-2xl rounded-3xl border p-5 shadow-2xl sm:p-7;
+    border-color: var(--border); background: var(--surface-elevated); color: var(--text-primary);
   }
 
   .skeleton {
-    @apply animate-pulse bg-stone-800/80;
+    @apply animate-pulse;
+    background: var(--surface-soft);
   }
 }
 
@@ -161,7 +179,7 @@ input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
 summary:focus-visible {
-  outline: 2px solid rgba(167, 243, 208, 0.8);
+  outline: 2px solid var(--focus);
   outline-offset: 3px;
 }
 

@@ -2,6 +2,7 @@ import { joinUrl, providerJson, providerStream, sseJson } from "@/lib/providers/
 import {
   type DiscoveryResult,
   type ProviderAdapter,
+  type ProviderMessage,
   type ProviderUsage,
   ProviderError,
 } from "@/lib/providers/types";
@@ -13,6 +14,44 @@ const capabilities = {
   configurableTemperature: true,
   maxOutputTokens: true,
 } as const;
+
+function textContent(message: ProviderMessage) {
+  return typeof message.content === "string"
+    ? message.content
+    : message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+}
+
+function openAiResponsesMessages(messages: ProviderMessage[]) {
+  return messages.map((message) => ({
+    role: message.role,
+    content: typeof message.content === "string" ? message.content : message.content.map((part) =>
+      part.type === "text" ? { type: "input_text", text: part.text }
+        : { type: "input_image", image_url: `data:${part.mediaType};base64,${part.data}` }),
+  }));
+}
+
+function openAiChatMessages(messages: ProviderMessage[]) {
+  return messages.map((message) => ({
+    role: message.role,
+    content: typeof message.content === "string" ? message.content : message.content.map((part) =>
+      part.type === "text" ? { type: "text", text: part.text }
+        : { type: "image_url", image_url: { url: `data:${part.mediaType};base64,${part.data}` } }),
+  }));
+}
+
+function anthropicMessages(messages: ProviderMessage[]) {
+  return messages.filter((message) => message.role !== "system").map((message) => ({
+    role: message.role,
+    content: typeof message.content === "string" ? message.content : message.content.map((part) =>
+      part.type === "text" ? { type: "text", text: part.text }
+        : { type: "image", source: { type: "base64", media_type: part.mediaType, data: part.data } }),
+  }));
+}
+
+function geminiParts(message: ProviderMessage) {
+  return typeof message.content === "string" ? [{ text: message.content }] : message.content.map((part) =>
+    part.type === "text" ? { text: part.text } : { inlineData: { mimeType: part.mediaType, data: part.data } });
+}
 
 function values(input: unknown, key: string): unknown[] {
   return input && typeof input === "object" && key in input && Array.isArray((input as Record<string, unknown>)[key])
@@ -89,7 +128,7 @@ const openai: ProviderAdapter = {
       headers: { authorization: `Bearer ${input.apiKey}`, "content-type": "application/json", "x-client-request-id": input.requestId },
       body: JSON.stringify({
         model: input.model,
-        input: input.messages,
+        input: openAiResponsesMessages(input.messages),
         temperature: input.temperature,
         max_output_tokens: input.maxOutputTokens,
       }),
@@ -107,7 +146,7 @@ const openai: ProviderAdapter = {
       headers: { authorization: `Bearer ${input.apiKey}`, "content-type": "application/json", "x-client-request-id": input.requestId },
       body: JSON.stringify({
         model: input.model,
-        input: input.messages,
+        input: openAiResponsesMessages(input.messages),
         temperature: input.temperature,
         max_output_tokens: input.maxOutputTokens,
         stream: true,
@@ -138,7 +177,7 @@ const openaiCompatible: ProviderAdapter = {
       headers: { authorization: `Bearer ${input.apiKey}`, "content-type": "application/json", "x-client-request-id": input.requestId },
       body: JSON.stringify({
         model: input.model,
-        messages: input.messages,
+        messages: openAiChatMessages(input.messages),
         temperature: input.temperature,
         max_tokens: input.maxOutputTokens,
       }),
@@ -161,7 +200,7 @@ const openaiCompatible: ProviderAdapter = {
       headers: { authorization: `Bearer ${input.apiKey}`, "content-type": "application/json", "x-client-request-id": input.requestId },
       body: JSON.stringify({
         model: input.model,
-        messages: input.messages,
+        messages: openAiChatMessages(input.messages),
         temperature: input.temperature,
         max_tokens: input.maxOutputTokens,
         stream: true,
@@ -211,7 +250,7 @@ const anthropic: ProviderAdapter = {
     );
   },
   async generate(input) {
-    const system = input.messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n");
+    const system = input.messages.filter((message) => message.role === "system").map(textContent).join("\n\n");
     const { data, headers } = await providerJson<{
       content?: Array<{ type?: string; text?: string }>;
       usage?: unknown;
@@ -221,7 +260,7 @@ const anthropic: ProviderAdapter = {
       body: JSON.stringify({
         model: input.model,
         system: system || undefined,
-        messages: input.messages.filter((message) => message.role !== "system"),
+        messages: anthropicMessages(input.messages),
         temperature: input.temperature,
         max_tokens: input.maxOutputTokens,
       }),
@@ -234,14 +273,14 @@ const anthropic: ProviderAdapter = {
     return anthropic.generate({ ...input, messages: [{ role: "user", content: "Reply with OK." }], maxOutputTokens: 16, temperature: 0 });
   },
   async *stream(input) {
-    const system = input.messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n");
+    const system = input.messages.filter((message) => message.role === "system").map(textContent).join("\n\n");
     const response = await providerStream(joinUrl(input.baseUrl, "v1/messages"), {
       method: "POST",
       headers: { "x-api-key": input.apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
       body: JSON.stringify({
         model: input.model,
         system: system || undefined,
-        messages: input.messages.filter((message) => message.role !== "system"),
+        messages: anthropicMessages(input.messages),
         temperature: input.temperature,
         max_tokens: input.maxOutputTokens,
         stream: true,
@@ -283,7 +322,7 @@ const gemini: ProviderAdapter = {
     );
   },
   async generate(input) {
-    const system = input.messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n");
+    const system = input.messages.filter((message) => message.role === "system").map(textContent).join("\n\n");
     const { data, headers } = await providerJson<{
       candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
       usageMetadata?: unknown;
@@ -294,7 +333,7 @@ const gemini: ProviderAdapter = {
         systemInstruction: system ? { parts: [{ text: system }] } : undefined,
         contents: input.messages.filter((message) => message.role !== "system").map((message) => ({
           role: message.role === "assistant" ? "model" : "user",
-          parts: [{ text: message.content }],
+          parts: geminiParts(message),
         })),
         generationConfig: { temperature: input.temperature, maxOutputTokens: input.maxOutputTokens },
       }),
@@ -307,7 +346,7 @@ const gemini: ProviderAdapter = {
     return gemini.generate({ ...input, messages: [{ role: "user", content: "Reply with OK." }], maxOutputTokens: 16, temperature: 0 });
   },
   async *stream(input) {
-    const system = input.messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n");
+    const system = input.messages.filter((message) => message.role === "system").map(textContent).join("\n\n");
     const url = `${joinUrl(input.baseUrl, `models/${encodeURIComponent(input.model)}:streamGenerateContent`)}?alt=sse`;
     const response = await providerStream(url, {
       method: "POST",
@@ -316,7 +355,7 @@ const gemini: ProviderAdapter = {
         systemInstruction: system ? { parts: [{ text: system }] } : undefined,
         contents: input.messages.filter((message) => message.role !== "system").map((message) => ({
           role: message.role === "assistant" ? "model" : "user",
-          parts: [{ text: message.content }],
+          parts: geminiParts(message),
         })),
         generationConfig: { temperature: input.temperature, maxOutputTokens: input.maxOutputTokens },
       }),
