@@ -1,5 +1,6 @@
 import {
   boolean,
+  customType,
   index,
   integer,
   jsonb,
@@ -17,6 +18,10 @@ export const runStatus = pgEnum("run_status", ["queued", "running", "completed",
 export const providerKind = pgEnum("provider_kind", ["openai", "anthropic", "gemini", "openai_compatible"]);
 export const providerValidationStatus = pgEnum("provider_validation_status", ["pending", "verified", "failed"]);
 export const messageRole = pgEnum("message_role", ["user", "assistant"]);
+export const integrationKind = pgEnum("integration_kind", ["telegram", "github"]);
+export const integrationStatus = pgEnum("integration_status", ["pending", "verified", "failed"]);
+export const attachmentSource = pgEnum("attachment_source", ["web", "api", "telegram"]);
+const bytea = customType<{ data: Buffer }>({ dataType: () => "bytea" });
 
 export const organizations = pgTable("organizations", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -218,6 +223,77 @@ export const rateLimits = pgTable("rate_limits", {
 }, (table) => [
   uniqueIndex("rate_limits_scope_key_window_idx").on(table.scope, table.keyHash, table.windowStartedAt),
   index("rate_limits_expires_idx").on(table.expiresAt),
+]);
+
+export const integrations = pgTable("integrations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  kind: integrationKind("kind").notNull(),
+  name: text("name").notNull(),
+  encryptedToken: text("encrypted_token").notNull(),
+  tokenHint: text("token_hint").notNull(),
+  config: jsonb("config").$type<Record<string, unknown>>().notNull().default({}),
+  status: integrationStatus("status").notNull().default("pending"),
+  enabled: boolean("enabled").notNull().default(true),
+  lastVerifiedAt: timestamp("last_verified_at", { withTimezone: true }),
+  lastErrorCode: text("last_error_code"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("integrations_org_kind_name_unique_idx").on(table.organizationId, table.kind, table.name),
+  index("integrations_org_kind_status_idx").on(table.organizationId, table.kind, table.status, table.enabled),
+]);
+
+export const telegramChats = pgTable("telegram_chats", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  integrationId: uuid("integration_id").notNull().references(() => integrations.id, { onDelete: "cascade" }),
+  telegramChatId: text("telegram_chat_id").notNull(),
+  conversationId: uuid("conversation_id").references(() => conversations.id, { onDelete: "set null" }),
+  agentId: uuid("agent_id").references(() => agents.id, { onDelete: "set null" }),
+  username: text("username"),
+  title: text("title"),
+  enabled: boolean("enabled").notNull().default(true),
+  lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("telegram_chats_integration_chat_unique_idx").on(table.integrationId, table.telegramChatId),
+  index("telegram_chats_org_updated_idx").on(table.organizationId, table.updatedAt),
+]);
+
+export const telegramUpdates = pgTable("telegram_updates", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  integrationId: uuid("integration_id").notNull().references(() => integrations.id, { onDelete: "cascade" }),
+  updateId: text("update_id").notNull(),
+  status: text("status").notNull().default("accepted"),
+  errorCode: text("error_code"),
+  receivedAt: timestamp("received_at", { withTimezone: true }).defaultNow().notNull(),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+}, (table) => [
+  uniqueIndex("telegram_updates_integration_update_unique_idx").on(table.integrationId, table.updateId),
+  index("telegram_updates_received_idx").on(table.receivedAt),
+]);
+
+export const attachments = pgTable("attachments", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  conversationId: uuid("conversation_id").references(() => conversations.id, { onDelete: "cascade" }),
+  messageId: uuid("message_id").references(() => messages.id, { onDelete: "set null" }),
+  uploadedByUserId: uuid("uploaded_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  source: attachmentSource("source").notNull(),
+  filename: text("filename").notNull(),
+  mimeType: text("mime_type").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  sha256: text("sha256").notNull(),
+  content: bytea("content").notNull(),
+  telegramFileId: text("telegram_file_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("attachments_org_created_idx").on(table.organizationId, table.createdAt),
+  index("attachments_conversation_idx").on(table.conversationId, table.createdAt),
+  index("attachments_message_idx").on(table.messageId),
+  index("attachments_sha256_idx").on(table.organizationId, table.sha256),
 ]);
 
 export type Agent = typeof agents.$inferSelect;

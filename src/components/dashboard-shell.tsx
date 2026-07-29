@@ -16,6 +16,7 @@ const navigation = [
   { label: "المزودون والنماذج", href: "/dashboard/providers" },
   { label: "الوكلاء", href: "/dashboard/agents" },
   { label: "الدردشة", href: "/dashboard/chat", roles: ["owner", "admin", "developer", "operator"] },
+  { label: "التكاملات والأدوات", href: "/dashboard/integrations", roles: ["owner", "admin"] },
   { label: "عمليات التشغيل", href: "/dashboard/runs" },
   { label: "الأعضاء والصلاحيات", href: "/dashboard/members", roles: ["owner", "admin"] },
   { label: "سجل التدقيق", href: "/dashboard/audit", roles: ["owner", "admin"] },

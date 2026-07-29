@@ -18,6 +18,10 @@
 - دورة تشغيل `queued → running → completed / failed / cancelled` وأحداث فعلية ومعرّفات طلب واستهلاك Tokens عندما يوفره المزود.
 - لوحة عربية RTL متجاوبة للمزودات والوكلاء والمحادثات والتشغيل والأعضاء والتدقيق والإعدادات والتشخيص.
 - Health وreadiness منفصلان، Security headers، CSRF/Origin checks، rate limits مخزنة، ورسائل API موحدة.
+- تكامل Telegram عبر Webhook موثّق، ربط كل محادثة بالوكيل، أوامر `/new` و`/status` و`/github repos`، ومعالجة خلفية تمنع تعطيل استقبال التحديثات.
+- تكامل GitHub بتوكن مشفّر للتحقق وعرض المستودعات وقراءة الملفات عبر API مضبوط المسارات.
+- رفع ملفات حقيقي داخل الدردشة وAPI حتى 10MB مع metadata وSHA-256 وعزل كامل بين المؤسسات.
+- API إصدار `v1` للدردشة والمحادثات والملفات والتكاملات وGitHub، مع عقد OpenAPI تمهيدًا لتطبيق Android أصلي.
 
 ## المتطلبات
 
@@ -66,6 +70,24 @@ npm run db:studio
 ```
 
 الجداول الأساسية: `users`, `sessions`, `organizations`, `organization_members`, `provider_credentials`, `agents`, `agent_versions`, `conversations`, `messages`, `runs`, `run_events`, `platform_api_keys`, `audit_logs`, `rate_limits`.
+
+جداول التكامل والتخزين: `integrations`, `telegram_chats`, `telegram_updates`, `attachments`.
+
+## Telegram وGitHub
+
+من لوحة التحكم افتح **التكاملات والأدوات**. أدخل Bot Token أو GitHub fine-grained token؛ يتحقق الخادم منه قبل تشفيره ولا يعيده إلى الواجهة. يتطلب Telegram أن يكون `APP_URL` مضبوطًا على رابط HTTPS العام في Railway، ثم يُفعّل Webhook تلقائيًا.
+
+استخدم أقل صلاحيات ممكنة لتوكن GitHub. الواجهة الحالية تسمح بعرض المستودعات وقراءة الملفات فقط؛ لا توجد عمليات حذف أو force-push.
+
+## API لتطبيق Android
+
+عقد الاكتشاف متاح في `/api/v1/openapi`. كل المسارات المحمية تستخدم:
+
+```http
+Authorization: Bearer <PLATFORM_API_KEY>
+```
+
+المسارات الأساسية: `/api/v1/agents`, `/api/v1/conversations`, `/api/v1/chat`, `/api/v1/files`, `/api/v1/runs`, `/api/v1/integrations`, `/api/v1/github`.
 
 ## التحقق قبل الدمج
 

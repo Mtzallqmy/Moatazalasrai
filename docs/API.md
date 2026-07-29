@@ -52,3 +52,21 @@
 ## Platform API
 
 المسارات تحت `/api/v1` تستخدم `Authorization: Bearer <platform-api-key>`. يجب تخزين المفتاح الأصلي خارجيًا لأنه يظهر مرة واحدة عند bootstrap. واجهة المتصفح الأساسية لا تحتاج bootstrap وتستخدم جلسات المستخدم.
+# API v1 للتطبيقات الأصلية
+
+جميع الاستجابات JSON موحدة وتحتوي `requestId`. المصادقة عبر `Authorization: Bearer <PLATFORM_API_KEY>`. لا تستخدم Cookies الخاصة بلوحة الويب داخل تطبيق Android.
+
+| المسار | الطرق | الغرض |
+|---|---|---|
+| `/api/v1/openapi` | GET | عقد اكتشاف OpenAPI |
+| `/api/v1/agents` | GET, POST | الوكلاء |
+| `/api/v1/conversations` | GET, POST | المحادثات والرسائل |
+| `/api/v1/chat` | POST | رسالة ومرفقات وتشغيل فعلي |
+| `/api/v1/files` | GET, POST | قائمة/تنزيل ورفع multipart |
+| `/api/v1/runs` | GET, POST | التشغيل والسجل |
+| `/api/v1/integrations` | GET | صحة التكاملات دون أسرار |
+| `/api/v1/github` | POST | عرض المستودعات أو قراءة ملف |
+
+رفع الملفات يقبل `multipart/form-data` بحقل `file` وحقل `conversationId` الاختياري. الحد الأقصى 10MB والأنواع المسموحة: JPEG, PNG, WebP, GIF, PDF, TXT, Markdown, CSV, JSON.
+
+تكامل Telegram يستقبل فقط Webhook يحمل `X-Telegram-Bot-Api-Secret-Token` المطابق للسر الذي أنشأته المنصة، ويحفظ `update_id` لمنع التنفيذ المكرر.
