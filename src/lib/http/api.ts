@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { ZodError, type ZodType } from "zod";
+import { errorDescriptor } from "@/contracts/errors";
 
 export class ApiError extends Error {
   constructor(
@@ -39,6 +40,7 @@ export function apiFailure(
   requestId: string,
   details?: unknown,
 ) {
+  const descriptor = errorDescriptor(code);
   return NextResponse.json(
     {
       success: false as const,
@@ -46,6 +48,11 @@ export function apiFailure(
         code,
         message,
         requestId,
+        ...(descriptor ? {
+          retryable: descriptor.retryable,
+          action: { ar: descriptor.actionAr, en: descriptor.actionEn },
+          messageEn: descriptor.messageEn,
+        } : {}),
         ...(details === undefined ? {} : { details }),
       },
     },
