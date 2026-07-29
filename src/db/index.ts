@@ -29,7 +29,10 @@ const requiredTables = [
   "conversations",
   "messages",
   "runs",
+  "run_events",
+  "platform_api_keys",
   "audit_logs",
+  "rate_limits",
 ] as const;
 
 export async function checkDatabase(): Promise<{
@@ -51,7 +54,10 @@ export async function checkDatabase(): Promise<{
       to_regclass('public.conversations')::text AS conversations,
       to_regclass('public.messages')::text AS messages,
       to_regclass('public.runs')::text AS runs,
-      to_regclass('public.audit_logs')::text AS audit_logs
+      to_regclass('public.run_events')::text AS run_events,
+      to_regclass('public.platform_api_keys')::text AS platform_api_keys,
+      to_regclass('public.audit_logs')::text AS audit_logs,
+      to_regclass('public.rate_limits')::text AS rate_limits
   `;
   const state = rows[0] as Record<string, string | null> | undefined;
   const missingTables = requiredTables.filter((table) => !state?.[table]);

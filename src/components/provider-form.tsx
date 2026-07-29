@@ -25,6 +25,7 @@ export function ProviderForm() {
   const [loading, setLoading] = useState<"validate" | "save" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
+  const [testModel, setTestModel] = useState("");
 
   const modelPreview = useMemo(() => validation?.models.slice(0, 12) ?? [], [validation]);
 
@@ -32,6 +33,7 @@ export function ProviderForm() {
     setProvider(value);
     setBaseUrl(defaults[value]);
     setValidation(null);
+    setTestModel("");
     setMessage(null);
   }
 
@@ -51,9 +53,14 @@ export function ProviderForm() {
         return null;
       }
       setValidation(payload.data);
+      setTestModel(payload.data.models[0] ?? "");
       setBaseUrl(payload.data.normalizedBaseUrl);
       setMessage(`نجح الاتصال خلال ${payload.data.latencyMs}ms وتم العثور على ${payload.data.models.length} نموذجًا.`);
       return payload.data;
+    } catch {
+      setValidation(null);
+      setMessage("تعذر الوصول إلى الخادم. تحقق من الاتصال وحاول مجددًا.");
+      return null;
     } finally {
       setLoading(null);
     }
@@ -79,6 +86,7 @@ export function ProviderForm() {
           baseUrl,
           name: form.get("name"),
           apiKey: form.get("apiKey"),
+          testModel,
         }),
       });
       const payload = await response.json().catch(() => null) as { success?: boolean; data?: { discoveredModels?: string[] }; error?: { message?: string } } | null;
@@ -90,8 +98,11 @@ export function ProviderForm() {
       setProvider("openai");
       setBaseUrl(defaults.openai);
       setValidation(null);
+      setTestModel("");
       setMessage(`تم التحقق والحفظ المشفر بنجاح. النماذج المكتشفة: ${payload.data?.discoveredModels?.length ?? 0}.`);
       router.refresh();
+    } catch {
+      setMessage("تعذر الوصول إلى الخادم. تحقق من الاتصال وحاول مجددًا.");
     } finally {
       setLoading(null);
     }
@@ -146,6 +157,12 @@ export function ProviderForm() {
             {modelPreview.map((model) => <span key={model} className="rounded-full border border-stone-700 bg-stone-950/60 px-3 py-1 font-mono text-xs text-stone-300">{model}</span>)}
             {validation.models.length > modelPreview.length ? <span className="px-2 py-1 text-xs text-stone-500">+{validation.models.length - modelPreview.length}</span> : null}
           </div>
+          <label className="mt-4 grid gap-2 text-sm text-stone-300">
+            نموذج اختبار التوليد قبل الحفظ
+            <select value={testModel} onChange={(event) => setTestModel(event.target.value)} dir="ltr" className="rounded-2xl border border-stone-700 bg-stone-950/70 px-4 py-3 font-mono text-sm">
+              {validation.models.map((model) => <option key={model} value={model}>{model}</option>)}
+            </select>
+          </label>
         </section>
       ) : null}
     </form>

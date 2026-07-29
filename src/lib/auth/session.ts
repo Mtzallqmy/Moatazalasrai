@@ -1,33 +1,42 @@
 import { createHash, randomBytes } from "node:crypto";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, asc, eq, gt, isNull, lt } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { db } from "@/db";
 import { organizationMembers, organizations, sessions, users } from "@/db/schema";
+import { ApiError } from "@/lib/http/api";
 
 export const SESSION_COOKIE = "moataz_session";
 const SESSION_DAYS = 30;
+const LAST_SEEN_WRITE_INTERVAL_MS = 15 * 60 * 1000;
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex");
 }
 
-export async function createSession(userId: string, metadata?: { ipAddress?: string; userAgent?: string }) {
+export async function createSession(input: {
+  userId: string;
+  activeOrganizationId?: string;
+  ipAddress?: string;
+  userAgent?: string;
+}) {
   const token = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000);
   const values: {
     userId: string;
+    activeOrganizationId?: string;
     tokenHash: string;
     expiresAt: Date;
     ipAddress?: string;
     userAgent?: string;
   } = {
-    userId,
+    userId: input.userId,
     tokenHash: hashToken(token),
     expiresAt,
   };
 
-  if (metadata?.ipAddress) values.ipAddress = metadata.ipAddress;
-  if (metadata?.userAgent) values.userAgent = metadata.userAgent.slice(0, 500);
+  if (input.activeOrganizationId) values.activeOrganizationId = input.activeOrganizationId;
+  if (input.ipAddress) values.ipAddress = input.ipAddress;
+  if (input.userAgent) values.userAgent = input.userAgent.slice(0, 500);
 
   await db().insert(sessions).values(values);
 
@@ -50,30 +59,96 @@ export async function revokeCurrentSession() {
   store.delete(SESSION_COOKIE);
 }
 
+export async function revokeAllSessions(userId: string) {
+  await db().update(sessions).set({ revokedAt: new Date() }).where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)));
+  (await cookies()).delete(SESSION_COOKIE);
+}
+
+export async function setActiveOrganization(userId: string, sessionId: string, organizationId: string) {
+  const [membership] = await db()
+    .select({ id: organizationMembers.id })
+    .from(organizationMembers)
+    .where(and(
+      eq(organizationMembers.userId, userId),
+      eq(organizationMembers.organizationId, organizationId),
+    ))
+    .limit(1);
+  if (!membership) throw new ApiError(404, "MEMBERSHIP_NOT_FOUND", "المؤسسة غير متاحة لهذا الحساب.");
+  await db()
+    .update(sessions)
+    .set({ activeOrganizationId: organizationId })
+    .where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId), isNull(sessions.revokedAt)));
+}
+
 export async function currentSession() {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
   if (!token) return null;
 
-  const rows = await db()
+  const [base] = await db()
     .select({
       sessionId: sessions.id,
+      activeOrganizationId: sessions.activeOrganizationId,
+      lastSeenAt: sessions.lastSeenAt,
       userId: users.id,
       email: users.email,
       name: users.name,
-      organizationId: organizations.id,
-      organizationName: organizations.name,
-      role: organizationMembers.role,
     })
     .from(sessions)
     .innerJoin(users, eq(users.id, sessions.userId))
-    .leftJoin(organizationMembers, eq(organizationMembers.userId, users.id))
-    .leftJoin(organizations, eq(organizations.id, organizationMembers.organizationId))
     .where(and(eq(sessions.tokenHash, hashToken(token)), isNull(sessions.revokedAt), gt(sessions.expiresAt, new Date())))
     .limit(1);
 
-  const session = rows[0];
-  if (!session) return null;
+  if (!base) return null;
 
-  await db().update(sessions).set({ lastSeenAt: new Date() }).where(eq(sessions.id, session.sessionId));
-  return session;
+  let activeOrganizationId = base.activeOrganizationId;
+  if (!activeOrganizationId) {
+    const memberships = await db()
+      .select({ organizationId: organizationMembers.organizationId })
+      .from(organizationMembers)
+      .where(eq(organizationMembers.userId, base.userId))
+      .orderBy(asc(organizationMembers.createdAt))
+      .limit(2);
+    if (memberships.length === 1) {
+      activeOrganizationId = memberships[0].organizationId;
+      await db().update(sessions).set({ activeOrganizationId }).where(eq(sessions.id, base.sessionId));
+    }
+  }
+
+  const [membership] = activeOrganizationId
+    ? await db()
+      .select({
+        organizationId: organizations.id,
+        organizationName: organizations.name,
+        role: organizationMembers.role,
+      })
+      .from(organizationMembers)
+      .innerJoin(organizations, eq(organizations.id, organizationMembers.organizationId))
+      .where(and(
+        eq(organizationMembers.userId, base.userId),
+        eq(organizationMembers.organizationId, activeOrganizationId),
+      ))
+      .limit(1)
+    : [];
+
+  if (activeOrganizationId && !membership) {
+    await db().update(sessions).set({ activeOrganizationId: null }).where(eq(sessions.id, base.sessionId));
+  }
+
+  const staleBefore = new Date(Date.now() - LAST_SEEN_WRITE_INTERVAL_MS);
+  if (base.lastSeenAt < staleBefore) {
+    await db()
+      .update(sessions)
+      .set({ lastSeenAt: new Date() })
+      .where(and(eq(sessions.id, base.sessionId), lt(sessions.lastSeenAt, staleBefore)));
+  }
+
+  return {
+    sessionId: base.sessionId,
+    userId: base.userId,
+    email: base.email,
+    name: base.name,
+    organizationId: membership?.organizationId ?? null,
+    organizationName: membership?.organizationName ?? null,
+    role: membership?.role ?? null,
+  };
 }

@@ -1,32 +1,38 @@
-# Authentication and tenant bootstrap
+# المصادقة والمؤسسات
 
-## Flow
+## التسجيل والدخول
 
-1. `POST /api/auth/register` creates the user, the first organization, an owner membership, an audit event, and a database-backed session.
-2. The browser receives the opaque session token only in an `HttpOnly`, `SameSite=Lax` cookie.
-3. PostgreSQL stores only a SHA-256 hash of the session token.
-4. `POST /api/auth/login` verifies the scrypt-derived password hash and creates a new session.
-5. `POST /api/auth/logout` revokes the current database session and clears the cookie.
-6. `/dashboard` requires a valid non-expired, non-revoked session and resolves the user organization from membership records.
+- `POST /api/auth/register` يتحقق عبر Zod ويطبق rate limit، ثم ينشئ المستخدم والمؤسسة وعضوية owner وسجل التدقيق داخل transaction.
+- كلمات المرور تُشتق باستخدام scrypt بمعاملات محفوظة داخل hash مع salt عشوائي. القيم القديمة بصيغة المشروع السابقة تُقرأ للتوافق.
+- `POST /api/auth/login` يستخدم رسالة عامة لبيانات الدخول الخاطئة، ويطبق حدودًا على IP والبريد.
+- الجلسة العشوائية بطول 32 بايت؛ PostgreSQL يخزن SHA-256 فقط.
+- Cookie هي `HttpOnly`, `SameSite=Lax`, `Secure` في الإنتاج، ولها انتهاء صريح.
 
-## Password storage
+## المؤسسة النشطة
 
-Passwords use Node.js `scrypt` with a random 16-byte salt and a 64-byte derived key. The stored value contains the algorithm marker, salt, and derived key. Plaintext passwords are never stored or logged.
+`sessions.active_organization_id` هو مصدر المؤسسة الحالية. لا يقبل أي Route `organizationId` من العميل لتفويض المورد. تبديل المؤسسة يثبت أولًا أن المستخدم عضو فيها ثم يحدث الجلسة.
 
-## Production migration
+## الأدوار
 
-Run:
+| العملية | owner | admin | developer | operator | viewer |
+|---|---:|---:|---:|---:|---:|
+| قراءة المزودات | نعم | نعم | نعم | نعم | نعم |
+| إدارة الأسرار والمزودات | نعم | نعم | نعم | لا | لا |
+| إدارة الوكلاء | نعم | نعم | نعم | لا | لا |
+| تشغيل الوكلاء | نعم | نعم | نعم | نعم | لا |
+| قراءة التشغيل | نعم | نعم | نعم | نعم | نعم |
+| إدارة الأعضاء | نعم | نعم بقيود | لا | لا | لا |
+| سجل التدقيق والتشخيص | نعم | نعم | لا | لا | لا |
 
-```bash
-npm run db:migrate
-```
+المدير لا يغير المالك ولا ينقل الملكية ولا يعدّل مديرًا آخر. نقل الملكية مخفي وغير منفذ.
 
-The additive migration is `drizzle/0002_auth_sessions.sql`.
+## الجلسات
 
-## Security properties
+- `lastSeenAt` لا يكتب مع كل طلب؛ التحديث متباعد 15 دقيقة.
+- تغيير كلمة المرور يبطل كل الجلسات ويصدر جلسة جديدة.
+- API مفاتيح المنصة تحدّث `lastUsedAt` بصورة متباعدة.
+- CSRF يعتمد Origin الموثوق و`APP_URL` للعمليات المعتمدة على Cookie.
 
-- Session values are never stored in LocalStorage.
-- Session tokens are never stored in plaintext in PostgreSQL.
-- Cookies are `Secure` in production, `HttpOnly`, scoped to `/`, and `SameSite=Lax`.
-- Dashboard data is filtered by the organization resolved from the authenticated membership.
-- Registration and login produce audit records without passwords or tokens.
+## تدفقات البريد
+
+استعادة كلمة المرور، تأكيد البريد ودعوات البريد غير معروضة لأن المشروع لا يملك مزود إرسال بريد. لا توجد صفحات أو نجاحات وهمية لهذه التدفقات.

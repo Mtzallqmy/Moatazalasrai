@@ -6,6 +6,7 @@ node_modules/
 out/
 .vercel/
 .next-on-pages/
+.open-next/
 
 # env
 .env
@@ -13,11 +14,18 @@ out/
 
 # testing
 coverage/
+test-results/
+playwright-report/
 
 # misc
 .DS_Store
 *.log
 npm-debug.log*
+tsconfig.tsbuildinfo
+
+# local workspace metadata
+.openai/
+.sites-runtime/
 
 # drizzle
 drizzle/meta/

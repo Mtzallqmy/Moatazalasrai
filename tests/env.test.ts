@@ -61,4 +61,10 @@ describe("runtime environment validation", () => {
     setEnv("APP_URL", "http://example.com");
     expect(() => env()).toThrow("HTTPS");
   });
+
+  it("requires APP_URL in production", () => {
+    setEnv("NODE_ENV", "production");
+    deleteEnv("APP_URL");
+    expect(() => env()).toThrow("APP_URL");
+  });
 });

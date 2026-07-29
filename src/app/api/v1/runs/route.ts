@@ -1,32 +1,41 @@
-import { NextResponse } from "next/server";
 import { authenticateApiKey } from "@/lib/auth/api-key";
 import { executeAgentRun, listOrganizationRuns } from "@/lib/agents/runtime";
+import { apiFailure, apiSuccess, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
+import { platformRunSchema } from "@/lib/http/contracts";
 
 export async function GET(request: Request) {
-  const principal = await authenticateApiKey(request);
-  if (!principal) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const url = new URL(request.url);
-  const limit = Number(url.searchParams.get("limit") ?? 50);
-  const runs = await listOrganizationRuns(principal.organizationId, Number.isFinite(limit) ? limit : 50);
-  return NextResponse.json({ runs });
+  const requestId = getRequestId(request);
+  try {
+    const principal = await authenticateApiKey(request);
+    if (!principal) return apiFailure(401, "UNAUTHORIZED", "مفتاح المنصة غير صالح.", requestId);
+    const url = new URL(request.url);
+    const limit = Number(url.searchParams.get("limit") ?? 50);
+    const result = await listOrganizationRuns({
+      organizationId: principal.organizationId,
+      page: 1,
+      limit: Math.min(Math.max(Number.isFinite(limit) ? limit : 50, 1), 100),
+    });
+    return apiSuccess({ runs: result.rows, total: result.total }, requestId);
+  } catch (error) {
+    return handleApiError(error, requestId, "/api/v1/runs");
+  }
 }
 
 export async function POST(request: Request) {
-  const principal = await authenticateApiKey(request);
-  if (!principal) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const body = await request.json().catch(() => null) as { agentId?: string; input?: string; conversationId?: string } | null;
-  if (!body?.agentId || !body.input?.trim()) {
-    return NextResponse.json({ error: "agentId and input are required." }, { status: 400 });
-  }
+  const requestId = getRequestId(request);
   try {
+    const principal = await authenticateApiKey(request);
+    if (!principal) return apiFailure(401, "UNAUTHORIZED", "مفتاح المنصة غير صالح.", requestId);
+    const body = await parseJson(request, platformRunSchema);
     const run = await executeAgentRun({
       organizationId: principal.organizationId,
       agentId: body.agentId,
-      message: body.input.trim(),
+      message: body.input,
       conversationId: body.conversationId,
+      requestId,
     });
-    return NextResponse.json({ run }, { status: 201 });
+    return apiSuccess({ run }, requestId, 201);
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Run failed." }, { status: 502 });
+    return handleApiError(error, requestId, "/api/v1/runs");
   }
 }
