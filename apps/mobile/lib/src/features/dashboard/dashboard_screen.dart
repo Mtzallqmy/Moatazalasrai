@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:moataz_ai_mobile/src/core/brand_config.dart';
 import 'package:moataz_ai_mobile/src/features/auth/auth_repository.dart';
 import 'package:moataz_ai_mobile/src/features/chat/conversation_screen.dart';
@@ -822,7 +823,7 @@ class _Settings extends ConsumerWidget {
         children: socialLinks.map((item) => IconButton(
           tooltip: item.url.isEmpty ? '${item.label} — الرابط غير مضاف بعد' : item.label,
           onPressed: item.url.isEmpty ? null : () {},
-          icon: Icon(item.icon, size: 20),
+          icon: FaIcon(item.icon, size: 20),
         )).toList(),
       ),
       const Center(child: Text('برمجة وتطوير معتز العلقمي', style: TextStyle(fontWeight: FontWeight.w800))),
