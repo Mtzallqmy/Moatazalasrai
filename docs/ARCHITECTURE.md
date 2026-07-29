@@ -14,12 +14,13 @@
 
 ```mermaid
 flowchart TD
-  UI["واجهة RTL"] --> API["Route Handlers"]
+  UI["Web RTL + Flutter"] --> API["Route Handlers"]
   API --> AUTH["جلسة + RBAC + Zod + CSRF"]
   AUTH --> SERVICES["خدمات المجال"]
   SERVICES --> DB["Drizzle / PostgreSQL"]
   SERVICES --> ADAPTERS["Provider Adapters"]
   ADAPTERS --> PROVIDERS["OpenAI / Anthropic / Gemini / Compatible"]
+  SERVICES --> MCP["MCP Streamable HTTP"]
 ```
 
 ## الطبقات
@@ -40,6 +41,28 @@ flowchart TD
 ## المحادثة والتشغيل
 
 رسالة المستخدم تُحفظ أولًا. يبنى السياق من الرسائل الأخيرة بميزانية تقديرية ويضاف system instruction على الخادم فقط. ينشأ Run في `queued` ثم `running`. أحداث مهمة فقط تُحفظ؛ لا يكتب كل token إلى قاعدة البيانات. بعد اكتمال البث تُحفظ رسالة المساعد والـusage والنتيجة داخل transaction.
+
+## فرق الوكلاء
+
+يحمل `agent_teams` وكيلًا مشرفًا وأعضاء ذوي أدوار واضحة. عند التشغيل تُنشأ
+محادثة وتشغيل مستقلان لكل عامل وتنفذ الأعمال بعدد توازٍ محدود. بعد نجاح العمال
+يتلقى المشرف المدخل الأصلي والنواتج الموسومة ويولف الرد النهائي. تخزن
+`agent_team_runs` الحالة والنتيجة، وتخزن `agent_team_run_steps` كل خطوة ومدتها
+ومعرف Run الأساسي.
+
+## بوابة MCP
+
+يتصل `src/ai/mcp/client.ts` بخوادم MCP البعيدة عبر Streamable HTTP باستخدام
+SDK الرسمي. يطبق عنوان الخادم فحص SSRF نفسه المستخدم للمزودات المخصصة. تحفظ
+عملية الاكتشاف اسم الأداة ووصفها وJSON Schema وبصمة التغيير، بينما يسجل كل
+استدعاء مدخلاته ونتيجته ومدته وخطئه. لا تُمنح أداة تلقائيًا لأي وكيل؛ الربط
+والسماح الصريح محفوظان في `agent_mcp_tools`.
+
+## تطبيق Flutter
+
+`apps/mobile` عميل أصلي مستقل بصريًا عن DOM الموقع. يتصل بـREST، يحفظ الرموز
+في Android Keystore، ويدور Refresh Token عند أول 401. كل استعلام هاتف مقيد
+بعضوية المستخدم؛ المحادثات والتشغيل لا تعيد بيانات مستخدم آخر في المؤسسة.
 
 ## الاعتمادية
 

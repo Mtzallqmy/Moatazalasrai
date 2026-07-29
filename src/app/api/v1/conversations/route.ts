@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { agents, auditLogs, attachments, conversationFolders, conversations, messages } from "@/db/schema";
-import { authenticateApiKey } from "@/lib/auth/api-key";
+import { authenticateApiKey, requireApiScope } from "@/lib/auth/api-key";
 import { ApiError, apiFailure, apiSuccess, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { uuidSchema } from "@/lib/http/contracts";
 import { z } from "zod";
@@ -26,12 +26,14 @@ export async function GET(request: Request) {
   try {
     const principal = await authenticateApiKey(request);
     if (!principal) return apiFailure(401, "UNAUTHORIZED", "مفتاح المنصة غير صالح.", requestId);
+    requireApiScope(principal, "conversations:read");
     const conversationId = new URL(request.url).searchParams.get("conversationId");
     if (conversationId) {
       const id = uuidSchema.parse(conversationId);
       const [owned] = await db().select({ id: conversations.id }).from(conversations).where(and(
         eq(conversations.id, id),
         eq(conversations.organizationId, principal.organizationId),
+        principal.userId ? eq(conversations.createdByUserId, principal.userId) : undefined,
       )).limit(1);
       if (!owned) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة.");
       const rows = await db().select({
@@ -71,7 +73,10 @@ export async function GET(request: Request) {
       archivedAt: conversations.archivedAt,
       createdAt: conversations.createdAt,
       updatedAt: conversations.updatedAt,
-    }).from(conversations).where(eq(conversations.organizationId, principal.organizationId))
+    }).from(conversations).where(and(
+      eq(conversations.organizationId, principal.organizationId),
+      principal.userId ? eq(conversations.createdByUserId, principal.userId) : undefined,
+    ))
       .orderBy(desc(conversations.updatedAt)).limit(100);
     return apiSuccess({ conversations: rows }, requestId);
   } catch (error) {
@@ -84,6 +89,7 @@ export async function POST(request: Request) {
   try {
     const principal = await authenticateApiKey(request);
     if (!principal) return apiFailure(401, "UNAUTHORIZED", "مفتاح المنصة غير صالح.", requestId);
+    requireApiScope(principal, "conversations:write");
     const body = await parseJson(request, createSchema);
     const [agent] = await db().select({ id: agents.id, name: agents.name }).from(agents).where(and(
       eq(agents.id, body.agentId),
@@ -95,6 +101,7 @@ export async function POST(request: Request) {
       organizationId: principal.organizationId,
       agentId: agent.id,
       title: body.title ?? `محادثة مع ${agent.name}`,
+      createdByUserId: principal.userId,
     }).returning();
     return apiSuccess({ conversation: created }, requestId, 201);
   } catch (error) {
@@ -107,6 +114,7 @@ export async function PATCH(request: Request) {
   try {
     const principal = await authenticateApiKey(request);
     if (!principal) return apiFailure(401, "UNAUTHORIZED", "مفتاح المنصة غير صالح.", requestId);
+    requireApiScope(principal, "conversations:write");
     const body = await parseJson(request, mutationSchema, 16 * 1024);
     const updated = await db().transaction(async (tx) => {
       if (body.action === "move" && body.folderId) {
@@ -125,6 +133,7 @@ export async function PATCH(request: Request) {
       const [conversation] = await tx.update(conversations).set(changes).where(and(
         eq(conversations.id, body.conversationId),
         eq(conversations.organizationId, principal.organizationId),
+        principal.userId ? eq(conversations.createdByUserId, principal.userId) : undefined,
       )).returning();
       if (!conversation) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة.");
       await tx.insert(auditLogs).values({
@@ -149,11 +158,13 @@ export async function DELETE(request: Request) {
   try {
     const principal = await authenticateApiKey(request);
     if (!principal) return apiFailure(401, "UNAUTHORIZED", "مفتاح المنصة غير صالح.", requestId);
+    requireApiScope(principal, "conversations:write");
     const body = await parseJson(request, deleteSchema, 8 * 1024);
     const deleted = await db().transaction(async (tx) => {
       const [conversation] = await tx.update(conversations).set({ deletedAt: new Date(), updatedAt: new Date() }).where(and(
         eq(conversations.id, body.conversationId),
         eq(conversations.organizationId, principal.organizationId),
+        principal.userId ? eq(conversations.createdByUserId, principal.userId) : undefined,
         isNull(conversations.deletedAt),
       )).returning({ id: conversations.id });
       if (!conversation) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة.");

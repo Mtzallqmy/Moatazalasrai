@@ -2,7 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { integrations } from "@/db/schema";
-import { authenticateApiKey } from "@/lib/auth/api-key";
+import { authenticateApiKey, requireApiScope } from "@/lib/auth/api-key";
 import { ApiError, apiFailure, apiSuccess, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { listGitHubRepositories, readGitHubFile } from "@/lib/integrations/github";
 import { decryptSecret } from "@/lib/security/encryption";
@@ -23,6 +23,7 @@ export async function POST(request: Request) {
   try {
     const principal = await authenticateApiKey(request);
     if (!principal) return apiFailure(401, "UNAUTHORIZED", "مفتاح المنصة غير صالح.", requestId);
+    requireApiScope(principal, "github:read");
     const body = await parseJson(request, actionSchema, 16 * 1024);
     const [github] = await db().select().from(integrations).where(and(
       eq(integrations.organizationId, principal.organizationId),

@@ -2,8 +2,10 @@
 
 ## واجهة التطبيقات الأصلية
 
-يستخدم تطبيق Android والمسارات الخارجية واجهة `/api/v1/*` مع مفتاح منصة
-في `Authorization: Bearer`. تدعم المحادثات الإنشاء والقائمة والرسائل وإعادة
+يستخدم تطبيق Android واجهة `/api/mobile/v1/*` لإصدار جلسة جهاز ثم واجهة
+`/api/v1/*` مع Access Token قصير العمر في `Authorization: Bearer`. لا يُضمّن
+التطبيق مفتاح منصة. تستخدم الأتمتة الخادمية Platform API Key محدود النطاقات.
+تدعم المحادثات الإنشاء والقائمة والرسائل وإعادة
 التسمية والأرشفة والاستعادة والتثبيت والنقل والحذف المنطقي. وتدعم
 `PATCH /api/v1/messages` تعديل الرسالة أو حذفها أو استعادتها. جميع الموارد
 معزولة بالمؤسسة المرتبطة بالمفتاح وتستخدم غلاف الاستجابة الموحد.
@@ -72,7 +74,22 @@
 
 ## Platform API
 
-المسارات تحت `/api/v1` تستخدم `Authorization: Bearer <platform-api-key>`. يجب تخزين المفتاح الأصلي خارجيًا لأنه يظهر مرة واحدة عند bootstrap. واجهة المتصفح الأساسية لا تحتاج bootstrap وتستخدم جلسات المستخدم.
+المسارات تحت `/api/v1` تقبل `Authorization: Bearer <platform-api-key>` أو رمز
+الهاتف `mat_…`. يجب تخزين مفتاح المنصة الأصلي خارجيًا لأنه يظهر مرة واحدة عند
+الإنشاء، وتُطبق نطاقات مثل `agents:read`, `conversations:write`, `runs:write`,
+`teams:write`.
+
+## جلسات الهاتف
+
+| المسار | الطريقة | المصادقة | الوظيفة |
+|---|---|---|---|
+| `/api/mobile/v1/auth/login` | POST | عامة + rate limit | التحقق واختيار المؤسسة وإصدار رمزين |
+| `/api/mobile/v1/auth/refresh` | POST | Refresh Token | تدوير الرمزين وإبطال السابق |
+| `/api/mobile/v1/auth/logout` | POST | Refresh Token | إبطال جلسة الجهاز |
+| `/api/mobile/v1/me` | GET | Access Token | الهوية والعضوية والنطاقات |
+
+رمز الوصول مدته 15 دقيقة ورمز التحديث 30 يومًا. لا تحفظ القاعدة القيم الأصلية؛
+تحفظ SHA-256 hash فقط.
 # API v1 للتطبيقات الأصلية
 
 جميع الاستجابات JSON موحدة وتحتوي `requestId`. المصادقة عبر `Authorization: Bearer <PLATFORM_API_KEY>`. لا تستخدم Cookies الخاصة بلوحة الويب داخل تطبيق Android.
@@ -85,6 +102,8 @@
 | `/api/v1/chat` | POST | رسالة ومرفقات وتشغيل فعلي |
 | `/api/v1/files` | GET, POST | قائمة/تنزيل ورفع multipart |
 | `/api/v1/runs` | GET, POST | التشغيل والسجل |
+| `/api/v1/teams` | GET, POST | فرق الوكلاء |
+| `/api/v1/team-runs` | GET, POST | التشغيل المتوازي ونتيجة المشرف؛ يتطلب `Idempotency-Key` |
 | `/api/v1/integrations` | GET | صحة التكاملات دون أسرار |
 | `/api/v1/github` | POST | عرض المستودعات أو قراءة ملف |
 

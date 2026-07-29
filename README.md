@@ -17,6 +17,10 @@
 - محادثات محفوظة، سياق سابق بميزانية Tokens تقديرية، Streaming، إيقاف، إعادة محاولة، إعادة تسمية، أرشفة وحذف.
 - دورة تشغيل `queued → running → completed / failed / cancelled` وأحداث فعلية ومعرّفات طلب واستهلاك Tokens عندما يوفره المزود.
 - لوحة عربية RTL متجاوبة للمزودات والوكلاء والمحادثات والتشغيل والأعضاء والتدقيق والإعدادات والتشخيص.
+- نظام تصميم جديد هادئ بواجهة فاتحة ووضع داكن، لوحة كثيفة للمؤشرات، Sidebar ثابت لسطح المكتب وDrawer حقيقي للهاتف، وخط Noto Sans Arabic مضمّن محليًا.
+- فرق وكلاء حقيقية: عمال يعملون بالتوازي ثم وكيل مشرف يقرأ نواتجهم ويولّف النتيجة، مع حفظ الفريق والتشغيل وكل خطوة في PostgreSQL.
+- بوابة MCP حقيقية مبنية على SDK الرسمي عبر Streamable HTTP: إضافة الخوادم، اكتشاف الأدوات، مزامنة مخططاتها، تنفيذها، وحفظ سجل الاستدعاء والمدة والأخطاء.
+- تطبيق Flutter أصلي داخل `apps/mobile` لا يستخدم WebView؛ يسجل الدخول بجلسة جهاز قصيرة، يخزن الرموز في Android Keystore، ويستهلك REST API للمؤشرات والمحادثات.
 - Health وreadiness منفصلان، Security headers، CSRF/Origin checks، rate limits مخزنة، ورسائل API موحدة.
 - تكامل Telegram عبر Webhook موثّق، ربط كل محادثة بالوكيل، أوامر `/new` و`/status` و`/github repos`، ومعالجة خلفية تمنع تعطيل استقبال التحديثات.
 - تكامل GitHub بتوكن مشفّر للتحقق وعرض المستودعات وقراءة الملفات عبر API مضبوط المسارات.
@@ -75,9 +79,11 @@ npm run db:migrate
 npm run db:studio
 ```
 
-الجداول الأساسية: `users`, `sessions`, `organizations`, `organization_members`, `provider_credentials`, `agents`, `agent_versions`, `conversations`, `messages`, `runs`, `run_events`, `platform_api_keys`, `audit_logs`, `rate_limits`.
+الجداول الأساسية: `users`, `sessions`, `mobile_sessions`, `organizations`, `organization_members`, `provider_credentials`, `agents`, `agent_versions`, `conversations`, `messages`, `runs`, `run_events`, `platform_api_keys`, `audit_logs`, `rate_limits`.
 
 جداول التكامل والتخزين: `integrations`, `telegram_chats`, `telegram_updates`, `attachments`.
+
+جداول MCP والفرق: `mcp_servers`, `mcp_tools`, `agent_mcp_tools`, `mcp_tool_calls`, `agent_teams`, `agent_team_members`, `agent_team_runs`, `agent_team_run_steps`.
 
 جداول التوسعة: `agent_memories`, `knowledge_bases`, `knowledge_documents`, `knowledge_chunks`, `background_jobs`, `tool_approvals`.
 
@@ -89,13 +95,25 @@ npm run db:studio
 
 ## API لتطبيق Android
 
-عقد الاكتشاف متاح في `/api/v1/openapi`. كل المسارات المحمية تستخدم:
+عقد OpenAPI متاح في `/api/v1/openapi`. التطبيق الأصلي لا يحتوي مفتاح منصة ثابتًا؛ يبدأ من:
 
 ```http
-Authorization: Bearer <PLATFORM_API_KEY>
+POST /api/mobile/v1/auth/login
+POST /api/mobile/v1/auth/refresh
+Authorization: Bearer mat_<SHORT_LIVED_ACCESS_TOKEN>
 ```
 
-المسارات الأساسية: `/api/v1/agents`, `/api/v1/conversations`, `/api/v1/chat`, `/api/v1/files`, `/api/v1/runs`, `/api/v1/integrations`, `/api/v1/github`.
+وتظل مفاتيح المنصة ذات النطاقات متاحة للتكاملات الخادمية. المسارات الأساسية: `/api/v1/agents`, `/api/v1/conversations`, `/api/v1/chat`, `/api/v1/files`, `/api/v1/runs`, `/api/v1/teams`, `/api/v1/team-runs`, `/api/v1/integrations`, `/api/v1/github`.
+
+تطبيق Flutter:
+
+```bash
+cd apps/mobile
+flutter pub get
+flutter run --dart-define=API_BASE_URL=https://your-domain.example
+```
+
+راجع [دليل تطبيق Android](apps/mobile/README.md) و[دليل API](docs/API.md).
 
 ## التحقق قبل الدمج
 
@@ -133,6 +151,8 @@ npm run test:e2e
 - لا توجد استعادة كلمة مرور أو تأكيد بريد أو دعوات بريد قبل إعداد مزود بريد حقيقي.
 - لا يوجد دفع أو اشتراك أو فوترة.
 - إيقاف Streaming يستخدم `AbortController` ويكون فوريًا داخل instance نفسه؛ تشغيل عدة replicas يحتاج قناة إلغاء مشتركة.
+- تشغيل فرق الوكلاء ينفذ حاليًا داخل طلب API مع تخزين كامل للخطوات؛ الأحمال الطويلة جدًا تحتاج نقل المنفذ إلى Worker.
+- بوابة MCP تنفذ الاتصال والاكتشاف والاستدعاء فعليًا، أما منح أداة لوكيل فيظهر في مخطط البيانات ولا يُدخل الأداة تلقائيًا في حلقة provider tool-calling قبل إضافة سياسة موافقات مناسبة.
 - ميزانية السياق تقديرية لأن حدود النماذج تختلف؛ لا يتم اختلاق usage عند غيابها من المزود.
 - معالجة وثائق المعرفة تعمل في Worker مستقل؛ تشغيل النموذج المتدفق يبقى في Web للمحافظة على البث.
 - دعم النشر لا يعني أن نشرًا إنتاجيًا حيًا تم إجراؤه. راجع نتائج التحقق الفعلية في تقرير التسليم.

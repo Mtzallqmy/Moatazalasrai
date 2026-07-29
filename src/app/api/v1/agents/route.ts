@@ -1,7 +1,7 @@
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { agentVersions, agents, providerCredentials } from "@/db/schema";
-import { authenticateApiKey } from "@/lib/auth/api-key";
+import { authenticateApiKey, requireApiScope } from "@/lib/auth/api-key";
 import { ApiError, apiFailure, apiSuccess, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { agentCreateSchema } from "@/lib/http/contracts";
 
@@ -10,6 +10,7 @@ export async function GET(request: Request) {
   try {
     const principal = await authenticateApiKey(request);
     if (!principal) return apiFailure(401, "UNAUTHORIZED", "مفتاح المنصة غير صالح.", requestId);
+    requireApiScope(principal, "agents:read");
     const rows = await db().select().from(agents)
       .where(eq(agents.organizationId, principal.organizationId))
       .orderBy(desc(agents.updatedAt));
@@ -24,6 +25,7 @@ export async function POST(request: Request) {
   try {
     const principal = await authenticateApiKey(request);
     if (!principal) return apiFailure(401, "UNAUTHORIZED", "مفتاح المنصة غير صالح.", requestId);
+    requireApiScope(principal, "agents:write");
     const body = await parseJson(request, agentCreateSchema);
     const [credential] = await db().select({
       id: providerCredentials.id,

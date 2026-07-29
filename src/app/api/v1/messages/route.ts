@@ -2,7 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { auditLogs, conversations, messages } from "@/db/schema";
-import { authenticateApiKey } from "@/lib/auth/api-key";
+import { authenticateApiKey, requireApiScope } from "@/lib/auth/api-key";
 import { ApiError, apiFailure, apiSuccess, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { uuidSchema } from "@/lib/http/contracts";
 
@@ -17,12 +17,17 @@ export async function PATCH(request: Request) {
   try {
     const principal = await authenticateApiKey(request);
     if (!principal) return apiFailure(401, "UNAUTHORIZED", "مفتاح المنصة غير صالح.", requestId);
+    requireApiScope(principal, "conversations:write");
     const body = await parseJson(request, mutationSchema, 40 * 1024);
     const result = await db().transaction(async (tx) => {
       const [owned] = await tx.select({ id: messages.id, role: messages.role })
         .from(messages)
         .innerJoin(conversations, eq(conversations.id, messages.conversationId))
-        .where(and(eq(messages.id, body.messageId), eq(conversations.organizationId, principal.organizationId)))
+        .where(and(
+          eq(messages.id, body.messageId),
+          eq(conversations.organizationId, principal.organizationId),
+          principal.userId ? eq(conversations.createdByUserId, principal.userId) : undefined,
+        ))
         .limit(1);
       if (!owned) throw new ApiError(404, "MESSAGE_NOT_FOUND", "الرسالة غير موجودة.");
       if (body.action === "edit" && owned.role !== "user") {

@@ -2,7 +2,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { attachments, conversations, messages } from "@/db/schema";
 import { executeAgentRun } from "@/lib/agents/runtime";
-import { authenticateApiKey } from "@/lib/auth/api-key";
+import { authenticateApiKey, requireApiScope } from "@/lib/auth/api-key";
 import { apiFailure, apiSuccess, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { chatStreamSchema } from "@/lib/http/contracts";
 import { attachmentContext } from "@/lib/storage/attachments";
@@ -12,6 +12,7 @@ export async function POST(request: Request) {
   try {
     const principal = await authenticateApiKey(request);
     if (!principal) return apiFailure(401, "UNAUTHORIZED", "مفتاح المنصة غير صالح.", requestId);
+    requireApiScope(principal, "chat:write");
     const body = await parseJson(request, chatStreamSchema, 64 * 1024);
     const [conversation] = await db().select({
       id: conversations.id,
@@ -19,6 +20,7 @@ export async function POST(request: Request) {
     }).from(conversations).where(and(
       eq(conversations.id, body.conversationId),
       eq(conversations.organizationId, principal.organizationId),
+      principal.userId ? eq(conversations.createdByUserId, principal.userId) : undefined,
     )).limit(1);
     if (!conversation) return apiFailure(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة.", requestId);
     const context = await attachmentContext(principal.organizationId, conversation.id, body.attachmentIds);

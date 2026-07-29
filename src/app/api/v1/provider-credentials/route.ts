@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, providerCredentials } from "@/db/schema";
-import { authenticateApiKey } from "@/lib/auth/api-key";
+import { authenticateApiKey, requireApiScope } from "@/lib/auth/api-key";
 import { ApiError, apiFailure, apiSuccess, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { providerInputSchema } from "@/lib/http/contracts";
 import { defaultBaseUrl, validateProvider } from "@/lib/providers/registry";
@@ -13,6 +13,7 @@ export async function GET(request: Request) {
   try {
     const principal = await authenticateApiKey(request);
     if (!principal) return apiFailure(401, "UNAUTHORIZED", "مفتاح المنصة غير صالح.", requestId);
+    requireApiScope(principal, "providers:read");
     const rows = await db().select({
       id: providerCredentials.id,
       provider: providerCredentials.provider,
@@ -37,6 +38,7 @@ export async function POST(request: Request) {
   try {
     const principal = await authenticateApiKey(request);
     if (!principal) return apiFailure(401, "UNAUTHORIZED", "مفتاح المنصة غير صالح.", requestId);
+    requireApiScope(principal, "providers:write");
     const body = await parseJson(request, providerInputSchema, 16 * 1024);
     if (!body.testModel) throw new ApiError(400, "MODEL_TEST_REQUIRED", "يلزم نموذج لإجراء اختبار توليد حقيقي.");
     const requestedBaseUrl = body.baseUrl || defaultBaseUrl(body.provider);

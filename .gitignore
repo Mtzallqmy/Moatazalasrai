@@ -1,5 +1,6 @@
 # dependencies
 node_modules/
+.npm-cache/
 
 # next.js
 .next/
@@ -26,6 +27,15 @@ tsconfig.tsbuildinfo
 # local workspace metadata
 .openai/
 .sites-runtime/
+
+# flutter
+apps/mobile/.dart_tool/
+apps/mobile/.flutter-plugins*
+apps/mobile/build/
+apps/mobile/android/local.properties
+apps/mobile/android/key.properties
+*.jks
+*.keystore
 
 # drizzle
 drizzle/meta/
