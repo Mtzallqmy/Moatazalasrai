@@ -1,5 +1,5 @@
 import { randomBytes, scrypt } from "node:crypto";
-import { neon } from "@neondatabase/serverless";
+import postgres from "postgres";
 
 function deriveKey(password, salt, length) {
   return new Promise((resolve, reject) => {
@@ -32,53 +32,63 @@ if (!email || !password) {
   process.exit(0);
 }
 
-const sql = neon(databaseUrl);
-const existingUsers = await sql`select id, password_hash from users where email = ${email} limit 1`;
-let userId = existingUsers[0]?.id;
+const sql = postgres(databaseUrl, {
+  max: 1,
+  connect_timeout: 10,
+  idle_timeout: 20,
+  prepare: false,
+});
 
-if (!userId) {
-  const passwordHash = await hashPassword(password);
-  const inserted = await sql`
-    insert into users (email, name, password_hash)
-    values (${email}, ${name}, ${passwordHash})
-    returning id
+try {
+  const existingUsers = await sql`select id, password_hash from users where email = ${email} limit 1`;
+  let userId = existingUsers[0]?.id;
+
+  if (!userId) {
+    const passwordHash = await hashPassword(password);
+    const inserted = await sql`
+      insert into users (email, name, password_hash)
+      values (${email}, ${name}, ${passwordHash})
+      returning id
+    `;
+    userId = inserted[0]?.id;
+    if (!userId) throw new Error("Owner user could not be created.");
+  } else if (!existingUsers[0]?.password_hash) {
+    const passwordHash = await hashPassword(password);
+    await sql`update users set password_hash = ${passwordHash}, name = coalesce(name, ${name}), updated_at = now() where id = ${userId}`;
+  }
+
+  const memberships = await sql`
+    select organization_id from organization_members where user_id = ${userId} order by created_at asc limit 1
   `;
-  userId = inserted[0]?.id;
-  if (!userId) throw new Error("Owner user could not be created.");
-} else if (!existingUsers[0]?.password_hash) {
-  const passwordHash = await hashPassword(password);
-  await sql`update users set password_hash = ${passwordHash}, name = coalesce(name, ${name}), updated_at = now() where id = ${userId}`;
-}
+  let organizationId = memberships[0]?.organization_id;
 
-const memberships = await sql`
-  select organization_id from organization_members where user_id = ${userId} order by created_at asc limit 1
-`;
-let organizationId = memberships[0]?.organization_id;
+  if (!organizationId) {
+    const slug = `moataz-${randomBytes(4).toString("hex")}`;
+    const insertedOrganizations = await sql`
+      insert into organizations (name, slug)
+      values (${organizationName}, ${slug})
+      returning id
+    `;
+    organizationId = insertedOrganizations[0]?.id;
+    if (!organizationId) throw new Error("Owner organization could not be created.");
+    await sql`
+      insert into organization_members (organization_id, user_id, role)
+      values (${organizationId}, ${userId}, 'owner')
+      on conflict (organization_id, user_id) do update set role = 'owner'
+    `;
+  } else {
+    await sql`
+      update organization_members set role = 'owner'
+      where organization_id = ${organizationId} and user_id = ${userId}
+    `;
+  }
 
-if (!organizationId) {
-  const slug = `moataz-${randomBytes(4).toString("hex")}`;
-  const insertedOrganizations = await sql`
-    insert into organizations (name, slug)
-    values (${organizationName}, ${slug})
-    returning id
-  `;
-  organizationId = insertedOrganizations[0]?.id;
-  if (!organizationId) throw new Error("Owner organization could not be created.");
   await sql`
-    insert into organization_members (organization_id, user_id, role)
-    values (${organizationId}, ${userId}, 'owner')
-    on conflict (organization_id, user_id) do update set role = 'owner'
+    insert into audit_logs (organization_id, actor_type, actor_id, action, resource_type, resource_id, metadata)
+    values (${organizationId}, 'bootstrap', ${String(userId)}, 'owner.bootstrap.verified', 'user', ${String(userId)}, '{}'::jsonb)
   `;
-} else {
-  await sql`
-    update organization_members set role = 'owner'
-    where organization_id = ${organizationId} and user_id = ${userId}
-  `;
+
+  console.log(JSON.stringify({ level: "info", event: "owner.bootstrap.completed", email, organizationId }));
+} finally {
+  await sql.end({ timeout: 5 });
 }
-
-await sql`
-  insert into audit_logs (organization_id, actor_type, actor_id, action, resource_type, resource_id, metadata)
-  values (${organizationId}, 'bootstrap', ${String(userId)}, 'owner.bootstrap.verified', 'user', ${String(userId)}, '{}'::jsonb)
-`;
-
-console.log(JSON.stringify({ level: "info", event: "owner.bootstrap.completed", email, organizationId }));

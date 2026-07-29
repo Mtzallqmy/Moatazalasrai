@@ -28,4 +28,24 @@ describe("Railway deployment configuration", () => {
     expect(config.deploy?.healthcheckPath).toBe("/api/ready");
     expect(config.deploy?.healthcheckTimeout).toBeGreaterThanOrEqual(120);
   });
+
+  it("uses a Railway-compatible PostgreSQL TCP driver", async () => {
+    const packageJson = JSON.parse(await readFile("package.json", "utf8")) as {
+      dependencies?: Record<string, string>;
+    };
+    const databaseSource = await readFile("src/db/index.ts", "utf8");
+    const migrationSource = await readFile("scripts/migrate.mjs", "utf8");
+
+    expect(packageJson.dependencies?.postgres).toBeTruthy();
+    expect(databaseSource).toContain('from "drizzle-orm/postgres-js"');
+    expect(migrationSource).toContain('from "postgres"');
+  });
+
+  it("creates and records the required schema before every Railway release", async () => {
+    const migrationSource = await readFile("scripts/migrate.mjs", "utf8");
+
+    expect(migrationSource).toContain('CREATE TABLE IF NOT EXISTS "_platform_migrations"');
+    expect(migrationSource).toContain('INSERT INTO "_platform_migrations"');
+    expect(migrationSource).toContain("sql.begin");
+  });
 });
