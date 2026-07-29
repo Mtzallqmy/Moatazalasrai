@@ -157,11 +157,13 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
         attachmentIds: attachmentIds,
       );
       final saved = await ref.read(platformRepositoryProvider).messages(conversationId);
-      if (mounted) setState(() {
-        _messages
-          ..clear()
-          ..addAll(saved);
-      });
+      if (mounted) {
+        setState(() {
+          _messages
+            ..clear()
+            ..addAll(saved);
+        });
+      }
       ref.invalidate(dashboardDataProvider);
       _scrollToEnd();
     } catch (error) {
@@ -170,14 +172,18 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
         final saved = _conversationId == null
             ? <Map<String, dynamic>>[]
             : await ref.read(platformRepositoryProvider).messages(_conversationId!).catchError((_) => <Map<String, dynamic>>[]);
-        if (mounted) setState(() {
-          _messages
-            ..clear()
-            ..addAll(saved);
-        });
+        if (mounted) {
+          setState(() {
+            _messages
+              ..clear()
+              ..addAll(saved);
+          });
+        }
       }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() => _busy = false);
+      }
     }
   }
 
@@ -224,10 +230,12 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
     if (result == null) return;
     try {
       final saved = await ref.read(platformRepositoryProvider).saveChatAppearance(theme: result[0], wallpaper: result[1]);
-      if (mounted) setState(() {
-        _theme = saved['theme'] as String;
-        _wallpaper = saved['wallpaper'] as String;
-      });
+      if (mounted) {
+        setState(() {
+          _theme = saved['theme'] as String;
+          _wallpaper = saved['wallpaper'] as String;
+        });
+      }
     } catch (error) {
       if (mounted) _show(error);
     }
