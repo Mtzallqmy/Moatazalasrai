@@ -1,0 +1,146 @@
+name: Android arm64 Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version without the android-v prefix
+        required: true
+        default: "1.1.0"
+        type: string
+      api_base_url:
+        description: Production API base URL
+        required: true
+        default: "https://moatazalasrai-production.up.railway.app"
+        type: string
+  push:
+    branches:
+      - main
+    tags:
+      - "android-v*"
+    paths:
+      - ".github/workflows/android-release.yml"
+      - "apps/mobile/**"
+      - "src/app/api/mobile/**"
+      - "src/lib/auth/mobile.ts"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-release:
+    name: Build one arm64 APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Resolve release metadata
+        id: release
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#android-v}"
+          elif [[ -n "${{ inputs.version }}" ]]; then
+            version="${{ inputs.version }}"
+          else
+            version="$(sed -n 's/^version:[[:space:]]*\\([^+[:space:]]*\\).*/\\1/p' pubspec.yaml | head -n 1)"
+          fi
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid semantic version: ${version}" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "tag=android-v${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Hydrate Android wrapper
+        run: flutter create --platforms=android --org com.moataz --project-name moataz_ai_mobile .
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Configure release signing
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+        run: |
+          printf '%s' "${KEYSTORE_BASE64}" | base64 --decode > android/app/release-keystore.jks
+          {
+            echo "storePassword=${STORE_PASSWORD}"
+            echo "keyPassword=${KEY_PASSWORD}"
+            echo "keyAlias=${KEY_ALIAS}"
+            echo "storeFile=release-keystore.jks"
+          } > android/key.properties
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Build arm64 APK
+        env:
+          API_BASE_URL: ${{ inputs.api_base_url || 'https://moatazalasrai-production.up.railway.app' }}
+        run: >-
+          flutter build apk
+          --release
+          --target-platform android-arm64
+          --split-per-abi
+          --dart-define=API_BASE_URL=${API_BASE_URL}
+
+      - name: Prepare single artifact
+        shell: bash
+        run: |
+          source="build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
+          target="build/app/outputs/flutter-apk/Moataz-AI-${{ steps.release.outputs.version }}-arm64.apk"
+          test -f "${source}"
+          mv "${source}" "${target}"
+          echo "apk=${target}" >> "${GITHUB_ENV}"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Moataz-AI-${{ steps.release.outputs.version }}-arm64
+          path: apps/mobile/${{ env.apk }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          name: معتز AI Android ${{ steps.release.outputs.version }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            تطبيق معتز AI أصلي لنظام Android، متصل بالمنصة عبر API ولا يستخدم WebView.
+
+            - المعمارية: arm64-v8a
+            - الملف: APK واحد جاهز للتثبيت
+            - الخادم: ${{ inputs.api_base_url || 'https://moatazalasrai-production.up.railway.app' }}
+          files: apps/mobile/${{ env.apk }}

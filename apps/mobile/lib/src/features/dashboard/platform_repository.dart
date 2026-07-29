@@ -71,4 +71,20 @@ class PlatformRepository {
     return (ApiClient.payload(response)['messages'] as List<dynamic>? ?? const [])
         .cast<Map<String, dynamic>>();
   }
+
+  Future<Map<String, dynamic>> chatAppearance() async {
+    final response = await _api.dio.get<Map<String, dynamic>>('/api/mobile/v1/preferences');
+    return ApiClient.payload(response)['chat'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> saveChatAppearance({
+    required String theme,
+    required String wallpaper,
+  }) async {
+    final response = await _api.dio.put<Map<String, dynamic>>(
+      '/api/mobile/v1/preferences',
+      data: {'theme': theme, 'wallpaper': wallpaper},
+    );
+    return ApiClient.payload(response)['chat'] as Map<String, dynamic>;
+  }
 }

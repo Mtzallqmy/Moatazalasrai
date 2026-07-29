@@ -1,6 +1,14 @@
 "use client";
 
 import { FormEvent, useEffect, useRef, useState } from "react";
+import { Check, Palette, X } from "lucide-react";
+import {
+  chatThemeOptions,
+  chatWallpaperOptions,
+  type ChatAppearance,
+  type ChatThemeId,
+  type ChatWallpaperId,
+} from "@/lib/chat/appearance";
 
 type Agent = { id: string; name: string };
 type Conversation = { id: string; title: string | null; agentId: string; agentName: string; updatedAt: string };
@@ -10,7 +18,12 @@ type FailedUpload = { id: string; file: File; message: string };
 type ModelOption = { providerCredentialId: string; providerName: string; model: string; freeTierEligible: boolean };
 type Api<T> = { success?: boolean; data?: T; error?: { code?: string; message?: string; requestId?: string } };
 
-export function ChatConsole({ agents, initialConversations, initialConversationId }: { agents: Agent[]; initialConversations: Conversation[]; initialConversationId?: string }) {
+export function ChatConsole({ agents, initialConversations, initialConversationId, initialAppearance }: {
+  agents: Agent[];
+  initialConversations: Conversation[];
+  initialConversationId?: string;
+  initialAppearance: ChatAppearance;
+}) {
   const [conversations, setConversations] = useState(initialConversations);
   const [conversationId, setConversationId] = useState(
     initialConversations.some((item) => item.id === initialConversationId)
@@ -31,6 +44,9 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
   const [draft, setDraft] = useState("");
   const [models, setModels] = useState<ModelOption[]>([]);
   const [selectedModel, setSelectedModel] = useState("auto");
+  const [appearance, setAppearance] = useState(initialAppearance);
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
+  const [savingAppearance, setSavingAppearance] = useState(false);
   const streamController = useRef<AbortController | null>(null);
   const scrollAnchor = useRef<HTMLDivElement | null>(null);
 
@@ -355,6 +371,38 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
     }
   }
 
+  async function saveAppearance(next: ChatAppearance) {
+    const previous = appearance;
+    setAppearance(next);
+    setSavingAppearance(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/dashboard/chat/preferences", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(next),
+      });
+      const result = await response.json().catch(() => null) as Api<ChatAppearance> | null;
+      if (!response.ok || !result?.success || !result.data) {
+        throw new Error(result?.error?.message ?? "تعذر حفظ مظهر المحادثة.");
+      }
+      setAppearance(result.data);
+    } catch (cause) {
+      setAppearance(previous);
+      setError(cause instanceof Error ? cause.message : "تعذر حفظ مظهر المحادثة.");
+    } finally {
+      setSavingAppearance(false);
+    }
+  }
+
+  function selectTheme(theme: ChatThemeId) {
+    if (theme !== appearance.theme) void saveAppearance({ ...appearance, theme });
+  }
+
+  function selectWallpaper(wallpaper: ChatWallpaperId) {
+    if (wallpaper !== appearance.wallpaper) void saveAppearance({ ...appearance, wallpaper });
+  }
+
   const activeConversation = conversations.find((item) => item.id === conversationId);
 
   return (
@@ -387,18 +435,50 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
         </div>
       </aside>
       <section className="soft-card flex min-h-[680px] flex-col overflow-hidden">
-        <div className="chat-header border-b p-4 sm:p-5" style={{ borderColor: "var(--border)" }}>
-          <div className="flex items-center gap-3"><span className="brand-mark !mb-0 !h-10 !w-10">AI</span><div><h2 className="font-black">{activeConversation?.title || "دردشة الوكيل"}</h2><p className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>{activeConversation?.agentName ? `الوكيل: ${activeConversation.agentName}` : "اختر محادثة أو أنشئ واحدة"} — بث مباشر وحفظ تلقائي</p></div></div>
+        <div className="chat-header relative border-b p-4 sm:p-5" style={{ borderColor: "var(--border)" }}>
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3"><span className="brand-mark !mb-0 !h-10 !w-10">AI</span><div className="min-w-0"><h2 className="truncate font-black">{activeConversation?.title || "دردشة الوكيل"}</h2><p className="mt-1 truncate text-xs" style={{ color: "var(--text-secondary)" }}>{activeConversation?.agentName ? `الوكيل: ${activeConversation.agentName}` : "اختر محادثة أو أنشئ واحدة"} — بث مباشر وحفظ تلقائي</p></div></div>
+            <button type="button" className="appearance-trigger" onClick={() => setAppearanceOpen((value) => !value)} aria-expanded={appearanceOpen} aria-controls="chat-appearance-panel">
+              <Palette size={18} aria-hidden="true" />
+              <span className="hidden sm:inline">مظهر المحادثة</span>
+            </button>
+          </div>
+          {appearanceOpen ? (
+            <section id="chat-appearance-panel" className="chat-appearance-panel" aria-label="اختيار مظهر المحادثة">
+              <div className="flex items-center justify-between gap-3">
+                <div><h3 className="font-bold">خصّص محادثاتك</h3><p className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>يُحفظ الاختيار في حسابك ويظهر على كل أجهزتك.</p></div>
+                <button type="button" className="icon-button" onClick={() => setAppearanceOpen(false)} aria-label="إغلاق"><X size={18} /></button>
+              </div>
+              <p className="appearance-label">الثيم</p>
+              <div className="appearance-theme-grid">
+                {chatThemeOptions.map((option) => (
+                  <button key={option.id} type="button" disabled={savingAppearance} onClick={() => selectTheme(option.id)}
+                    className={`appearance-theme appearance-preview-${option.id}${appearance.theme === option.id ? " appearance-selected" : ""}`}>
+                    <span className="appearance-swatch"><i /><i /></span>
+                    <span><b>{option.label}</b><small>{option.description}</small></span>
+                    {appearance.theme === option.id ? <Check size={17} aria-hidden="true" /> : null}
+                  </button>
+                ))}
+              </div>
+              <p className="appearance-label">الخلفية</p>
+              <div className="appearance-wallpapers">
+                {chatWallpaperOptions.map((option) => (
+                  <button key={option.id} type="button" disabled={savingAppearance} onClick={() => selectWallpaper(option.id)}
+                    className={`appearance-wallpaper chat-wallpaper-${option.id}${appearance.wallpaper === option.id ? " appearance-selected" : ""}`}>
+                    <span>{option.label}</span>
+                    {appearance.wallpaper === option.id ? <Check size={15} aria-hidden="true" /> : null}
+                  </button>
+                ))}
+              </div>
+            </section>
+          ) : null}
         </div>
-        <div className="flex-1 space-y-4 overflow-y-auto p-4 sm:p-6" aria-live="polite">
+        <div className={`chat-stage chat-theme-${appearance.theme} chat-wallpaper-${appearance.wallpaper} flex-1 space-y-4 overflow-y-auto p-4 sm:p-6`} aria-live="polite">
           {loadingMessages ? <div className="skeleton h-20 rounded-3xl" /> : null}
           {messages.map((message) => (
             <article key={message.id} className={`chat-message ${message.role === "user" ? "chat-message-user" : "chat-message-assistant"}`} style={{
-              marginRight: message.role === "user" ? "auto" : undefined,
-              marginLeft: message.role === "assistant" ? "auto" : undefined,
-              background: message.role === "user" ? "var(--primary-soft)" : "var(--surface-soft)",
-              borderColor: "var(--border)",
-              color: "var(--text-primary)",
+              marginLeft: message.role === "user" ? "auto" : undefined,
+              marginRight: message.role === "assistant" ? "auto" : undefined,
             }}>
               <p className="whitespace-pre-wrap">{message.content || (loading ? "…" : "")}</p>
               {message.attachments?.length ? (

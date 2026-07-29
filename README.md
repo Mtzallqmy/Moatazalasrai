@@ -17,7 +17,8 @@
 - محادثات محفوظة، سياق سابق بميزانية Tokens تقديرية، Streaming، إيقاف، إعادة محاولة، إعادة تسمية، أرشفة وحذف.
 - دورة تشغيل `queued → running → completed / failed / cancelled` وأحداث فعلية ومعرّفات طلب واستهلاك Tokens عندما يوفره المزود.
 - لوحة عربية RTL متجاوبة للمزودات والوكلاء والمحادثات والتشغيل والأعضاء والتدقيق والإعدادات والتشخيص.
-- نظام تصميم جديد هادئ بواجهة فاتحة ووضع داكن، لوحة كثيفة للمؤشرات، Sidebar ثابت لسطح المكتب وDrawer حقيقي للهاتف، وخط Noto Sans Arabic مضمّن محليًا.
+- نظام تصميم فيروزي هادئ بواجهة فاتحة ووضع داكن، لوحة كثيفة للمؤشرات، Sidebar ثابت لسطح المكتب وDrawer حقيقي للهاتف، وخط Alexandria العربي مضمّن محليًا.
+- ثيمات محادثة محفوظة في PostgreSQL ومتزامنة بين الويب والتطبيق: هوية معتز، وواتساب، وتليجرام، مع أربع خلفيات قابلة للاختيار.
 - فرق وكلاء حقيقية: عمال يعملون بالتوازي ثم وكيل مشرف يقرأ نواتجهم ويولّف النتيجة، مع حفظ الفريق والتشغيل وكل خطوة في PostgreSQL.
 - بوابة MCP حقيقية مبنية على SDK الرسمي عبر Streamable HTTP: إضافة الخوادم، اكتشاف الأدوات، مزامنة مخططاتها، تنفيذها، وحفظ سجل الاستدعاء والمدة والأخطاء.
 - تطبيق Flutter أصلي داخل `apps/mobile` لا يستخدم WebView؛ يسجل الدخول بجلسة جهاز قصيرة، يخزن الرموز في Android Keystore، ويستهلك REST API للمؤشرات والمحادثات.
@@ -84,6 +85,8 @@ npm run db:studio
 جداول التكامل والتخزين: `integrations`, `telegram_chats`, `telegram_updates`, `attachments`.
 
 جداول MCP والفرق: `mcp_servers`, `mcp_tools`, `agent_mcp_tools`, `mcp_tool_calls`, `agent_teams`, `agent_team_members`, `agent_team_runs`, `agent_team_run_steps`.
+
+تفضيلات الواجهة: `user_preferences` لحفظ ثيم المحادثة وخلفيتها لكل حساب.
 
 جداول التوسعة: `agent_memories`, `knowledge_bases`, `knowledge_documents`, `knowledge_chunks`, `background_jobs`, `tool_approvals`.
 

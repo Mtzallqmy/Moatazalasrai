@@ -59,7 +59,7 @@ class DashboardScreen extends ConsumerWidget {
                 padding: const EdgeInsets.only(bottom: 10),
                 child: Card(
                   child: ListTile(
-                    leading: const CircleAvatar(backgroundColor: Color(0xFFE9EFFF), child: Icon(Icons.smart_toy_outlined, color: Color(0xFF245BFF))),
+                    leading: const CircleAvatar(backgroundColor: Color(0xFFE2F4F2), child: Icon(Icons.smart_toy_outlined, color: Color(0xFF0F8F86))),
                     title: Text(agent['name'] as String, style: const TextStyle(fontWeight: FontWeight.w700)),
                     subtitle: Text(agent['description'] as String? ?? 'وكيل منشور وجاهز للعمل', maxLines: 2, overflow: TextOverflow.ellipsis),
                     trailing: const Icon(Icons.chat_bubble_outline),
@@ -116,7 +116,7 @@ class _Metric extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: const Color(0xFF245BFF)),
+          Icon(icon, color: const Color(0xFF0F8F86)),
           const Spacer(),
           Text(value, style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w800)),
           Text(label, style: const TextStyle(color: Color(0xFF5E6B7C))),

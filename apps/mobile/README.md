@@ -16,9 +16,13 @@ flutter build apk --release \
   --dart-define=API_BASE_URL=https://your-domain.example
 ```
 
-قبل النشر في المتجر، أنشئ مفتاح توقيع Release واستبدل `debug signingConfig` في
-`android/app/build.gradle.kts`. تحفظ رموز الوصول والتحديث في Android Keystore
-باستخدام `flutter_secure_storage`، ويُدوّر Refresh Token عند كل تحديث للجلسة.
+قبل النشر في المتجر، أضف أسرار التوقيع الموضحة في دليل الإصدار. يقرأ البناء
+`android/key.properties` دون حفظ المفتاح في Git. تحفظ رموز الوصول والتحديث في
+Android Keystore باستخدام `flutter_secure_storage`، ويُدوّر Refresh Token عند كل
+تحديث للجلسة.
+
+يبني GitHub Actions إصدارًا واحدًا خاصًا بأجهزة `arm64-v8a` وينشره تلقائيًا في
+GitHub Releases. راجع [دليل الإصدار](../../docs/ANDROID_RELEASE.md).
 
 ## التدفق الأمني
 
