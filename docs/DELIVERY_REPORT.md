@@ -4,148 +4,79 @@
 
 ## النتيجة
 
-تحول المستودع من نموذج أولي محدود إلى أساس SaaS عربي متعدد المؤسسات يعمل على Next.js App Router وReact وTypeScript وTailwind وDrizzle وPostgreSQL على Railway. لا توجد فوترة أو اشتراكات، ولا بيانات تجريبية أو backend وهمي.
+هذا الإصدار يعيد بناء المنصة كمنتج عربي متعدد المؤسسات قابل للنشر على Railway،
+ويضيف واجهة جديدة، تطبيق Flutter أصلي، جلسات هاتف، بوابة MCP، وفرق وكلاء
+متعددة. لا توجد بيانات واجهة ثابتة بديلة عن الباكند في المسارات الجديدة؛
+المؤشرات والقوائم تستعلم PostgreSQL، والتشغيل يستدعي مزود النموذج المحفوظ.
 
-## المشكلات التي عُثر عليها
+## ما تغير في هذا الإصدار
 
-- لم تكن هناك مصادقة مستخدم مكتملة أو جلسات آمنة قابلة للإدارة أو اختيار مؤسسة نشطة.
-- كانت حدود المؤسسات والصلاحيات غير مطبقة بصورة موحدة من الباكند.
-- لم تكن دورة المزود تشمل تحققًا حقيقيًا من المفتاح والنموذج قبل حالة `verified`.
-- لم يكن مسار المزود المخصص محميًا بما يكفي من SSRF وإعادة التوجيه والاستجابات الكبيرة والمهلات.
-- كانت إدارة الوكلاء والإصدارات والمحادثات وعمليات التشغيل والأحداث غير مكتملة.
-- ظهرت حقول أدوات وحدود تشغيل غير منفذة فعليًا؛ أزيلت بدل إبقائها كوعود واجهة.
-- كانت حالة الاستهلاك تفترض أرقامًا حتى عندما لا يعيدها المزود.
-- لم تكن أخطاء API وعناوين الأمان وCSRF وrate limiting وhealth/readiness موحدة.
-- لم يكن مسار النشر أو migrations أو اختبارات القبول موثقًا بما يكفي.
+| المجال | التنفيذ |
+|---|---|
+| تجربة الاستخدام | لوحة كثيفة واضحة، ألوان Ink/Electric Blue، وضع داكن، خط عربي محلي، Sidebar مكتبي وDrawer هاتف |
+| تطبيق Android | مشروع Flutter داخل `apps/mobile`، بلا WebView، REST + Dio + Riverpod + تخزين آمن |
+| مصادقة الهاتف | Access Token لمدة 15 دقيقة، Refresh Token دوّار لمدة 30 يومًا، hash فقط في PostgreSQL، وربط بالجهاز والمؤسسة |
+| API | نطاقات وصول، عزل محادثات وتشغيلات مستخدم الهاتف، OpenAPI 3.1 بعمليات ومعرفات واضحة |
+| MCP | SDK الرسمي، Streamable HTTP، اكتشاف الأدوات ومزامنتها واستدعاؤها وسجل دائم |
+| فرق الوكلاء | عمال متوازون ثم مشرف للتوليف، مع فرق وتشغيلات وخطوات محفوظة |
+| قاعدة البيانات | migration رقم `0009` للجلسات وMCP والفرق والنطاقات |
 
-## التعديلات المنفذة
-
-### المصادقة والمؤسسات
-
-- تسجيل حساب ومؤسسة وتسجيل دخول وخروج بجلسات عشوائية لا يُخزن منها إلا hash.
-- تدوير الجلسة عند المصادقة، Cookies آمنة، انتهاء خامل ومطلق، إبطال الجلسات الأخرى، وتحديث `lastSeenAt`.
-- اختيار المؤسسة النشطة داخل الجلسة والتحقق من العضوية في كل طلب مؤسسي.
-- RBAC مركزي للأدوار `owner`, `admin`, `developer`, `operator`, `viewer`.
-- إدارة الأعضاء المسجلين ومنع إزالة آخر مالك.
-
-### المزودون والأمان
-
-- Adapters موحدة لـOpenAI وAnthropic وGemini وOpenAI-compatible.
-- اكتشاف النماذج واختبار توليد حقيقي قبل اعتماد المزود.
-- تشفير AES-256-GCM بإصدار وnonce وauthentication tag قبل الحفظ.
-- حماية SSRF تشمل HTTPS في الإنتاج، DNS/IP validation، منع العناوين الخاصة والمحلية، منع redirects، مهلة، حد حجم، وتنقيح الأخطاء.
-- retries محدودة للأخطاء المؤقتة وcircuit cooldown بعد الإخفاقات المتتابعة.
-- تعطيل وإعادة تحقق وحذف آمن يمنع حذف المزود المرتبط بإصدار وكيل.
-
-### الوكلاء والمحادثات والتشغيل
-
-- إنشاء الوكيل وتكوين إصدار ثابت، نشره وأرشفته واستعادته.
-- قصر اختيار النموذج على نتائج المزود المتحقق.
-- محادثات ورسائل محفوظة مع إعادة تسمية وأرشفة وحذف.
-- Streaming عبر SSE من المزود الفعلي، مع سياق سابق مضبوط بميزانية تقديرية.
-- حالات تشغيل وأحداث متسلسلة، إلغاء وإعادة محاولة، request IDs، وحفظ token usage عندما يعيده المزود فقط.
-- معاملات قاعدة بيانات لإكمال الرسالة والتشغيل بصورة ذرية.
-
-### الواجهة والتشغيل
-
-- لوحة عربية RTL متجاوبة للمزودات والوكلاء والمحادثات والتشغيل والأعضاء والتدقيق والإعدادات والتشخيص.
-- حالات تحميل وفراغ وفشل وتعطيل، تنقل لوحة، breadcrumbs، ومحدد مؤسسة.
-- عقود استجابة موحدة للمسارات الجديدة، Security headers، فحص Origin، وrate limits مخزنة.
-- liveness في `/api/health` وreadiness في `/api/ready`.
-- Docker وRailway وOpenNext/Cloudflare وإعداد CI.
-
-## الملفات والمكونات الرئيسية
+## الملفات الرئيسية
 
 | المجال | الملفات |
 |---|---|
-| قاعدة البيانات | `src/db/schema.ts`, `drizzle/0004_production_foundation.sql` |
-| المصادقة وRBAC | `src/lib/auth/*`, `src/app/api/auth/*`, `src/middleware.ts` |
-| المزودون | `src/lib/providers/*`, `src/lib/security/provider-network.ts`, `src/app/api/dashboard/providers/*` |
-| التشغيل | `src/lib/agents/runtime.ts`, `src/app/api/dashboard/chat/*`, `src/app/api/dashboard/runs/route.ts` |
-| الواجهة | `src/components/*`, `src/app/dashboard/*`, `src/app/globals.css` |
-| العقود والحدود | `src/lib/http/*`, `src/lib/security/rate-limit.ts`, `src/lib/config/env.ts` |
-| الاختبارات | `tests/*`, `e2e/*`, `playwright.config.ts`, `vitest.config.ts` |
-| النشر | `Dockerfile`, `railway.json`, `wrangler.toml`, `open-next.config.ts`, `.github/workflows/ci.yml` |
-
-## Migration المضافة
-
-`drizzle/0004_production_foundation.sql` تضيف:
-
-- المؤسسة النشطة للجلسة.
-- enum لحالة تحقق المزود ولدور الرسالة.
-- تفاصيل تحقق المزود وحالة circuit.
-- أرشفة المحادثات وrequest/error/cancellation metadata للتشغيل.
-- nullable token usage حتى لا تُختلق أرقام.
-- جدول `rate_limits`.
-- فهارس العزل والاستعلام والأحداث.
-- إزالة حقول الأدوات غير المنفذة وجدول `tasks` غير المستخدم.
-
-يجب تطبيقها مرة واحدة قبل إطلاق النسخة:
-
-```bash
-npm ci
-npm run db:migrate
-```
-
-## متغيرات البيئة
-
-المطلوب في الإنتاج:
-
-- `NODE_ENV=production`
-- `APP_URL=https://your-domain.example`
-- `DATABASE_URL`
-- `CREDENTIAL_ENCRYPTION_KEY`، Base64 لـ32 بايت
-
-الاختياري:
-
-- `BOOTSTRAP_ADMIN_TOKEN` و`OWNER_*` للتهيئة الإدارية المرة الواحدة.
-- `LOG_LEVEL`, `SENTRY_DSN`, `OTEL_EXPORTER_OTLP_ENDPOINT`.
-- `TEST_DATABASE_URL` للاختبار التكاملي المعزول.
-- `E2E_BASE_URL` و`E2E_PROVIDER_*` لاختبار القبول الحي.
+| واجهة الويب | `src/app/dashboard/page.tsx`, `src/components/dashboard-navigation.tsx`, `src/app/globals.css` |
+| الهاتف | `apps/mobile/lib`, `apps/mobile/android`, `apps/mobile/README.md` |
+| الجلسات والنطاقات | `src/lib/auth/mobile.ts`, `src/lib/auth/api-key.ts`, `src/app/api/mobile/v1` |
+| OpenAPI | `src/app/api/v1/openapi/route.ts` |
+| MCP | `src/ai/mcp`, `src/app/api/dashboard/mcp`, `src/components/mcp-manager.tsx` |
+| فرق الوكلاء | `src/lib/agents/team-runtime.ts`, `src/app/api/v1/teams`, `src/app/api/v1/team-runs` |
+| البيانات | `src/db/schema.ts`, `drizzle/0009_mobile_mcp_agent_teams.sql` |
 
 ## نتائج التحقق
 
 | الفحص | النتيجة |
 |---|---|
-| `npm run lint` | نجح |
-| `npm run typecheck` | نجح |
-| `npm test` | 43 نجح، 1 تخطى لغياب `TEST_DATABASE_URL` |
-| `npm run test:e2e` | الأمر نجح، وتخطى السيناريوين لغياب `E2E_BASE_URL` وأسرار مزود الاختبار |
-| `npm run build` | نجح، 33 صفحة/مسار |
-| `npm run cf:build` | نجح وأنشأ حزمة OpenNext Worker |
-| Docker build | لم يُشغل لأن Docker غير متاح في بيئة التسليم |
+| `npm run lint` | نجح بلا أخطاء |
+| `npm run typecheck` | نجح بلا أخطاء |
+| `npm test` | 18 ملفًا نجح، 74 اختبارًا نجح، واختبار تكامل واحد تخطى |
+| `npm run build` | نجح؛ 62 صفحة ومسار API |
+| `npm run test:e2e` | الأمر نجح؛ سيناريوهان تخطيا لغياب قاعدة ومزود اختبار حي |
+| تطبيق Flutter | فحص مصدر ومخطط Android فقط؛ Flutter SDK غير متاح في بيئة التسليم |
+| PostgreSQL حي | لم يُشغل؛ `TEST_DATABASE_URL` غير موفر |
+| مزود AI أو MCP حي | لم يُستدعَ لأن بيانات اعتماد اختبار منفصلة غير موفرة |
+| نشر Railway | لم يُنفذ؛ التسليم ملف بديل جاهز للرفع |
 
-`npm audit --omit=dev` أبلغ عن تنبيه مرتفع وآخر متوسط في نسخة PostCSS الداخلية التي يجلبها Next.js 16.2.12. يقترح npm حلًا قسريًا يخفض Next إلى 9.3.3، وهو تغيير مكسّر وغير صالح للمشروع، ولذلك لم يُطبق. يلزم متابعة إصدار Next.js يتضمن ترقية آمنة لهذه التبعية.
+## ترقية Railway
 
-## ما تم اختباره بمفاتيح حقيقية
+1. ارفع محتوى المشروع بديلًا عن المستودع السابق.
+2. احتفظ بمتغيرات `DATABASE_URL`, `CREDENTIAL_ENCRYPTION_KEY`, `APP_URL`.
+3. Railway يشغل `npm run db:migrate` من `preDeployCommand` ويطبق `0009` مرة
+   واحدة ثم يبني الحاوية.
+4. تحقق من `/api/ready` ثم اختبر تسجيل الدخول.
+5. أضف خادم MCP من **MCP والبروتوكولات**، واستخدم رابط HTTPS عامًا يدعم
+   Streamable HTTP.
 
-لم تُوفر مفاتيح مزود أو قاعدة PostgreSQL اختبارية حية، لذلك لم يُرسل أي طلب فعلي مدفوع إلى OpenAI أو Anthropic أو Gemini، ولم يُدّع نجاح مسار القبول الحي. توجد اختبارات Adapters بعقود HTTP معزولة، واختبار Playwright حي يتفعل فقط عند توفير أسرار بيئة اختبار.
+لا تعدل migration سبق تطبيقها؛ نظام migration يتحقق من checksum.
 
-## ما لم يمكن التحقق منه
-
-- مسار التسجيل حتى Streaming والحفظ وإعادة التحميل ضد PostgreSQL ومزود حقيقي: غياب `TEST_DATABASE_URL` و`E2E_PROVIDER_*`.
-- عزل مؤسستين ضد قاعدة حية: اختبار التكامل موجود لكنه متخطى لنفس السبب.
-- صورة Docker: Docker غير مثبت في البيئة.
-- نشر Railway أو Cloudflare إنتاجيًا: لم تُوفر وجهة نشر أو موافقة نشر إنتاجي.
-- `cf:preview`: تعارض أداة المعاينة مع وسيطات `next dev`؛ نجح `cf:build` فقط.
-
-## التشغيل والنشر
+## بناء Android
 
 ```bash
-npm ci
-cp .env.example .env
-npm run db:migrate
-npm run build
-npm start
+cd apps/mobile
+flutter pub get
+flutter build apk --release \
+  --dart-define=API_BASE_URL=https://your-domain.example
 ```
 
-في Railway شغّل migration كـrelease step مستقل ثم استخدم `/api/ready` لفحص الجاهزية. راجع `docs/DEPLOYMENT.md`.
+قبل متجر Google Play أنشئ مفتاح توقيع Release واستبدل إعداد توقيع Debug
+الموضح في `apps/mobile/android/app/build.gradle.kts`.
 
-## القيود المتبقية
+## الحدود المتبقية بوضوح
 
-- لا توجد استعادة كلمة مرور أو تأكيد بريد أو دعوات قبل ربط مزود بريد حقيقي.
-- الإلغاء الفوري لطلب Streaming محلي للـinstance؛ عدة replicas تحتاج قناة إلغاء مشتركة.
-- التشغيل يحدث داخل طلب طويل العمر، وليس عبر queue/worker منفصل.
-- تقدير ميزانية السياق تقريبي؛ usage يبقى فارغًا عندما لا يعيده المزود.
-- الحماية من DNS rebinding تقلل المخاطر بالتحقق قبل الاتصال، لكنها لا توفر socket pinning.
-- دعم البناء لا يساوي نشرًا إنتاجيًا أو اختبار قبول حيًا.
+- تشغيل الفريق متزامن داخل طلب API؛ نقل تشغيلات الفرق الطويلة إلى Worker خطوة
+  التوسع التالية.
+- ربط أدوات MCP بالوكلاء ممثل في قاعدة البيانات، لكن حلقة استدعاء أدوات النموذج
+  التلقائية غير مفعلة حتى لا تنفذ أداة خارجية دون سياسة موافقة وحدود استدعاء.
+- لا توجد استعادة كلمة مرور أو بريد دعوات قبل إعداد مزود بريد حقيقي.
+- لا يمكن اعتبار نجاح build بديلًا عن اختبار قبول حي ضد قاعدة Railway ومزود
+  ذكاء اصطناعي وخادم MCP ببيانات اعتماد اختبار.

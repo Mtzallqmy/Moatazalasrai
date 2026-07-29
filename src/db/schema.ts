@@ -85,10 +85,33 @@ export const platformApiKeys = pgTable("platform_api_keys", {
   name: text("name").notNull(),
   keyHash: text("key_hash").notNull().unique(),
   keyPrefix: text("key_prefix").notNull(),
+  scopes: jsonb("scopes").$type<string[]>().notNull().default([]),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
   revoked: boolean("revoked").notNull().default(false),
   lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [index("platform_api_keys_org_idx").on(table.organizationId)]);
+
+export const mobileSessions = pgTable("mobile_sessions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  accessTokenHash: text("access_token_hash").notNull().unique(),
+  accessExpiresAt: timestamp("access_expires_at", { withTimezone: true }).notNull(),
+  refreshTokenHash: text("refresh_token_hash").notNull().unique(),
+  refreshExpiresAt: timestamp("refresh_expires_at", { withTimezone: true }).notNull(),
+  deviceId: text("device_id").notNull(),
+  deviceName: text("device_name"),
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }).defaultNow().notNull(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("mobile_sessions_user_device_idx").on(table.userId, table.deviceId),
+  index("mobile_sessions_access_expiry_idx").on(table.accessExpiresAt),
+  index("mobile_sessions_refresh_expiry_idx").on(table.refreshExpiresAt),
+]);
 
 export const providerCredentials = pgTable("provider_credentials", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -445,6 +468,145 @@ export const toolApprovals = pgTable("tool_approvals", {
   decidedAt: timestamp("decided_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [index("tool_approvals_scope_idx").on(table.organizationId, table.status, table.expiresAt)]);
+
+export const mcpServers = pgTable("mcp_servers", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  endpoint: text("endpoint").notNull(),
+  transport: text("transport").notNull().default("streamable_http"),
+  encryptedBearerToken: text("encrypted_bearer_token"),
+  tokenHint: text("token_hint"),
+  enabled: boolean("enabled").notNull().default(true),
+  status: text("status").notNull().default("pending"),
+  protocolVersion: text("protocol_version"),
+  serverName: text("server_name"),
+  serverVersion: text("server_version"),
+  capabilities: jsonb("capabilities").$type<Record<string, unknown>>().notNull().default({}),
+  lastConnectedAt: timestamp("last_connected_at", { withTimezone: true }),
+  lastErrorCode: text("last_error_code"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("mcp_servers_org_name_idx").on(table.organizationId, table.name),
+  index("mcp_servers_org_status_idx").on(table.organizationId, table.status, table.enabled),
+]);
+
+export const mcpTools = pgTable("mcp_tools", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  serverId: uuid("server_id").notNull().references(() => mcpServers.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  title: text("title"),
+  description: text("description"),
+  inputSchema: jsonb("input_schema").$type<Record<string, unknown>>().notNull().default({}),
+  outputSchema: jsonb("output_schema").$type<Record<string, unknown>>(),
+  annotations: jsonb("annotations").$type<Record<string, unknown>>().notNull().default({}),
+  schemaHash: text("schema_hash").notNull(),
+  enabled: boolean("enabled").notNull().default(true),
+  risk: text("risk").notNull().default("medium"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("mcp_tools_server_name_idx").on(table.serverId, table.name),
+  index("mcp_tools_org_enabled_idx").on(table.organizationId, table.enabled),
+]);
+
+export const agentMcpTools = pgTable("agent_mcp_tools", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  agentId: uuid("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
+  toolId: uuid("tool_id").notNull().references(() => mcpTools.id, { onDelete: "cascade" }),
+  approvalMode: text("approval_mode").notNull().default("risk_based"),
+  maxCallsPerRun: integer("max_calls_per_run").notNull().default(3),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("agent_mcp_tools_agent_tool_idx").on(table.agentId, table.toolId),
+  index("agent_mcp_tools_org_idx").on(table.organizationId),
+]);
+
+export const mcpToolCalls = pgTable("mcp_tool_calls", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  serverId: uuid("server_id").notNull().references(() => mcpServers.id),
+  toolId: uuid("tool_id").notNull().references(() => mcpTools.id),
+  runId: uuid("run_id").references(() => runs.id, { onDelete: "set null" }),
+  requestedByUserId: uuid("requested_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  inputDigest: text("input_digest").notNull(),
+  status: text("status").notNull().default("running"),
+  durationMs: integer("duration_ms"),
+  result: jsonb("result").$type<Record<string, unknown>>(),
+  errorCode: text("error_code"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+}, (table) => [
+  index("mcp_tool_calls_org_created_idx").on(table.organizationId, table.createdAt),
+  index("mcp_tool_calls_run_idx").on(table.runId),
+]);
+
+export const agentTeams = pgTable("agent_teams", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  supervisorAgentId: uuid("supervisor_agent_id").notNull().references(() => agents.id),
+  enabled: boolean("enabled").notNull().default(true),
+  maxParallelWorkers: integer("max_parallel_workers").notNull().default(3),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("agent_teams_org_name_idx").on(table.organizationId, table.name),
+  index("agent_teams_org_enabled_idx").on(table.organizationId, table.enabled),
+]);
+
+export const agentTeamMembers = pgTable("agent_team_members", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  teamId: uuid("team_id").notNull().references(() => agentTeams.id, { onDelete: "cascade" }),
+  agentId: uuid("agent_id").notNull().references(() => agents.id),
+  role: text("role").notNull().default("worker"),
+  position: integer("position").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("agent_team_members_team_agent_idx").on(table.teamId, table.agentId),
+  index("agent_team_members_org_idx").on(table.organizationId),
+]);
+
+export const agentTeamRuns = pgTable("agent_team_runs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  teamId: uuid("team_id").notNull().references(() => agentTeams.id),
+  requestedByUserId: uuid("requested_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  requestId: text("request_id").notNull(),
+  input: text("input").notNull(),
+  output: text("output"),
+  status: text("status").notNull().default("queued"),
+  errorCode: text("error_code"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+}, (table) => [
+  uniqueIndex("agent_team_runs_org_request_idx").on(table.organizationId, table.requestId),
+  index("agent_team_runs_org_created_idx").on(table.organizationId, table.createdAt),
+]);
+
+export const agentTeamRunSteps = pgTable("agent_team_run_steps", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  teamRunId: uuid("team_run_id").notNull().references(() => agentTeamRuns.id, { onDelete: "cascade" }),
+  agentId: uuid("agent_id").notNull().references(() => agents.id),
+  runId: uuid("run_id").references(() => runs.id, { onDelete: "set null" }),
+  stepType: text("step_type").notNull(),
+  position: integer("position").notNull(),
+  status: text("status").notNull().default("queued"),
+  output: text("output"),
+  errorCode: text("error_code"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+}, (table) => [
+  index("agent_team_run_steps_run_idx").on(table.teamRunId, table.position),
+  index("agent_team_run_steps_org_idx").on(table.organizationId),
+]);
 
 export type Agent = typeof agents.$inferSelect;
 export type AgentVersion = typeof agentVersions.$inferSelect;

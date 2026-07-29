@@ -1,7 +1,15 @@
 node_modules
 .next
 .git
+.openai
+.sites-runtime
+.npm-cache
 .github
 tests
+e2e
+apps/mobile
+coverage
+test-results
+playwright-report
 *.md
 .env*

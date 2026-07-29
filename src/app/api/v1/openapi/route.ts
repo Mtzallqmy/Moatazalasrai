@@ -1,30 +1,77 @@
 import { NextResponse } from "next/server";
 
-const operations = {
-  "/api/v1/agents": { get: "List agents", post: "Create agent" },
-  "/api/v1/conversations": { get: "List conversations or messages", post: "Create conversation", patch: "Rename, archive, restore, pin, or move a conversation", delete: "Soft-delete a conversation" },
-  "/api/v1/messages": { patch: "Edit, delete, or restore a message" },
-  "/api/v1/chat": { post: "Send a message with optional attachment IDs" },
-  "/api/v1/files": { get: "List or download files", post: "Upload multipart file" },
-  "/api/v1/runs": { get: "List runs", post: "Execute agent run" },
-  "/api/v1/provider-credentials": { post: "Create provider credential" },
-  "/api/v1/integrations": { get: "List integration health" },
-  "/api/v1/github": { post: "List repositories or read a repository file" },
-} as const;
+const success = {
+  "200": { description: "نجاح", content: { "application/json": { schema: { $ref: "#/components/schemas/Success" } } } },
+};
+
+const errors = {
+  "400": { description: "طلب غير صالح", content: { "application/json": { schema: { $ref: "#/components/schemas/Failure" } } } },
+  "401": { description: "رمز وصول غير صالح أو منتهي" },
+  "403": { description: "النطاق أو الصلاحية غير كافيين" },
+  "422": { description: "تعذر تنفيذ الطلب بقيمه الحالية" },
+  "429": { description: "تجاوز معدل الطلبات" },
+};
+
+function jsonBody(schema: Record<string, unknown>) {
+  return {
+    required: true,
+    content: { "application/json": { schema } },
+  };
+}
+
+function operation(input: {
+  operationId: string;
+  summary: string;
+  tag: string;
+  auth?: boolean;
+  body?: Record<string, unknown>;
+  created?: boolean;
+  parameters?: Array<Record<string, unknown>>;
+}) {
+  return {
+    operationId: input.operationId,
+    summary: input.summary,
+    tags: [input.tag],
+    ...(input.auth === false ? { security: [] } : {}),
+    ...(input.body ? { requestBody: jsonBody(input.body) } : {}),
+    ...(input.parameters ? { parameters: input.parameters } : {}),
+    responses: {
+      ...(input.created ? { "201": { description: "تم الإنشاء" } } : success),
+      ...errors,
+    },
+  };
+}
+
+const uuid = { type: "string", format: "uuid" };
+const object = { type: "object", additionalProperties: false };
 
 export function GET() {
   return NextResponse.json({
     openapi: "3.1.0",
     info: {
-      title: "Moataz Agent Platform API",
-      version: "1.1.0",
-      description: "Versioned JSON API for native Android, automation, and external clients.",
+      title: "Moataz AI Platform API",
+      version: "2.0.0",
+      description: "واجهة REST موثقة للموقع وتطبيق Flutter الأصلي والعملاء الآليين. تطبيق الهاتف يستخدم جلسات جهاز دوّارة ولا يضمّن مفتاح منصة.",
     },
-    servers: [{ url: "/" }],
+    servers: [{ url: "/", description: "الخادم الحالي" }],
+    tags: [
+      { name: "Mobile Auth", description: "جلسات قصيرة العمر مرتبطة بالجهاز ومساحة العمل" },
+      { name: "Agents" },
+      { name: "Conversations" },
+      { name: "Runs" },
+      { name: "Agent Teams" },
+      { name: "Files" },
+      { name: "Integrations" },
+    ],
     security: [{ bearerAuth: [] }],
     components: {
       securitySchemes: {
-        bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "Platform API Key" },
+        bearerAuth: {
+          type: "http",
+          scheme: "bearer",
+          bearerFormat: "mat_ access token or platform API key",
+          description: "رمز جلسة الهاتف القصير أو مفتاح منصة ذي نطاقات.",
+        },
       },
       schemas: {
         Success: {
@@ -35,8 +82,8 @@ export function GET() {
             data: {},
             meta: {
               type: "object",
-              properties: { requestId: { type: "string" } },
               required: ["requestId"],
+              properties: { requestId: { type: "string" } },
             },
           },
         },
@@ -52,26 +99,147 @@ export function GET() {
                 code: { type: "string" },
                 message: { type: "string" },
                 requestId: { type: "string" },
+                details: {},
               },
             },
           },
         },
-      },
-    },
-    paths: Object.fromEntries(Object.entries(operations).map(([path, methods]) => [
-      path,
-      Object.fromEntries(Object.entries(methods).map(([method, summary]) => [
-        method,
-        {
-          summary,
-          responses: {
-            "200": { description: "Success" },
-            "400": { description: "Validation error" },
-            "401": { description: "Invalid API key" },
-            "500": { description: "Internal error" },
+        MobileLogin: {
+          ...object,
+          required: ["email", "password", "deviceId"],
+          properties: {
+            email: { type: "string", format: "email" },
+            password: { type: "string", minLength: 8 },
+            deviceId: { type: "string", minLength: 8 },
+            deviceName: { type: "string" },
+            organizationId: uuid,
           },
         },
-      ])),
-    ])),
+        TokenPair: {
+          ...object,
+          required: ["accessToken", "refreshToken", "accessExpiresAt", "refreshExpiresAt"],
+          properties: {
+            accessToken: { type: "string", pattern: "^mat_" },
+            refreshToken: { type: "string", pattern: "^mrt_" },
+            accessExpiresAt: { type: "string", format: "date-time" },
+            refreshExpiresAt: { type: "string", format: "date-time" },
+          },
+        },
+        ConversationCreate: {
+          ...object,
+          required: ["agentId"],
+          properties: { agentId: uuid, title: { type: "string", maxLength: 120 } },
+        },
+        ChatInput: {
+          ...object,
+          required: ["conversationId", "message"],
+          properties: {
+            conversationId: uuid,
+            message: { type: "string", minLength: 1, maxLength: 30000 },
+            attachmentIds: { type: "array", items: uuid, maxItems: 5 },
+          },
+        },
+        TeamCreate: {
+          ...object,
+          required: ["name", "supervisorAgentId", "memberAgentIds"],
+          properties: {
+            name: { type: "string", minLength: 2, maxLength: 100 },
+            description: { type: "string", maxLength: 500 },
+            supervisorAgentId: uuid,
+            memberAgentIds: { type: "array", minItems: 1, maxItems: 5, items: uuid },
+            maxParallelWorkers: { type: "integer", minimum: 1, maximum: 5, default: 3 },
+          },
+        },
+        TeamRun: {
+          ...object,
+          required: ["teamId", "input"],
+          properties: { teamId: uuid, input: { type: "string", minLength: 1, maxLength: 20000 } },
+        },
+      },
+    },
+    paths: {
+      "/api/mobile/v1/auth/login": {
+        post: operation({
+          operationId: "mobileLogin",
+          summary: "تسجيل دخول جهاز واختيار مساحة العمل",
+          tag: "Mobile Auth",
+          auth: false,
+          body: { $ref: "#/components/schemas/MobileLogin" },
+        }),
+      },
+      "/api/mobile/v1/auth/refresh": {
+        post: operation({
+          operationId: "mobileRefresh",
+          summary: "تدوير رمزي الوصول والتحديث",
+          tag: "Mobile Auth",
+          auth: false,
+          body: { ...object, required: ["refreshToken"], properties: { refreshToken: { type: "string", pattern: "^mrt_" } } },
+        }),
+      },
+      "/api/mobile/v1/auth/logout": {
+        post: operation({
+          operationId: "mobileLogout",
+          summary: "إبطال جلسة الجهاز",
+          tag: "Mobile Auth",
+          auth: false,
+          body: { ...object, required: ["refreshToken"], properties: { refreshToken: { type: "string", pattern: "^mrt_" } } },
+        }),
+      },
+      "/api/mobile/v1/me": {
+        get: operation({ operationId: "mobileMe", summary: "هوية المستخدم ونطاقاته", tag: "Mobile Auth" }),
+      },
+      "/api/v1/agents": {
+        get: operation({ operationId: "listAgents", summary: "عرض الوكلاء المنشورين", tag: "Agents" }),
+        post: operation({ operationId: "createAgent", summary: "إنشاء وكيل", tag: "Agents", created: true, body: { type: "object" } }),
+      },
+      "/api/v1/conversations": {
+        get: operation({
+          operationId: "listConversations",
+          summary: "عرض المحادثات أو رسائل محادثة",
+          tag: "Conversations",
+          parameters: [{ name: "conversationId", in: "query", schema: uuid }],
+        }),
+        post: operation({
+          operationId: "createConversation",
+          summary: "إنشاء محادثة",
+          tag: "Conversations",
+          created: true,
+          body: { $ref: "#/components/schemas/ConversationCreate" },
+        }),
+        patch: operation({ operationId: "updateConversation", summary: "تعديل حالة المحادثة", tag: "Conversations", body: { type: "object" } }),
+        delete: operation({ operationId: "deleteConversation", summary: "حذف محادثة حذفًا منطقيًا", tag: "Conversations", body: { type: "object" } }),
+      },
+      "/api/v1/messages": {
+        patch: operation({ operationId: "updateMessage", summary: "تعديل أو حذف أو استعادة رسالة", tag: "Conversations", body: { type: "object" } }),
+      },
+      "/api/v1/chat": {
+        post: operation({ operationId: "sendChatMessage", summary: "إرسال رسالة وتشغيل الوكيل", tag: "Conversations", body: { $ref: "#/components/schemas/ChatInput" } }),
+      },
+      "/api/v1/runs": {
+        get: operation({ operationId: "listRuns", summary: "عرض سجل التشغيل", tag: "Runs" }),
+        post: operation({ operationId: "createRun", summary: "تشغيل وكيل", tag: "Runs", created: true, body: { type: "object" } }),
+      },
+      "/api/v1/teams": {
+        get: operation({ operationId: "listAgentTeams", summary: "عرض فرق الوكلاء", tag: "Agent Teams" }),
+        post: operation({ operationId: "createAgentTeam", summary: "إنشاء فريق مشرف وعمال", tag: "Agent Teams", created: true, body: { $ref: "#/components/schemas/TeamCreate" } }),
+      },
+      "/api/v1/team-runs": {
+        get: operation({ operationId: "listTeamRuns", summary: "عرض تشغيلات الفرق وخطواتها", tag: "Agent Teams" }),
+        post: {
+          ...operation({ operationId: "createTeamRun", summary: "تشغيل أعضاء الفريق بالتوازي ثم توليف المشرف", tag: "Agent Teams", created: true, body: { $ref: "#/components/schemas/TeamRun" } }),
+          parameters: [{ name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", minLength: 8, maxLength: 100 } }],
+        },
+      },
+      "/api/v1/files": {
+        get: operation({ operationId: "listOrDownloadFiles", summary: "عرض ملف أو تنزيله", tag: "Files" }),
+        post: operation({ operationId: "uploadFile", summary: "رفع ملف multipart", tag: "Files", created: true }),
+      },
+      "/api/v1/integrations": {
+        get: operation({ operationId: "listIntegrations", summary: "عرض حالة التكاملات", tag: "Integrations" }),
+      },
+      "/api/v1/github": {
+        post: operation({ operationId: "githubRead", summary: "عرض المستودعات أو قراءة ملف", tag: "Integrations", body: { type: "object" } }),
+      },
+    },
   }, { headers: { "cache-control": "public, max-age=300" } });
 }

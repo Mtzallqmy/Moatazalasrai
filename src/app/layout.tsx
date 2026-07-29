@@ -1,18 +1,22 @@
 import type { Metadata } from "next";
+import "@fontsource-variable/noto-sans-arabic";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: {
-    default: "Moataz Agent Platform",
-    template: "%s | Moataz Agent Platform",
+    default: "معتز AI — منصة الوكلاء الذكية",
+    template: "%s | معتز AI",
   },
   description: "منصة SaaS عربية متعددة المؤسسات لبناء وتشغيل وإدارة وكلاء الذكاء الاصطناعي بأمان.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="ar" dir="rtl">
-      <body>{children}</body>
+    <html lang="ar" dir="rtl" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: `try{const t=localStorage.getItem("moataz-theme");document.documentElement.dataset.theme=t||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")}catch{}` }} />
+      </head>
+      <body><a className="skip-link" href="#main-content">انتقل إلى المحتوى</a>{children}</body>
     </html>
   );
 }

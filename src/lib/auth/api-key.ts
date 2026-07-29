@@ -1,11 +1,29 @@
-import { and, eq, isNull, lt, or } from "drizzle-orm";
+import { and, eq, gt, isNull, lt, or } from "drizzle-orm";
 import { db } from "@/db";
-import { platformApiKeys } from "@/db/schema";
+import { mobileSessions, organizationMembers, platformApiKeys } from "@/db/schema";
+import { ApiError } from "@/lib/http/api";
 import { hashApiKey, secureHashEquals } from "@/lib/security/encryption";
+
+export type ApiScope =
+  | "agents:read" | "agents:write"
+  | "chat:write"
+  | "conversations:read" | "conversations:write"
+  | "files:read" | "files:write"
+  | "runs:read" | "runs:write"
+  | "integrations:read" | "integrations:write"
+  | "providers:read" | "providers:write"
+  | "github:read"
+  | "mcp:read" | "mcp:write"
+  | "teams:read" | "teams:write";
 
 export type ApiPrincipal = {
   organizationId: string;
   apiKeyId: string;
+  principalId: string;
+  kind: "api_key" | "mobile_session";
+  userId: string | null;
+  role: string | null;
+  scopes: ApiScope[];
 };
 
 export async function authenticateApiKey(request: Request): Promise<ApiPrincipal | null> {
@@ -13,19 +31,77 @@ export async function authenticateApiKey(request: Request): Promise<ApiPrincipal
   const token = authorization?.startsWith("Bearer ") ? authorization.slice(7).trim() : null;
   if (!token) return null;
 
+  const tokenHash = hashApiKey(token);
   const [key] = await db()
     .select()
     .from(platformApiKeys)
-    .where(eq(platformApiKeys.keyHash, hashApiKey(token)))
+    .where(eq(platformApiKeys.keyHash, tokenHash))
     .limit(1);
 
-  if (!key || key.revoked) return null;
-  const staleBefore = new Date(Date.now() - 15 * 60_000);
-  await db().update(platformApiKeys).set({ lastUsedAt: new Date() }).where(and(
-    eq(platformApiKeys.id, key.id),
-    or(isNull(platformApiKeys.lastUsedAt), lt(platformApiKeys.lastUsedAt, staleBefore)),
-  ));
-  return { organizationId: key.organizationId, apiKeyId: key.id };
+  if (key && !key.revoked && (!key.expiresAt || key.expiresAt > new Date())) {
+    const staleBefore = new Date(Date.now() - 15 * 60_000);
+    await db().update(platformApiKeys).set({ lastUsedAt: new Date() }).where(and(
+      eq(platformApiKeys.id, key.id),
+      or(isNull(platformApiKeys.lastUsedAt), lt(platformApiKeys.lastUsedAt, staleBefore)),
+    ));
+    return {
+      organizationId: key.organizationId,
+      apiKeyId: key.id,
+      principalId: key.id,
+      kind: "api_key",
+      userId: key.createdByUserId,
+      role: null,
+      scopes: (key.scopes.length ? key.scopes : [
+        "agents:read", "agents:write", "chat:write", "conversations:read", "conversations:write",
+        "files:read", "files:write", "runs:read", "runs:write", "integrations:read",
+        "integrations:write", "providers:read", "providers:write", "github:read",
+        "mcp:read", "mcp:write", "teams:read", "teams:write",
+      ]) as ApiScope[],
+    };
+  }
+
+  const [mobile] = await db().select({
+    id: mobileSessions.id,
+    userId: mobileSessions.userId,
+    organizationId: mobileSessions.organizationId,
+    lastUsedAt: mobileSessions.lastUsedAt,
+    role: organizationMembers.role,
+  }).from(mobileSessions)
+    .innerJoin(organizationMembers, and(
+      eq(organizationMembers.userId, mobileSessions.userId),
+      eq(organizationMembers.organizationId, mobileSessions.organizationId),
+    ))
+    .where(and(
+      eq(mobileSessions.accessTokenHash, tokenHash),
+      isNull(mobileSessions.revokedAt),
+      gt(mobileSessions.accessExpiresAt, new Date()),
+    ))
+    .limit(1);
+  if (!mobile) return null;
+  const mobileScopes = mobile.role === "owner" || mobile.role === "admin"
+    ? ["agents:read", "agents:write", "chat:write", "conversations:read", "conversations:write", "files:read", "files:write", "runs:read", "runs:write", "integrations:read", "providers:read", "mcp:read", "teams:read", "teams:write"]
+    : mobile.role === "developer"
+      ? ["agents:read", "agents:write", "chat:write", "conversations:read", "conversations:write", "files:read", "files:write", "runs:read", "runs:write", "integrations:read", "providers:read", "mcp:read", "teams:read"]
+      : ["agents:read", "chat:write", "conversations:read", "conversations:write", "files:read", "files:write", "runs:read", "runs:write", "teams:read"];
+  if (mobile.lastUsedAt < new Date(Date.now() - 15 * 60_000)) {
+    await db().update(mobileSessions).set({ lastUsedAt: new Date(), updatedAt: new Date() })
+      .where(eq(mobileSessions.id, mobile.id));
+  }
+  return {
+    organizationId: mobile.organizationId,
+    apiKeyId: mobile.id,
+    principalId: mobile.id,
+    kind: "mobile_session",
+    userId: mobile.userId,
+    role: mobile.role,
+    scopes: mobileScopes as ApiScope[],
+  };
+}
+
+export function requireApiScope(principal: ApiPrincipal, scope: ApiScope) {
+  if (!principal.scopes.includes(scope)) {
+    throw new ApiError(403, "API_SCOPE_FORBIDDEN", "لا يملك هذا الرمز الصلاحية المطلوبة.");
+  }
 }
 
 export function bootstrapAuthorized(request: Request): boolean {

@@ -72,6 +72,7 @@ async function contextMessages(conversationId: string, instructions: string, max
 
 export async function prepareAgentRun(input: {
   organizationId: string;
+  userId?: string;
   agentId: string;
   conversationId: string;
   message: string;
@@ -146,6 +147,7 @@ export async function prepareAgentRun(input: {
       eq(conversations.id, input.conversationId),
       eq(conversations.organizationId, input.organizationId),
       eq(conversations.agentId, agent.id),
+      input.userId ? eq(conversations.createdByUserId, input.userId) : undefined,
       isNull(conversations.archivedAt),
       isNull(conversations.deletedAt),
     ))
@@ -290,6 +292,7 @@ async function failRun(runId: string, error: ProviderError) {
 
 export async function executeAgentRun(input: {
   organizationId: string;
+  userId?: string;
   agentId: string;
   message: string;
   conversationId: string;
@@ -332,6 +335,7 @@ export async function executeAgentRun(input: {
 
 export async function* streamAgentRun(input: {
   organizationId: string;
+  userId?: string;
   agentId: string;
   message: string;
   conversationId: string;
@@ -414,13 +418,16 @@ export async function cancelAgentRun(organizationId: string, runId: string) {
 
 export async function listOrganizationRuns(input: {
   organizationId: string;
+  userId?: string;
   page: number;
   limit: number;
   status?: "queued" | "running" | "completed" | "failed" | "cancelled";
 }) {
-  const where = input.status
-    ? and(eq(runs.organizationId, input.organizationId), eq(runs.status, input.status))
-    : eq(runs.organizationId, input.organizationId);
+  const where = and(
+    eq(runs.organizationId, input.organizationId),
+    input.status ? eq(runs.status, input.status) : undefined,
+    input.userId ? eq(conversations.createdByUserId, input.userId) : undefined,
+  );
   const [rows, totalRows] = await Promise.all([
     db().select({
       id: runs.id,
@@ -441,11 +448,14 @@ export async function listOrganizationRuns(input: {
       createdAt: runs.createdAt,
     }).from(runs)
       .innerJoin(agents, eq(agents.id, runs.agentId))
+      .innerJoin(conversations, eq(conversations.id, runs.conversationId))
       .where(where)
       .orderBy(desc(runs.createdAt))
       .limit(input.limit)
       .offset((input.page - 1) * input.limit),
-    db().select({ value: count() }).from(runs).where(where),
+    db().select({ value: count() }).from(runs)
+      .innerJoin(conversations, eq(conversations.id, runs.conversationId))
+      .where(where),
   ]);
   return { rows, total: totalRows[0]?.value ?? 0 };
 }
