@@ -1,21 +1,28 @@
-import { neon } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-http";
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
 import { env } from "@/lib/config/env";
 import * as schema from "./schema";
 
-function getSql() {
-  return neon(env().databaseUrl);
+let client: ReturnType<typeof postgres> | null = null;
+
+function getClient() {
+  if (!client) {
+    client = postgres(env().databaseUrl, {
+      max: 10,
+      connect_timeout: 10,
+      idle_timeout: 20,
+      max_lifetime: 60 * 30,
+      prepare: false,
+    });
+  }
+  return client;
 }
 
-function getDb() {
-  return drizzle(getSql(), { schema });
-}
-
-let cached: ReturnType<typeof getDb> | null = null;
+let database: ReturnType<typeof drizzle<typeof schema>> | null = null;
 
 export function db() {
-  if (!cached) cached = getDb();
-  return cached;
+  if (!database) database = drizzle(getClient(), { schema });
+  return database;
 }
 
 const requiredTables = [
@@ -41,7 +48,7 @@ export async function checkDatabase(): Promise<{
   schemaTables: number;
 }> {
   const startedAt = performance.now();
-  const sql = getSql();
+  const sql = getClient();
   const rows = await sql`
     SELECT
       to_regclass('public.organizations')::text AS organizations,
