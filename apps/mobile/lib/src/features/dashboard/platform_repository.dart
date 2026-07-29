@@ -108,17 +108,28 @@ class PlatformRepository {
       (data[key] as List<dynamic>? ?? const []).cast<Map<String, dynamic>>();
 
   Future<Map<String, dynamic>> createConversation(String agentId, {String? title}) async {
+    final data = <String, dynamic>{'agentId': agentId};
+    if (title != null) {
+      data['title'] = title;
+    }
     final response = await _api.dio.post<Map<String, dynamic>>(
       '/api/v1/conversations',
-      data: {'agentId': agentId, if (title != null) 'title': title},
+      data: data,
     );
     return ApiClient.payload(response)['conversation'] as Map<String, dynamic>;
   }
 
   Future<void> mutateConversation(String conversationId, String action, {String? title}) async {
+    final data = <String, dynamic>{
+      'conversationId': conversationId,
+      'action': action,
+    };
+    if (title != null) {
+      data['title'] = title;
+    }
     await _api.dio.patch<Map<String, dynamic>>(
       '/api/v1/conversations',
-      data: {'conversationId': conversationId, 'action': action, if (title != null) 'title': title},
+      data: data,
     );
   }
 
