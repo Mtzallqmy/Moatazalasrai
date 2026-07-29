@@ -9,6 +9,7 @@ import { ApiError, assertSameOrigin, getRequestId, handleApiError, parseJson } f
 import { chatStreamSchema } from "@/lib/http/contracts";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
 import { attachmentContext } from "@/lib/storage/attachments";
+import { inputKindForAttachments } from "@/server/files/input-kind";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -62,6 +63,9 @@ export async function POST(request: Request) {
       mediaType: file.mimeType as "image/jpeg" | "image/png" | "image/webp" | "image/gif",
       data: Buffer.from(file.content).toString("base64"),
     }));
+    const effectiveInputKind = attachmentData.rows.length > 0
+      ? inputKindForAttachments(attachmentData.rows.map((file) => file.mimeType))
+      : body.inputKind;
     const knowledge = body.knowledgeBaseId && aiFeatureEnabled("RAG")
       ? await retrieveKnowledge({ organizationId: session.organizationId, knowledgeBaseId: body.knowledgeBaseId, query: body.message })
       : { text: "", citations: [] };
@@ -123,7 +127,7 @@ export async function POST(request: Request) {
             requestSignal: request.signal,
             providerCredentialId: body.providerCredentialId,
             model: body.model,
-            inputKind: media.length ? "image" : body.attachmentIds.length > 0 && body.inputKind === "text" ? "file" : body.inputKind,
+            inputKind: effectiveInputKind,
             media,
           })) {
             controller.enqueue(encoder.encode(sse(event.type, event)));

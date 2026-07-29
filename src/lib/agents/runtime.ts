@@ -11,12 +11,13 @@ import {
   runEvents,
   runs,
 } from "@/db/schema";
-import { selectBestModel, type InputKind } from "@/server/models/router";
+import { rankModels, type InputKind } from "@/server/models/router";
 import { decryptSecret } from "@/lib/security/encryption";
 import { ApiError } from "@/lib/http/api";
 import { generateWithProvider, streamWithProvider } from "@/lib/providers/registry";
 import { ProviderError, type ProviderContentPart, type ProviderMessage, type ProviderUsage } from "@/lib/providers/types";
 import { safeTelemetry } from "@/ai/observability/telemetry";
+import { inferModelCapabilities, isFreeTierModel } from "@/server/models/capabilities";
 
 const activeControllers = new Map<string, AbortController>();
 const MAX_CONTEXT_TOKENS_ESTIMATE = 24_000;
@@ -95,51 +96,73 @@ export async function prepareAgentRun(input: {
     .limit(1);
   if (!version) throw new ApiError(409, "AGENT_VERSION_MISSING", "الإصدار المنشور للوكيل غير متاح.");
 
-  let selectedProviderId = input.providerCredentialId ?? version.providerCredentialId;
-  let selectedModel = input.model ?? version.model;
-  if (!input.providerCredentialId && !input.model && input.inputKind) {
-    const [organization, catalog] = await Promise.all([
-      db().select({
-        defaultProviderCredentialId: organizations.defaultProviderCredentialId,
-        defaultModel: organizations.defaultModel,
-      }).from(organizations).where(eq(organizations.id, input.organizationId)).limit(1),
-      db().select().from(modelCatalog).where(and(
-        eq(modelCatalog.organizationId, input.organizationId),
-        eq(modelCatalog.available, true),
-      )),
-    ]);
-    const routed = selectBestModel(catalog.map((entry) => ({
-      providerCredentialId: entry.providerCredentialId,
-      model: entry.model,
-      available: entry.available,
-      freeTierEligible: entry.freeTierEligible,
-      latencyMs: entry.latencyMs,
-      capabilities: entry.capabilities,
-      isAgentDefault: entry.providerCredentialId === (agent.defaultProviderCredentialId ?? version.providerCredentialId)
-        && entry.model === (agent.defaultModel ?? version.model),
-      isOrganizationDefault: entry.providerCredentialId === organization[0]?.defaultProviderCredentialId
-        && entry.model === organization[0]?.defaultModel,
-    })), input.inputKind);
-    if (routed) {
-      selectedProviderId = routed.providerCredentialId;
-      selectedModel = routed.model;
-    }
-  }
-  const [credential] = await db().select().from(providerCredentials)
-    .where(and(
-      eq(providerCredentials.id, selectedProviderId),
+  const [organization, catalog, credentials] = await Promise.all([
+    db().select({
+      defaultProviderCredentialId: organizations.defaultProviderCredentialId,
+      defaultModel: organizations.defaultModel,
+    }).from(organizations).where(eq(organizations.id, input.organizationId)).limit(1),
+    db().select().from(modelCatalog).where(and(
+      eq(modelCatalog.organizationId, input.organizationId),
+      eq(modelCatalog.available, true),
+    )),
+    db().select().from(providerCredentials).where(and(
       eq(providerCredentials.organizationId, input.organizationId),
       eq(providerCredentials.enabled, true),
       eq(providerCredentials.validationStatus, "verified"),
-    ))
-    .limit(1);
-  if (!credential) throw new ApiError(422, "PROVIDER_UNAVAILABLE", "المزود معطل أو لم يجتز آخر فحص.");
-  if (!credential.discoveredModels.includes(selectedModel)) {
-    throw new ApiError(422, "MODEL_UNAVAILABLE", "النموذج غير موجود في قائمة النماذج المكتشفة للمزود.");
+    )),
+  ]);
+  const now = new Date();
+  const usableCredentials = credentials.filter((credential) =>
+    !credential.circuitOpenUntil || credential.circuitOpenUntil <= now);
+  const credentialById = new Map(usableCredentials.map((credential) => [credential.id, credential]));
+  const catalogByModel = new Map(catalog.map((entry) => [
+    `${entry.providerCredentialId}:${entry.model}`,
+    entry,
+  ]));
+  const routable = usableCredentials.flatMap((credential) => credential.discoveredModels.map((model) => {
+    const catalogEntry = catalogByModel.get(`${credential.id}:${model}`);
+    return {
+      providerCredentialId: credential.id,
+      model,
+      available: catalogEntry?.available ?? true,
+      freeTierEligible: catalogEntry?.freeTierEligible ?? isFreeTierModel(model),
+      latencyMs: catalogEntry?.latencyMs ?? credential.lastValidationLatencyMs,
+      capabilities: {
+        ...inferModelCapabilities(credential.provider, model),
+        ...(catalogEntry?.capabilities ?? {}),
+      },
+      isAgentDefault: credential.id === (agent.defaultProviderCredentialId ?? version.providerCredentialId)
+        && model === (agent.defaultModel ?? version.model),
+      isOrganizationDefault: credential.id === organization[0]?.defaultProviderCredentialId
+        && model === organization[0]?.defaultModel,
+    };
+  }));
+
+  let ranked = input.inputKind
+    ? rankModels(routable, input.inputKind)
+    : routable.filter((candidate) =>
+      candidate.providerCredentialId === (input.providerCredentialId ?? version.providerCredentialId)
+      && candidate.model === (input.model ?? version.model));
+  if (input.providerCredentialId || input.model) {
+    ranked = ranked.filter((candidate) =>
+      (!input.providerCredentialId || candidate.providerCredentialId === input.providerCredentialId)
+      && (!input.model || candidate.model === input.model));
   }
-  if (credential.circuitOpenUntil && credential.circuitOpenUntil > new Date()) {
-    throw new ApiError(503, "PROVIDER_COOLDOWN", "المزود في فترة تهدئة مؤقتة بعد إخفاقات متكررة.");
+  if (ranked.length === 0) {
+    if (input.inputKind === "image") {
+      throw new ApiError(422, "VISION_MODEL_REQUIRED", "لا يوجد نموذج مفعّل يدعم تحليل الصور. اربط نموذج Vision ثم أعد المحاولة.");
+    }
+    if (input.inputKind === "audio" || input.inputKind === "video") {
+      throw new ApiError(422, "MEDIA_MODEL_REQUIRED", "لا يوجد نموذج مفعّل يدعم هذا النوع من الوسائط.");
+    }
+    throw new ApiError(422, "PROVIDER_OR_MODEL_UNAVAILABLE", "لا يوجد مزود متحقق ونموذج مناسب لتشغيل الوكيل.");
   }
+  const candidates = ranked.slice(0, 3).flatMap((candidate) => {
+    const credential = credentialById.get(candidate.providerCredentialId);
+    return credential ? [{ credential, model: candidate.model }] : [];
+  });
+  const primary = candidates[0];
+  if (!primary) throw new ApiError(422, "PROVIDER_UNAVAILABLE", "المزود معطل أو لم يجتز آخر فحص.");
 
   const [conversation] = await db().select({ id: conversations.id })
     .from(conversations)
@@ -164,8 +187,8 @@ export async function prepareAgentRun(input: {
       status: "queued",
       requestId: input.requestId,
       input: input.message,
-      provider: credential.provider,
-      model: selectedModel,
+      provider: primary.credential.provider,
+      model: primary.model,
     }).returning();
     if (!created) throw new Error("RUN_CREATE_FAILED");
     await tx.insert(runEvents).values({
@@ -179,8 +202,9 @@ export async function prepareAgentRun(input: {
 
   return {
     run,
-    credential,
-    version: { ...version, model: selectedModel },
+    credential: primary.credential,
+    candidates,
+    version: { ...version, model: primary.model },
     context: context.messages,
     estimatedInputTokens: context.estimatedInputTokens,
   };
@@ -248,14 +272,8 @@ async function completeRun(input: {
   });
 }
 
-async function failRun(runId: string, error: ProviderError) {
+async function failRun(runId: string, error: ProviderError, credentialId?: string) {
   console.error(JSON.stringify(safeTelemetry({ operation: "agent.run", runId, status: "error", errorCode: error.code })));
-  const failureCountRows = await db().select({ providerCredentialId: agentVersions.providerCredentialId })
-    .from(runs)
-    .innerJoin(agentVersions, eq(agentVersions.id, runs.agentVersionId))
-    .where(eq(runs.id, runId))
-    .limit(1);
-  const credentialId = failureCountRows[0]?.providerCredentialId;
   await db().transaction(async (tx) => {
     await tx.update(runs).set({
       status: error.code === "PROVIDER_CANCELLED" ? "cancelled" : "failed",
@@ -297,6 +315,7 @@ export async function executeAgentRun(input: {
   message: string;
   conversationId: string;
   requestId?: string;
+  inputKind?: InputKind;
   media?: ProviderContentPart[];
 }) {
   const requestId = input.requestId ?? crypto.randomUUID();
@@ -305,28 +324,45 @@ export async function executeAgentRun(input: {
   const controller = new AbortController();
   activeControllers.set(prepared.run.id, controller);
   try {
-    const result = await generateWithProvider(prepared.credential.provider, {
-      apiKey: decryptSecret(prepared.credential.encryptedSecret),
-      baseUrl: prepared.credential.baseUrl,
-      model: prepared.version.model,
-      messages: prepared.context,
-      temperature: prepared.version.temperatureMilli / 1000,
-      maxOutputTokens: prepared.version.maxOutputTokens,
-      signal: controller.signal,
-      requestId,
-    });
-    return completeRun({
-      runId: prepared.run.id,
-      conversationId: input.conversationId,
-      providerCredentialId: prepared.credential.id,
-      text: result.text,
-      usage: result,
-      providerRequestId: result.providerRequestId,
-      model: prepared.version.model,
-    });
-  } catch (error) {
-    const safe = safeProviderError(error);
-    await failRun(prepared.run.id, safe);
+    let lastError: ProviderError | undefined;
+    let lastCredentialId: string | undefined;
+    for (const [index, candidate] of prepared.candidates.entries()) {
+      lastCredentialId = candidate.credential.id;
+      if (index > 0) {
+        await db().update(runs).set({
+          provider: candidate.credential.provider,
+          model: candidate.model,
+        }).where(eq(runs.id, prepared.run.id));
+      }
+      try {
+        const result = await generateWithProvider(candidate.credential.provider, {
+          apiKey: decryptSecret(candidate.credential.encryptedSecret),
+          baseUrl: candidate.credential.baseUrl,
+          model: candidate.model,
+          messages: prepared.context,
+          temperature: prepared.version.temperatureMilli / 1000,
+          maxOutputTokens: prepared.version.maxOutputTokens,
+          signal: controller.signal,
+          requestId,
+        });
+        return completeRun({
+          runId: prepared.run.id,
+          conversationId: input.conversationId,
+          providerCredentialId: candidate.credential.id,
+          text: result.text,
+          usage: result,
+          providerRequestId: result.providerRequestId,
+          model: candidate.model,
+        });
+      } catch (error) {
+        const safe = safeProviderError(error);
+        lastError = safe;
+        const mayFallback = safe.retryable || safe.code === "PROVIDER_REJECTED_INPUT";
+        if (!mayFallback || index === prepared.candidates.length - 1) break;
+      }
+    }
+    const safe = lastError ?? new ProviderError("RUN_FAILED", "تعذر إكمال تشغيل الوكيل.", 502);
+    await failRun(prepared.run.id, safe, lastCredentialId);
     throw new ApiError(safe.httpStatus, safe.code, safe.message, { runId: prepared.run.id });
   } finally {
     activeControllers.delete(prepared.run.id);
@@ -356,36 +392,59 @@ export async function* streamAgentRun(input: {
   let text = "";
   let usage: ProviderUsage = { inputTokens: null, outputTokens: null };
   let providerRequestId: string | undefined;
+  let activeCandidate = prepared.candidates[0]!;
   try {
-    for await (const chunk of streamWithProvider(prepared.credential.provider, {
-      apiKey: decryptSecret(prepared.credential.encryptedSecret),
-      baseUrl: prepared.credential.baseUrl,
-      model: prepared.version.model,
-      messages: prepared.context,
-      temperature: prepared.version.temperatureMilli / 1000,
-      maxOutputTokens: prepared.version.maxOutputTokens,
-      signal: controller.signal,
-      requestId: input.requestId,
-    })) {
-      if (chunk.type === "delta") {
-        text += chunk.text;
-        yield chunk;
-      } else if (chunk.type === "usage") {
-        usage = chunk.usage;
-        providerRequestId = chunk.providerRequestId ?? providerRequestId;
-      } else {
-        providerRequestId = chunk.providerRequestId ?? providerRequestId;
+    let providerCompleted = false;
+    for (const [index, candidate] of prepared.candidates.entries()) {
+      activeCandidate = candidate;
+      if (index > 0) {
+        await db().update(runs).set({
+          provider: candidate.credential.provider,
+          model: candidate.model,
+        }).where(eq(runs.id, prepared.run.id));
+      }
+      try {
+        for await (const chunk of streamWithProvider(candidate.credential.provider, {
+          apiKey: decryptSecret(candidate.credential.encryptedSecret),
+          baseUrl: candidate.credential.baseUrl,
+          model: candidate.model,
+          messages: prepared.context,
+          temperature: prepared.version.temperatureMilli / 1000,
+          maxOutputTokens: prepared.version.maxOutputTokens,
+          signal: controller.signal,
+          requestId: input.requestId,
+        })) {
+          if (chunk.type === "delta") {
+            text += chunk.text;
+            yield chunk;
+          } else if (chunk.type === "usage") {
+            usage = chunk.usage;
+            providerRequestId = chunk.providerRequestId ?? providerRequestId;
+          } else {
+            providerRequestId = chunk.providerRequestId ?? providerRequestId;
+          }
+        }
+        providerCompleted = true;
+        break;
+      } catch (error) {
+        const safe = safeProviderError(error);
+        const mayFallback = text.length === 0
+          && (safe.retryable || safe.code === "PROVIDER_REJECTED_INPUT")
+          && index < prepared.candidates.length - 1;
+        if (!mayFallback) throw safe;
+        usage = { inputTokens: null, outputTokens: null };
+        providerRequestId = undefined;
       }
     }
-    if (!text.trim()) throw new ProviderError("PROVIDER_EMPTY_OUTPUT", "لم يُرجع النموذج نصًا.", 502);
+    if (!providerCompleted || !text.trim()) throw new ProviderError("PROVIDER_EMPTY_OUTPUT", "لم يُرجع النموذج نصًا.", 502);
     const completed = await completeRun({
       runId: prepared.run.id,
       conversationId: input.conversationId,
-      providerCredentialId: prepared.credential.id,
+      providerCredentialId: activeCandidate.credential.id,
       text,
       usage,
       providerRequestId,
-      model: prepared.version.model,
+      model: activeCandidate.model,
     });
     yield {
       type: "complete" as const,
@@ -395,7 +454,7 @@ export async function* streamAgentRun(input: {
     };
   } catch (error) {
     const safe = safeProviderError(error);
-    await failRun(prepared.run.id, safe);
+    await failRun(prepared.run.id, safe, activeCandidate.credential.id);
     throw new ApiError(safe.httpStatus, safe.code, safe.message, { runId: prepared.run.id });
   } finally {
     activeControllers.delete(prepared.run.id);

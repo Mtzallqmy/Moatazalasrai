@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+import 'package:moataz_ai_mobile/src/core/api_client.dart';
 import 'package:moataz_ai_mobile/src/core/brand_config.dart';
 import 'package:moataz_ai_mobile/src/features/auth/auth_repository.dart';
 import 'package:moataz_ai_mobile/src/widgets/brand_mark.dart';
@@ -57,7 +58,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       });
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.toString())));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(ApiClient.userMessage(error))),
+      );
     }
   }
 

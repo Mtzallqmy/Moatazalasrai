@@ -1,7 +1,7 @@
 name: moataz_ai_mobile
 description: تطبيق Android أصلي لمنصة معتز AI، يتصل بالمنصة عبر API ولا يستخدم WebView.
 publish_to: "none"
-version: 1.2.0+3
+version: 1.2.1+4
 
 environment:
   sdk: ">=3.8.0 <4.0.0"

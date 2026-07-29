@@ -144,6 +144,7 @@ class PlatformRepository {
     String conversationId,
     String message, {
     List<String> attachmentIds = const [],
+    String inputKind = 'text',
   }) async {
     final response = await _api.dio.post<Map<String, dynamic>>(
       '/api/v1/chat',
@@ -151,7 +152,7 @@ class PlatformRepository {
         'conversationId': conversationId,
         'message': message,
         'attachmentIds': attachmentIds,
-        'inputKind': attachmentIds.isEmpty ? 'text' : 'file',
+        'inputKind': attachmentIds.isEmpty ? 'text' : inputKind,
       },
       options: Options(headers: {'idempotency-key': 'chat-${DateTime.now().microsecondsSinceEpoch}'}),
     );
@@ -199,6 +200,14 @@ class PlatformRepository {
       'wav': 'audio/wav', 'ogg': 'audio/ogg', 'mp4': 'video/mp4',
       'webm': 'video/webm',
     }[extension] ?? 'application/octet-stream';
+  }
+
+  static String inputKindForFiles(List<Map<String, dynamic>> files) {
+    final mimeTypes = files.map((file) => file['mimeType'] as String? ?? '').toList();
+    if (mimeTypes.any((type) => type.startsWith('image/'))) return 'image';
+    if (mimeTypes.any((type) => type.startsWith('audio/'))) return 'audio';
+    if (mimeTypes.any((type) => type.startsWith('video/'))) return 'video';
+    return files.isEmpty ? 'text' : 'file';
   }
 
   Future<Map<String, dynamic>> importYoutube(String conversationId, String url) async {

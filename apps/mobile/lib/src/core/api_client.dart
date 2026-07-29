@@ -112,6 +112,35 @@ class ApiClient {
     }
     return body['data'] as Map<String, dynamic>? ?? const {};
   }
+
+  static String userMessage(Object error) {
+    if (error is ApiException) return error.message;
+    if (error is DioException) {
+      final body = error.response?.data;
+      if (body is Map) {
+        final apiError = body['error'];
+        if (apiError is Map) {
+          final message = apiError['message'];
+          if (message is String && message.trim().isNotEmpty) return message;
+        }
+      }
+      return switch (error.response?.statusCode) {
+        401 => 'انتهت الجلسة. سجّل الدخول مجددًا.',
+        403 => 'لا تملك الصلاحية المطلوبة لتنفيذ هذه العملية.',
+        413 => 'حجم الملف أكبر من الحد المسموح.',
+        415 => 'نوع الملف غير مدعوم أو لا يطابق امتداده.',
+        422 => 'تعذر تشغيل الوكيل بهذا النموذج أو بهذه المدخلات.',
+        429 => 'تم بلوغ الحد المؤقت للطلبات. حاول بعد قليل.',
+        502 || 503 || 504 => 'مزود الذكاء الاصطناعي غير متاح مؤقتًا. حاول مجددًا أو اختر نموذجًا آخر.',
+        _ when error.type == DioExceptionType.connectionTimeout
+            || error.type == DioExceptionType.receiveTimeout
+            || error.type == DioExceptionType.connectionError =>
+          'تعذر الاتصال بالخادم. تحقق من الإنترنت ثم أعد المحاولة.',
+        _ => 'تعذر إكمال الطلب. حاول مجددًا.',
+      };
+    }
+    return 'حدث خطأ غير متوقع. حاول مجددًا.';
+  }
 }
 
 class ApiException implements Exception {

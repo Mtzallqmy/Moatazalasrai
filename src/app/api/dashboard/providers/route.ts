@@ -13,6 +13,7 @@ import {
 import { defaultBaseUrl, validateProvider } from "@/lib/providers/registry";
 import { ProviderError } from "@/lib/providers/types";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
+import { inferModelCapabilities, isFreeTierModel } from "@/server/models/capabilities";
 
 export const runtime = "nodejs";
 
@@ -110,9 +111,17 @@ export async function POST(request: Request) {
           organizationId: session.organizationId,
           providerCredentialId: credential.id,
           model,
-          capabilities: { text: true, streaming: true },
+          capabilities: inferModelCapabilities(body.provider, model),
+          freeTierEligible: isFreeTierModel(model),
           latencyMs: validation.latencyMs,
-        }))).onConflictDoNothing();
+        }))).onConflictDoUpdate({
+          target: [modelCatalog.providerCredentialId, modelCatalog.model],
+          set: {
+            available: true,
+            lastSeenAt: new Date(),
+            updatedAt: new Date(),
+          },
+        });
       }
       await tx.insert(auditLogs).values({
         organizationId: session.organizationId,
@@ -215,11 +224,19 @@ export async function PATCH(request: Request) {
         organizationId: session.organizationId,
         providerCredentialId: updated.id,
         model,
-        capabilities: { text: true, streaming: true },
+        capabilities: inferModelCapabilities(updated.provider, model),
+        freeTierEligible: isFreeTierModel(model),
         latencyMs: validation.latencyMs,
         available: true,
         lastSeenAt: new Date(),
-      }))).onConflictDoNothing();
+      }))).onConflictDoUpdate({
+        target: [modelCatalog.providerCredentialId, modelCatalog.model],
+        set: {
+          available: true,
+          lastSeenAt: new Date(),
+          updatedAt: new Date(),
+        },
+      });
     }
     await db().insert(auditLogs).values({
       organizationId: session.organizationId,

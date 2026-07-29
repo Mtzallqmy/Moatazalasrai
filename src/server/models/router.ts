@@ -22,7 +22,7 @@ const requiredCapability: Record<InputKind, string> = {
 };
 
 export function scoreModel(model: RoutableModel, inputKind: InputKind) {
-  if (!model.available || model.capabilities[requiredCapability[inputKind]] === false) return Number.NEGATIVE_INFINITY;
+  if (!model.available || model.capabilities[requiredCapability[inputKind]] !== true) return Number.NEGATIVE_INFINITY;
   let score = 0;
   if (model.capabilities[requiredCapability[inputKind]] === true) score += 100;
   if (model.freeTierEligible) score += 35;
@@ -32,9 +32,13 @@ export function scoreModel(model: RoutableModel, inputKind: InputKind) {
   return score;
 }
 
-export function selectBestModel(models: RoutableModel[], inputKind: InputKind) {
-  const ranked = models.map((model) => ({ model, score: scoreModel(model, inputKind) }))
+export function rankModels(models: RoutableModel[], inputKind: InputKind) {
+  return models.map((model) => ({ model, score: scoreModel(model, inputKind) }))
     .filter((entry) => Number.isFinite(entry.score))
-    .sort((left, right) => right.score - left.score);
-  return ranked[0]?.model ?? null;
+    .sort((left, right) => right.score - left.score)
+    .map((entry) => entry.model);
+}
+
+export function selectBestModel(models: RoutableModel[], inputKind: InputKind) {
+  return rankModels(models, inputKind)[0] ?? null;
 }

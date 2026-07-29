@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+import 'package:moataz_ai_mobile/src/core/api_client.dart';
 import 'package:moataz_ai_mobile/src/core/brand_config.dart';
 import 'package:moataz_ai_mobile/src/features/auth/auth_repository.dart';
 import 'package:moataz_ai_mobile/src/features/chat/conversation_screen.dart';
@@ -243,6 +244,12 @@ class _ConversationsState extends ConsumerState<_Conversations> {
   Future<void> _open(Map<String, dynamic> conversation) async {
     final agent = _agent(conversation['agentId'] as String);
     if (agent == null) return;
+    if (agent['runtimeStatus'] != null && agent['runtimeStatus'] != 'ready') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('هذا الوكيل غير جاهز حاليًا. افحص المزود والنموذج ثم أعد المحاولة.')),
+      );
+      return;
+    }
     await Navigator.push<void>(context, MaterialPageRoute(
       builder: (_) => ConversationScreen(agent: agent, conversation: conversation),
     ));
@@ -257,7 +264,9 @@ class _ConversationsState extends ConsumerState<_Conversations> {
         shrinkWrap: true,
         children: [
           const ListTile(title: Text('اختر الوكيل', style: TextStyle(fontWeight: FontWeight.w900))),
-          ...widget.data.agents.where((agent) => agent['status'] == 'published').map((agent) => ListTile(
+          ...widget.data.agents.where((agent) =>
+            agent['status'] == 'published'
+            && (agent['runtimeStatus'] == null || agent['runtimeStatus'] == 'ready')).map((agent) => ListTile(
             leading: const CircleAvatar(child: Icon(Icons.smart_toy_outlined)),
             title: Text(agent['name'] as String),
             subtitle: Text(agent['description'] as String? ?? 'وكيل منشور'),
@@ -298,7 +307,11 @@ class _ConversationsState extends ConsumerState<_Conversations> {
       }
       widget.refresh();
     } catch (error) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.toString())));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(ApiClient.userMessage(error))),
+        );
+      }
     }
   }
 
@@ -380,7 +393,11 @@ class _AgentsState extends ConsumerState<_Agents> {
         ),
       );
     } catch (error) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.toString())));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(ApiClient.userMessage(error))),
+        );
+      }
     }
   }
 
@@ -393,7 +410,13 @@ class _AgentsState extends ConsumerState<_Agents> {
         separatorBuilder: (_, _) => const SizedBox(height: 10),
         itemBuilder: (_, index) {
           final agent = widget.data.agents[index];
-          final ready = agent['status'] == 'published';
+          final ready = agent['status'] == 'published' && agent['runtimeStatus'] != 'unavailable';
+          final runtimeStatus = agent['runtimeStatus'] as String? ?? 'ready';
+          final statusLabel = agent['status'] != 'published'
+              ? 'مسودة'
+              : runtimeStatus == 'cooldown'
+                  ? 'انتظار'
+                  : runtimeStatus == 'unavailable' ? 'غير جاهز' : 'جاهز';
           return Card(
             child: ListTile(
               leading: CircleAvatar(
@@ -402,8 +425,8 @@ class _AgentsState extends ConsumerState<_Agents> {
               ),
               title: Text(agent['name'] as String, style: const TextStyle(fontWeight: FontWeight.w800)),
               subtitle: Text(agent['description'] as String? ?? 'لا يوجد وصف', maxLines: 2, overflow: TextOverflow.ellipsis),
-              trailing: Chip(label: Text(ready ? 'منشور' : 'مسودة')),
-              onTap: ready ? () => _open(agent) : null,
+              trailing: Chip(label: Text(statusLabel)),
+              onTap: ready && runtimeStatus != 'cooldown' ? () => _open(agent) : null,
             ),
           );
         },
@@ -498,7 +521,11 @@ class _ProvidersViewState extends ConsumerState<_ProvidersView> {
       );
       if (mounted) setState(_load);
     } catch (error) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.toString())));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(ApiClient.userMessage(error))),
+        );
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -686,7 +713,11 @@ class _McpViewState extends ConsumerState<_McpView> {
       await ref.read(platformRepositoryProvider).createMcpServer(name: values[0], endpoint: values[1], bearerToken: values[2]);
       ref.invalidate(workspaceDataProvider);
     } catch (error) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.toString())));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(ApiClient.userMessage(error))),
+        );
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -698,7 +729,11 @@ class _McpViewState extends ConsumerState<_McpView> {
       await ref.read(platformRepositoryProvider).syncMcpServer(id);
       ref.invalidate(workspaceDataProvider);
     } catch (error) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.toString())));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(ApiClient.userMessage(error))),
+        );
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -890,7 +925,11 @@ class _TemplateInstallerState extends State<_TemplateInstaller> {
       await widget.install(template['id'] as String, provider['id'] as String, models.first);
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم تثبيت الوكيل ونشره.')));
     } catch (error) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.toString())));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(ApiClient.userMessage(error))),
+        );
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -981,7 +1020,7 @@ class _ErrorState extends StatelessWidget {
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         const Icon(Icons.cloud_off_outlined, size: 48),
         const SizedBox(height: 12),
-        Text(error.toString(), textAlign: TextAlign.center),
+        Text(ApiClient.userMessage(error), textAlign: TextAlign.center),
         const SizedBox(height: 12),
         FilledButton(onPressed: retry, child: const Text('إعادة المحاولة')),
       ]),
