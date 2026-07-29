@@ -21,7 +21,10 @@ docker run --rm -p 3000:3000 --env-file .env moataz-agent-platform
 ## Railway
 
 - اربط المستودع.
-- اضبط `APP_URL`, `DATABASE_URL`, `CREDENTIAL_ENCRYPTION_KEY` و`NODE_ENV=production`.
+- أضف خدمة PostgreSQL إلى المشروع نفسه.
+- في خدمة التطبيق، اجعل `DATABASE_URL` مرجعًا إلى متغير خدمة PostgreSQL (عادةً `${{Postgres.DATABASE_URL}}`) بدل نسخ بيانات الاتصال يدويًا.
+- اضبط `APP_URL`, `CREDENTIAL_ENCRYPTION_KEY` و`NODE_ENV=production`.
+- يستخدم التطبيق مشغّل PostgreSQL TCP مباشرًا ومتوافقًا مع عنوان Railway الداخلي.
 - يشغّل `railway.json` الأمر `npm run db:migrate` كـPre-deploy Command مرة واحدة قبل بدء النسخة الجديدة.
 - بعد نجاح الـmigration يبدأ التطبيق، ثم يستخدم Railway `/api/ready` قبل تحويل المرور.
 - إذا فشلت خطوة Pre-deploy فتحقق من `DATABASE_URL` وسجل migration؛ لا تستبدل readiness بفحص سطحي لإخفاء قاعدة غير مهيأة.
