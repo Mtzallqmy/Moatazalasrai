@@ -6,7 +6,7 @@ import { ApiError } from "@/lib/http/api";
 import { hashApiKey } from "@/lib/security/encryption";
 
 const ACCESS_MINUTES = 15;
-const REFRESH_DAYS = 30;
+const REFRESH_DAYS = 90;
 
 function token(prefix: "mat" | "mrt") {
   return `${prefix}_${randomBytes(32).toString("base64url")}`;
@@ -21,11 +21,13 @@ export async function issueMobileSession(input: {
   organizationId: string;
   deviceId: string;
   deviceName?: string;
+  rememberSession?: boolean;
 }) {
   const accessToken = token("mat");
   const refreshToken = token("mrt");
   const accessExpiresAt = expiresIn(ACCESS_MINUTES * 60_000);
-  const refreshExpiresAt = expiresIn(REFRESH_DAYS * 24 * 60 * 60_000);
+  const refreshDays = input.rememberSession === false ? 1 : REFRESH_DAYS;
+  const refreshExpiresAt = expiresIn(refreshDays * 24 * 60 * 60_000);
   const [session] = await db().insert(mobileSessions).values({
     userId: input.userId,
     organizationId: input.organizationId,
@@ -56,7 +58,7 @@ export async function issueMobileSession(input: {
     refreshToken,
     tokenType: "Bearer" as const,
     expiresIn: ACCESS_MINUTES * 60,
-    refreshExpiresIn: REFRESH_DAYS * 24 * 60 * 60,
+    refreshExpiresIn: refreshDays * 24 * 60 * 60,
   };
 }
 

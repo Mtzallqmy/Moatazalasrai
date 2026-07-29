@@ -13,6 +13,7 @@ const schema = z.object({
   organizationId: z.string().uuid().optional(),
   deviceId: z.string().trim().min(8).max(200),
   deviceName: z.string().trim().min(1).max(200).optional(),
+  rememberSession: z.boolean().default(true),
 }).strict();
 
 export async function POST(request: Request) {
@@ -41,6 +42,7 @@ export async function POST(request: Request) {
       organizationId: selected.id,
       deviceId: body.deviceId,
       deviceName: body.deviceName,
+      rememberSession: body.rememberSession,
     });
     return apiSuccess({
       tokens,

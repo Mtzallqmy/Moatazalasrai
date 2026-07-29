@@ -19,6 +19,7 @@ class AuthRepository {
   Future<List<Map<String, dynamic>>?> login({
     required String email,
     required String password,
+    required bool rememberSession,
     String? organizationId,
   }) async {
     final deviceId = await _tokens.deviceId();
@@ -29,6 +30,7 @@ class AuthRepository {
         'password': password,
         'organizationId': organizationId,
         'deviceId': deviceId,
+        'rememberSession': rememberSession,
         'deviceName': '${Platform.operatingSystem} ${Platform.operatingSystemVersion}',
       }..removeWhere((_, value) => value == null),
       options: Options(
@@ -46,8 +48,36 @@ class AuthRepository {
     await _tokens.write(TokenPair(
       accessToken: tokenData['accessToken'] as String,
       refreshToken: tokenData['refreshToken'] as String,
-    ));
+    ), remember: rememberSession);
     return null;
+  }
+
+  Future<void> register({
+    required String name,
+    required String email,
+    required String password,
+    required bool rememberSession,
+  }) async {
+    final deviceId = await _tokens.deviceId();
+    final response = await _api.dio.post<Map<String, dynamic>>(
+      '/api/mobile/v1/auth/register',
+      data: {
+        'name': name.trim(),
+        'email': email.trim().toLowerCase(),
+        'password': password,
+        'rememberSession': rememberSession,
+        'deviceId': deviceId,
+        'deviceName': '${Platform.operatingSystem} ${Platform.operatingSystemVersion}',
+      },
+      options: Options(extra: {'retried': true}),
+    );
+    final data = ApiClient.payload(response);
+    final tokenData = data['tokens'] as Map<String, dynamic>?;
+    if (tokenData == null) throw const ApiException(code: 'TOKEN_MISSING', message: 'لم تصل رموز الجلسة.');
+    await _tokens.write(TokenPair(
+      accessToken: tokenData['accessToken'] as String,
+      refreshToken: tokenData['refreshToken'] as String,
+    ), remember: rememberSession);
   }
 
   Future<bool> hasSession() async {
@@ -72,6 +102,8 @@ class AuthRepository {
     }
     await _tokens.clear();
   }
+
+  Future<bool> rememberSession() => _tokens.rememberSession();
 }
 
 class AuthController extends AsyncNotifier<bool> {
@@ -79,12 +111,18 @@ class AuthController extends AsyncNotifier<bool> {
   @override
   Future<bool> build() => _repository.hasSession();
 
-  Future<List<Map<String, dynamic>>?> login(String email, String password, {String? organizationId}) async {
+  Future<List<Map<String, dynamic>>?> login(
+    String email,
+    String password, {
+    required bool rememberSession,
+    String? organizationId,
+  }) async {
     state = const AsyncLoading();
     try {
       final organizations = await _repository.login(
         email: email,
         password: password,
+        rememberSession: rememberSession,
         organizationId: organizationId,
       );
       state = AsyncData(organizations == null);
@@ -98,5 +136,26 @@ class AuthController extends AsyncNotifier<bool> {
   Future<void> logout() async {
     await _repository.logout();
     state = const AsyncData(false);
+  }
+
+  Future<void> register({
+    required String name,
+    required String email,
+    required String password,
+    required bool rememberSession,
+  }) async {
+    state = const AsyncLoading();
+    try {
+      await _repository.register(
+        name: name,
+        email: email,
+        password: password,
+        rememberSession: rememberSession,
+      );
+      state = const AsyncData(true);
+    } catch (error, stack) {
+      state = AsyncError(error, stack);
+      rethrow;
+    }
   }
 }
