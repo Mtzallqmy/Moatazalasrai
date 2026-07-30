@@ -1,5 +1,5 @@
 import { boolean, index, integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
-import { organizations, providerCredentials, runs } from "@/db/schema";
+import { organizations, providerCredentials, runs } from "./schema";
 
 export const providerCredentialHealthEvents = pgTable("provider_credential_health_events", {
   id: uuid("id").defaultRandom().primaryKey(),
