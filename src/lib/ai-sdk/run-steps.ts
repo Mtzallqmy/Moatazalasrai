@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, max, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { agentRunSteps } from "@/db/agent-runtime-schema";
+import { runs } from "@/db/schema";
+import { ApiError } from "@/lib/http/api";
 
 function digest(value: unknown) {
   return createHash("sha256").update(JSON.stringify(value ?? null)).digest("hex");
@@ -12,6 +14,30 @@ function nullableInteger(value: unknown) {
 }
 
 export type RunStepType = "model" | "tool_call" | "tool_result" | "approval_requested" | "approval_response" | "fallback";
+
+export async function createRunStepAllocator(organizationId: string, runId: string) {
+  const first = await db().transaction(async (tx) => {
+    const lock = await tx.execute(sql`
+      SELECT "id" FROM "runs"
+      WHERE "id" = ${runId} AND "organization_id" = ${organizationId}
+      FOR UPDATE
+    `);
+    if (lock.length === 0) throw new ApiError(404, "RUN_NOT_FOUND", "عملية التشغيل غير موجودة.");
+    const [current] = await tx.select({ value: max(agentRunSteps.stepNumber) })
+      .from(agentRunSteps)
+      .where(and(
+        eq(agentRunSteps.organizationId, organizationId),
+        eq(agentRunSteps.runId, runId),
+      ));
+    return (current?.value ?? 0) + 1;
+  });
+  let next = first;
+  return () => {
+    const value = next;
+    next += 1;
+    return value;
+  };
+}
 
 export async function persistRunStep(input: {
   organizationId: string;
@@ -72,6 +98,11 @@ export async function persistRunStep(input: {
 }
 
 export async function listRunSteps(organizationId: string, runId: string) {
+  const [owned] = await db().select({ id: runs.id }).from(runs).where(and(
+    eq(runs.id, runId),
+    eq(runs.organizationId, organizationId),
+  )).limit(1);
+  if (!owned) throw new ApiError(404, "RUN_NOT_FOUND", "عملية التشغيل غير موجودة.");
   return db().select().from(agentRunSteps).where(and(
     eq(agentRunSteps.organizationId, organizationId),
     eq(agentRunSteps.runId, runId),
