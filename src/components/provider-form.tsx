@@ -17,9 +17,8 @@ export type ValidationResult = {
 
 type ErrorPayload = {
   message?: string;
-  code?: string;
   action?: { ar?: string };
-  details?: Array<{ path?: string; message?: string }>;
+  details?: Array<{ message?: string }>;
 };
 
 const categoryLabels: Record<ProviderPreset["category"], string> = {
@@ -31,10 +30,11 @@ const categoryLabels: Record<ProviderPreset["category"], string> = {
 };
 
 function errorText(error: ErrorPayload | undefined, fallback: string) {
-  if (!error) return fallback;
-  const action = error.action?.ar?.trim();
-  const detail = error.details?.map((item) => item.message).filter(Boolean).join("، ");
-  return [error.message?.trim() || fallback, detail, action].filter(Boolean).join(" ");
+  return [
+    error?.message?.trim() || fallback,
+    error?.details?.map((item) => item.message).filter(Boolean).join("، "),
+    error?.action?.ar?.trim(),
+  ].filter(Boolean).join(" ");
 }
 
 export function ProviderForm() {
@@ -48,9 +48,11 @@ export function ProviderForm() {
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [testModel, setTestModel] = useState("");
 
-  const models = validation?.models ?? [];
-  const modelPreview = models.slice(0, 16);
-  const canSave = Boolean(validation && testModel && loading === null);
+  const grouped = useMemo(() => Object.entries(categoryLabels).map(([category, label]) => ({
+    category: category as ProviderPreset["category"],
+    label,
+    providers: providerPresets.filter((item) => item.category === category),
+  })), []);
 
   function resetValidation() {
     setValidation(null);
@@ -66,7 +68,7 @@ export function ProviderForm() {
     setMessage(null);
   }
 
-  async function requestValidation(form: FormData): Promise<ValidationResult | null> {
+  async function requestValidation(form: FormData) {
     setLoading("validate");
     setMessage(null);
     const submittedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
@@ -90,12 +92,12 @@ export function ProviderForm() {
       if (!response.ok || !payload?.success || !payload.data) {
         resetValidation();
         setMessage(errorText(payload?.error, "تعذر فحص الاتصال بالمزود."));
-        return null;
+        return;
       }
-      setValidation(payload.data);
       const selected = manualModel.trim() && payload.data.models.includes(manualModel.trim())
         ? manualModel.trim()
         : payload.data.models[0] ?? "";
+      setValidation(payload.data);
       setTestModel(selected);
       setBaseUrl(payload.data.normalizedBaseUrl);
       const adjusted = payload.data.baseUrlAdjusted
@@ -104,14 +106,12 @@ export function ProviderForm() {
       setMessage([
         adjusted ? `تم اعتماد Base URL الآمن: ${payload.data.normalizedBaseUrl}.` : null,
         `نجح الاتصال خلال ${payload.data.latencyMs}ms وتم العثور على ${payload.data.models.length} نموذجًا.`,
-        manualStage ? "استُخدم اسم النموذج اليدوي لأن المزود لا يوفر مسار /models متوافقًا." : null,
+        manualStage ? "استُخدم اسم النموذج اليدوي لأن المزود لا يوفر /models متوافقًا." : null,
         "اختر نموذج الاختبار ثم احفظ الاتصال.",
       ].filter(Boolean).join(" "));
-      return payload.data;
     } catch {
       resetValidation();
       setMessage("تعذر الوصول إلى الخادم. تحقق من الاتصال وحاول مجددًا.");
-      return null;
     } finally {
       setLoading(null);
     }
@@ -171,19 +171,14 @@ export function ProviderForm() {
     }
   }
 
-  const grouped = useMemo(() => Object.entries(categoryLabels).map(([category, label]) => ({
-    category: category as ProviderPreset["category"],
-    label,
-    providers: providerPresets.filter((item) => item.category === category),
-  })), []);
+  const models = validation?.models ?? [];
+  const modelPreview = models.slice(0, 16);
 
   return (
     <form onSubmit={submit} className="soft-card grid gap-4 p-5 sm:grid-cols-2 sm:p-6">
       <div className="sm:col-span-2">
         <h2 className="text-lg font-bold">إضافة اتصال مزود حقيقي</h2>
-        <p className="mt-1 text-sm leading-7 text-[var(--text-secondary)]">
-          اختر المنصة، أدخل مفتاحها، ثم نفّذ اتصالًا واختبار توليد حقيقيًا قبل الحفظ المشفر.
-        </p>
+        <p className="mt-1 text-sm leading-7 text-[var(--text-secondary)]">اختر المنصة، أدخل مفتاحها، ثم نفّذ اتصالًا واختبار توليد حقيقيًا قبل الحفظ المشفر.</p>
       </div>
 
       <label className="grid gap-2 text-sm sm:col-span-2">
@@ -197,75 +192,48 @@ export function ProviderForm() {
         </select>
       </label>
 
+      <div className="flex flex-wrap gap-2 sm:col-span-2">
+        <button type="button" className="secondary-button px-3 py-2 text-xs" onClick={() => changePreset("agentrouter")}>استخدام عنوان AgentRouter الرسمي</button>
+        <button type="button" className="secondary-button px-3 py-2 text-xs" onClick={() => changePreset("openrouter")}>استخدام OpenRouter</button>
+        <button type="button" className="secondary-button px-3 py-2 text-xs" onClick={() => changePreset("huggingface")}>استخدام Hugging Face</button>
+      </div>
+
       <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface-soft)] p-4 text-sm sm:col-span-2">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <strong>{preset.labelAr}</strong>
-          <span className="rounded-full border border-[var(--border)] px-2 py-1 text-xs" dir="ltr">{preset.apiStyle}</span>
-        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2"><strong>{preset.labelAr}</strong><span className="rounded-full border border-[var(--border)] px-2 py-1 text-xs" dir="ltr">{preset.apiStyle}</span></div>
         <p className="mt-2 leading-7 text-[var(--text-secondary)]">{preset.descriptionAr}</p>
       </section>
 
-      <label className="grid gap-2 text-sm">
-        اسم الاتصال
-        <input name="name" required maxLength={80} className="form-control" placeholder={`${preset.labelAr} — الإنتاج`} />
-      </label>
-
-      <label className="grid gap-2 text-sm">
-        مفتاح API
-        <input name="apiKey" required type="password" minLength={8} maxLength={4000} autoComplete="off" dir="ltr" onChange={resetValidation} className="form-control font-mono" placeholder="••••••••••••••••" />
-      </label>
+      <label className="grid gap-2 text-sm">اسم الاتصال<input name="name" required maxLength={80} className="form-control" placeholder={`${preset.labelAr} — الإنتاج`} /></label>
+      <label className="grid gap-2 text-sm">مفتاح API<input name="apiKey" required type="password" minLength={8} maxLength={4000} autoComplete="off" dir="ltr" onChange={resetValidation} className="form-control font-mono" placeholder="••••••••••••••••" /></label>
 
       <label className="grid gap-2 text-sm sm:col-span-2">
         Base URL
-        <input
-          value={baseUrl}
-          onChange={(event) => { setBaseUrl(event.target.value); resetValidation(); }}
-          required
-          readOnly={!preset.baseUrlEditable}
-          type="url"
-          dir="ltr"
-          className="form-control font-mono text-sm read-only:cursor-not-allowed read-only:opacity-75"
-          placeholder="https://provider.example.com/v1"
-        />
-        <span className="text-xs text-[var(--text-secondary)]">
-          {preset.baseUrlEditable ? "يمكن تغييره لنشر خاص أو منطقة سحابية أخرى." : "عنوان رسمي مثبت لهذا المزود لحماية المفتاح من التوجيه إلى نطاق خاطئ."}
-        </span>
+        <input value={baseUrl} onChange={(event) => { setBaseUrl(event.target.value); resetValidation(); }} required readOnly={!preset.baseUrlEditable} type="url" dir="ltr" className="form-control font-mono text-sm read-only:cursor-not-allowed read-only:opacity-75" placeholder="https://provider.example.com/v1" />
+        <span className="text-xs text-[var(--text-secondary)]">{preset.baseUrlEditable ? "يمكن تغييره لنشر خاص أو منطقة سحابية أخرى." : "عنوان رسمي مثبت لهذا المزود لحماية المفتاح من التوجيه إلى نطاق خاطئ."}</span>
       </label>
 
       <label className="grid gap-2 text-sm sm:col-span-2">
         اسم نموذج يدوي — اختياري
         <input value={manualModel} onChange={(event) => { setManualModel(event.target.value); resetValidation(); }} maxLength={300} dir="ltr" className="form-control font-mono" placeholder="provider/model-name" />
-        <span className="text-xs text-[var(--text-secondary)]">استخدمه للمزودات التي لا توفر قائمة نماذج عبر /models. سيظل النموذج خاضعًا لاختبار توليد حقيقي.</span>
+        <span className="text-xs text-[var(--text-secondary)]">للمزودات التي لا توفر قائمة نماذج عبر /models. سيظل النموذج خاضعًا لاختبار توليد حقيقي.</span>
       </label>
 
       <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
-        <button disabled={loading !== null} onClick={validate} className="secondary-button disabled:cursor-not-allowed disabled:opacity-60" type="button">
-          {loading === "validate" ? "جارٍ فحص الشبكة والمفتاح..." : "فحص الاتصال وجلب النماذج"}
-        </button>
-        <button disabled={!canSave} className="primary-button disabled:cursor-not-allowed disabled:opacity-50" type="submit">
-          {loading === "save" ? "جارٍ اختبار التوليد والحفظ..." : "اختبر واحفظ الاتصال"}
-        </button>
+        <button disabled={loading !== null} onClick={validate} className="secondary-button disabled:opacity-60" type="button">{loading === "validate" ? "جارٍ فحص الشبكة والمفتاح..." : "فحص الاتصال وجلب النماذج"}</button>
+        <button disabled={!validation || !testModel || loading !== null} className="primary-button disabled:opacity-50" type="submit">{loading === "save" ? "جارٍ اختبار التوليد والحفظ..." : "اختبر واحفظ الاتصال"}</button>
         {!validation ? <span className="text-xs text-[var(--text-secondary)]">الحفظ لا يتاح قبل نجاح فحص حقيقي.</span> : null}
       </div>
 
       {message ? <p className="rounded-2xl border border-[var(--border)] bg-[var(--surface-soft)] px-4 py-3 text-sm sm:col-span-2" role="status">{message}</p> : null}
 
       {validation ? (
-        <section className="rounded-2xl border border-[var(--primary)]/30 bg-[var(--primary-soft)] p-4 sm:col-span-2">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h3 className="font-bold">النماذج المتاحة فعليًا</h3>
-            <span className="text-xs text-[var(--text-secondary)]">{models.length} نموذج — {validation.latencyMs}ms</span>
-          </div>
+        <section className="rounded-2xl border border-[var(--border)] bg-[var(--primary-soft)] p-4 sm:col-span-2">
+          <div className="flex flex-wrap items-center justify-between gap-3"><h3 className="font-bold">النماذج المتاحة فعليًا</h3><span className="text-xs text-[var(--text-secondary)]">{models.length} نموذج — {validation.latencyMs}ms</span></div>
           <div className="mt-4 flex max-h-44 flex-wrap gap-2 overflow-y-auto" dir="ltr">
             {modelPreview.map((model) => <span key={model} className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-1 font-mono text-xs">{model}</span>)}
             {models.length > modelPreview.length ? <span className="px-2 py-1 text-xs">+{models.length - modelPreview.length}</span> : null}
           </div>
-          <label className="mt-4 grid gap-2 text-sm">
-            نموذج اختبار التوليد قبل الحفظ
-            <select value={testModel} onChange={(event) => setTestModel(event.target.value)} required dir="ltr" className="form-control font-mono text-sm">
-              {models.map((model) => <option key={model} value={model}>{model}</option>)}
-            </select>
-          </label>
+          <label className="mt-4 grid gap-2 text-sm">نموذج اختبار التوليد قبل الحفظ<select value={testModel} onChange={(event) => setTestModel(event.target.value)} required dir="ltr" className="form-control font-mono text-sm">{models.map((model) => <option key={model} value={model}>{model}</option>)}</select></label>
         </section>
       ) : null}
     </form>
