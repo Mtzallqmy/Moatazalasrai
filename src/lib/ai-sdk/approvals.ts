@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import { and, desc, eq, gt, lte, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, lte } from "drizzle-orm";
 import { db } from "@/db";
 import { toolApprovalsRuntime } from "@/db/agent-runtime-schema";
 import { auditLogs, runs } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
-import { decryptSecret, encryptSecret } from "@/lib/security/encryption";
+import { encryptSecret, decryptSecret } from "@/lib/security/encryption";
 import { toolApprovalTtlSeconds } from "@/lib/ai-sdk/limits";
 import { appendRunEvent } from "@/lib/ai-sdk/run-events";
 import { persistRunStep } from "@/lib/ai-sdk/run-steps";
@@ -13,15 +13,6 @@ import { redactedArgumentSummary } from "@/lib/ai-sdk/approval-policy";
 
 function digest(value: unknown) {
   return createHash("sha256").update(JSON.stringify(value ?? null)).digest("hex");
-}
-
-function publicApprovalArguments(encryptedArguments: string | null) {
-  if (!encryptedArguments) return {};
-  try {
-    return redactedArgumentSummary(JSON.parse(decryptSecret(encryptedArguments)));
-  } catch {
-    return { unavailable: true };
-  }
 }
 
 export async function requestToolApproval(input: {
@@ -72,7 +63,7 @@ export async function requestToolApproval(input: {
       capability: input.capability,
     }).returning();
     if (!created) throw new Error("TOOL_APPROVAL_CREATE_FAILED");
-    await tx.update(runs).set({ status: sql`'waiting_approval'::run_status` }).where(and(
+    await tx.update(runs).set({ status: "waiting_approval" }).where(and(
       eq(runs.id, input.runId),
       eq(runs.organizationId, input.organizationId),
     ));
@@ -120,13 +111,20 @@ export async function requestToolApproval(input: {
   return approval;
 }
 
-export async function listPendingToolApprovals(organizationId: string) {
+async function expirePendingApprovals(organizationId: string) {
   const now = new Date();
-  const expired = await db().update(toolApprovalsRuntime).set({ status: "expired", updatedAt: now }).where(and(
+  const expired = await db().update(toolApprovalsRuntime).set({
+    status: "expired",
+    updatedAt: now,
+  }).where(and(
     eq(toolApprovalsRuntime.organizationId, organizationId),
     eq(toolApprovalsRuntime.status, "pending"),
     lte(toolApprovalsRuntime.expiresAt, now),
-  )).returning({ id: toolApprovalsRuntime.id, runId: toolApprovalsRuntime.runId, toolId: toolApprovalsRuntime.toolId });
+  )).returning({
+    id: toolApprovalsRuntime.id,
+    runId: toolApprovalsRuntime.runId,
+    toolId: toolApprovalsRuntime.toolId,
+  });
   if (expired.length) {
     await db().insert(auditLogs).values(expired.map((row) => ({
       organizationId,
@@ -137,29 +135,50 @@ export async function listPendingToolApprovals(organizationId: string) {
       metadata: { runId: row.runId, toolId: row.toolId },
     })));
   }
+}
+
+function publicApproval(row: typeof toolApprovalsRuntime.$inferSelect) {
+  return {
+    ...row,
+    encryptedArguments: undefined,
+    argumentsSummary: row.encryptedArguments
+      ? redactedArgumentSummary(JSON.parse(decryptSecret(row.encryptedArguments)))
+      : {},
+  };
+}
+
+export async function listPendingToolApprovals(organizationId: string) {
+  await expirePendingApprovals(organizationId);
   const rows = await db().select().from(toolApprovalsRuntime).where(and(
     eq(toolApprovalsRuntime.organizationId, organizationId),
     eq(toolApprovalsRuntime.status, "pending"),
-    gt(toolApprovalsRuntime.expiresAt, now),
+    gt(toolApprovalsRuntime.expiresAt, new Date()),
   )).orderBy(desc(toolApprovalsRuntime.createdAt));
-  return rows.map((row) => ({
-    ...row,
-    encryptedArguments: undefined,
-    argumentsSummary: publicApprovalArguments(row.encryptedArguments),
-  }));
+  return rows.map(publicApproval);
 }
 
 export async function getToolApproval(organizationId: string, approvalId: string) {
+  await expirePendingApprovals(organizationId);
   const [row] = await db().select().from(toolApprovalsRuntime).where(and(
     eq(toolApprovalsRuntime.organizationId, organizationId),
     eq(toolApprovalsRuntime.approvalId, approvalId),
   )).limit(1);
   if (!row) throw new ApiError(404, "TOOL_APPROVAL_NOT_FOUND", "طلب الموافقة غير موجود.");
-  return {
-    ...row,
-    encryptedArguments: undefined,
-    argumentsSummary: publicApprovalArguments(row.encryptedArguments),
-  };
+  return publicApproval(row);
+}
+
+export async function getToolApprovalForResume(organizationId: string, approvalId: string) {
+  const [row] = await db().select().from(toolApprovalsRuntime).where(and(
+    eq(toolApprovalsRuntime.organizationId, organizationId),
+    eq(toolApprovalsRuntime.approvalId, approvalId),
+  )).limit(1);
+  if (!row) throw new ApiError(404, "TOOL_APPROVAL_NOT_FOUND", "طلب الموافقة غير موجود.");
+  if (!row.runId || !row.toolCallId) throw new ApiError(409, "TOOL_APPROVAL_INVALID", "طلب الموافقة غير مرتبط بتشغيل صالح.");
+  if (!inArray) throw new Error("UNREACHABLE");
+  if (row.status !== "approved" && row.status !== "rejected") {
+    throw new ApiError(409, "TOOL_APPROVAL_NOT_DECIDED", "لم يُتخذ قرار صالح لهذه الموافقة.");
+  }
+  return row;
 }
 
 export async function decideToolApproval(input: {
@@ -224,7 +243,10 @@ export async function decideToolApproval(input: {
   return result;
 }
 
-export async function consumeToolApproval(input: { organizationId: string; approvalId: string }) {
+export async function consumeToolApproval(input: {
+  organizationId: string;
+  approvalId: string;
+}) {
   const now = new Date();
   const [updated] = await db().update(toolApprovalsRuntime).set({
     status: "consumed",
@@ -233,7 +255,7 @@ export async function consumeToolApproval(input: { organizationId: string; appro
   }).where(and(
     eq(toolApprovalsRuntime.organizationId, input.organizationId),
     eq(toolApprovalsRuntime.approvalId, input.approvalId),
-    eq(toolApprovalsRuntime.status, "approved"),
+    inArray(toolApprovalsRuntime.status, ["approved", "rejected"]),
   )).returning();
   if (!updated) throw new ApiError(409, "TOOL_APPROVAL_NOT_CONSUMABLE", "لا يمكن استهلاك قرار الموافقة الحالي.");
   await db().insert(auditLogs).values({
