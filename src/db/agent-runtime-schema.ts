@@ -11,6 +11,7 @@ import {
 import {
   agents,
   agentTeamRuns,
+  conversations,
   mcpServers,
   mcpTools,
   organizations,
@@ -137,6 +138,7 @@ export const agentTeamRunStepsRuntime = pgTable("agent_team_run_steps", {
   teamRunId: uuid("team_run_id").notNull().references(() => agentTeamRuns.id, { onDelete: "cascade" }),
   agentId: uuid("agent_id").notNull().references(() => agents.id),
   runId: uuid("run_id").references(() => runs.id, { onDelete: "set null" }),
+  conversationId: uuid("conversation_id").references(() => conversations.id, { onDelete: "set null" }),
   stepType: text("step_type").notNull(),
   position: integer("position").notNull(),
   status: text("status").notNull().default("queued"),
@@ -150,6 +152,7 @@ export const agentTeamRunStepsRuntime = pgTable("agent_team_run_steps", {
 }, (table) => [
   uniqueIndex("agent_team_run_steps_identity_unique_idx").on(table.teamRunId, table.stepType, table.position),
   uniqueIndex("agent_team_run_steps_stable_request_unique_idx").on(table.organizationId, table.stableRequestId),
+  index("agent_team_run_steps_conversation_idx").on(table.conversationId),
 ]);
 
 export const workerHeartbeats = pgTable("worker_heartbeats", {
