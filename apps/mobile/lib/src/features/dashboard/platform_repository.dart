@@ -37,6 +37,9 @@ class WorkspaceData {
     required this.capabilities,
     required this.mcpServers,
     required this.mcpTools,
+    required this.mcpResources,
+    required this.mcpResourceTemplates,
+    required this.mcpPrompts,
     required this.members,
     required this.audit,
   });
@@ -44,6 +47,9 @@ class WorkspaceData {
   final Map<String, dynamic> capabilities;
   final List<Map<String, dynamic>> mcpServers;
   final List<Map<String, dynamic>> mcpTools;
+  final List<Map<String, dynamic>> mcpResources;
+  final List<Map<String, dynamic>> mcpResourceTemplates;
+  final List<Map<String, dynamic>> mcpPrompts;
   final List<Map<String, dynamic>> members;
   final List<Map<String, dynamic>> audit;
 }
@@ -76,11 +82,38 @@ class PlatformRepository {
     final response = await _api.dio.get<Map<String, dynamic>>('/api/mobile/v1/workspace');
     final data = ApiClient.payload(response);
     final mcp = data['mcp'] as Map<String, dynamic>? ?? const {};
+    final tools = _list(mcp, 'tools');
+    final resources = _list(mcp, 'resources');
+    final resourceTemplates = _list(mcp, 'resourceTemplates');
+    final prompts = _list(mcp, 'prompts');
+    final catalog = <Map<String, dynamic>>[
+      ...tools.map((item) => {...item, 'catalogKind': 'tool'}),
+      ...resources.map((item) => {
+        ...item,
+        'catalogKind': 'resource',
+        'risk': 'resource',
+        'name': item['name'] ?? item['uri'],
+      }),
+      ...resourceTemplates.map((item) => {
+        ...item,
+        'catalogKind': 'resource_template',
+        'risk': 'template',
+        'name': item['name'] ?? item['uriTemplate'],
+      }),
+      ...prompts.map((item) => {
+        ...item,
+        'catalogKind': 'prompt',
+        'risk': 'prompt',
+      }),
+    ];
     return WorkspaceData(
       organization: data['organization'] as Map<String, dynamic>?,
       capabilities: data['capabilities'] as Map<String, dynamic>? ?? const {},
       mcpServers: _list(mcp, 'servers'),
-      mcpTools: _list(mcp, 'tools'),
+      mcpTools: catalog,
+      mcpResources: resources,
+      mcpResourceTemplates: resourceTemplates,
+      mcpPrompts: prompts,
       members: _list(data, 'members'),
       audit: _list(data, 'audit'),
     );
@@ -109,35 +142,19 @@ class PlatformRepository {
 
   Future<Map<String, dynamic>> createConversation(String agentId, {String? title}) async {
     final data = <String, dynamic>{'agentId': agentId};
-    if (title != null) {
-      data['title'] = title;
-    }
-    final response = await _api.dio.post<Map<String, dynamic>>(
-      '/api/v1/conversations',
-      data: data,
-    );
+    if (title != null) data['title'] = title;
+    final response = await _api.dio.post<Map<String, dynamic>>('/api/v1/conversations', data: data);
     return ApiClient.payload(response)['conversation'] as Map<String, dynamic>;
   }
 
   Future<void> mutateConversation(String conversationId, String action, {String? title}) async {
-    final data = <String, dynamic>{
-      'conversationId': conversationId,
-      'action': action,
-    };
-    if (title != null) {
-      data['title'] = title;
-    }
-    await _api.dio.patch<Map<String, dynamic>>(
-      '/api/v1/conversations',
-      data: data,
-    );
+    final data = <String, dynamic>{'conversationId': conversationId, 'action': action};
+    if (title != null) data['title'] = title;
+    await _api.dio.patch<Map<String, dynamic>>('/api/v1/conversations', data: data);
   }
 
   Future<void> deleteConversation(String conversationId) async {
-    await _api.dio.delete<Map<String, dynamic>>(
-      '/api/v1/conversations',
-      data: {'conversationId': conversationId},
-    );
+    await _api.dio.delete<Map<String, dynamic>>('/api/v1/conversations', data: {'conversationId': conversationId});
   }
 
   Future<Map<String, dynamic>> sendMessage(
@@ -145,6 +162,8 @@ class PlatformRepository {
     String message, {
     List<String> attachmentIds = const [],
     String inputKind = 'text',
+    List<Map<String, String>> mcpResources = const [],
+    Map<String, dynamic>? mcpPrompt,
   }) async {
     final response = await _api.dio.post<Map<String, dynamic>>(
       '/api/v1/chat',
@@ -152,7 +171,9 @@ class PlatformRepository {
         'conversationId': conversationId,
         'message': message,
         'attachmentIds': attachmentIds,
-        'inputKind': attachmentIds.isEmpty ? 'text' : inputKind,
+        'inputKind': inputKind,
+        'mcpResources': mcpResources,
+        if (mcpPrompt != null) 'mcpPrompt': mcpPrompt,
       },
       options: Options(headers: {'idempotency-key': 'chat-${DateTime.now().microsecondsSinceEpoch}'}),
     );
@@ -160,10 +181,7 @@ class PlatformRepository {
   }
 
   Future<List<Map<String, dynamic>>> messages(String conversationId) async {
-    final response = await _api.dio.get<Map<String, dynamic>>(
-      '/api/v1/conversations',
-      queryParameters: {'conversationId': conversationId},
-    );
+    final response = await _api.dio.get<Map<String, dynamic>>('/api/v1/conversations', queryParameters: {'conversationId': conversationId});
     return _list(ApiClient.payload(response), 'messages');
   }
 
@@ -174,11 +192,7 @@ class PlatformRepository {
       '/api/v1/files',
       data: FormData.fromMap({
         'conversationId': conversationId,
-        'file': MultipartFile.fromBytes(
-          bytes,
-          filename: selected.name,
-          contentType: MediaType.parse(_mimeType(selected.name)),
-        ),
+        'file': MultipartFile.fromBytes(bytes, filename: selected.name, contentType: MediaType.parse(_mimeType(selected.name))),
       }),
       options: Options(contentType: 'multipart/form-data'),
     );
@@ -188,17 +202,13 @@ class PlatformRepository {
   static String _mimeType(String filename) {
     final extension = filename.toLowerCase().split('.').last;
     return const {
-      'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png',
-      'webp': 'image/webp', 'gif': 'image/gif', 'pdf': 'application/pdf',
-      'txt': 'text/plain', 'md': 'text/markdown', 'csv': 'text/csv',
-      'json': 'application/json',
+      'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 'webp': 'image/webp', 'gif': 'image/gif',
+      'pdf': 'application/pdf', 'txt': 'text/plain', 'md': 'text/markdown', 'csv': 'text/csv', 'json': 'application/json',
       'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      'zip': 'application/zip', 'rar': 'application/vnd.rar',
-      '7z': 'application/x-7z-compressed', 'mp3': 'audio/mpeg',
-      'wav': 'audio/wav', 'ogg': 'audio/ogg', 'mp4': 'video/mp4',
-      'webm': 'video/webm',
+      'zip': 'application/zip', 'rar': 'application/vnd.rar', '7z': 'application/x-7z-compressed',
+      'mp3': 'audio/mpeg', 'wav': 'audio/wav', 'ogg': 'audio/ogg', 'mp4': 'video/mp4', 'webm': 'video/webm',
     }[extension] ?? 'application/octet-stream';
   }
 
@@ -211,77 +221,51 @@ class PlatformRepository {
   }
 
   Future<Map<String, dynamic>> importYoutube(String conversationId, String url) async {
-    final response = await _api.dio.post<Map<String, dynamic>>(
-      '/api/v1/youtube',
-      data: {'conversationId': conversationId, 'url': url},
-    );
+    final response = await _api.dio.post<Map<String, dynamic>>('/api/v1/youtube', data: {'conversationId': conversationId, 'url': url});
     return ApiClient.payload(response)['file'] as Map<String, dynamic>;
   }
 
   Future<Map<String, dynamic>> auditSite(String conversationId, String url) async {
-    final response = await _api.dio.post<Map<String, dynamic>>(
-      '/api/v1/site-audit',
-      data: {'conversationId': conversationId, 'url': url, 'authorized': true},
-    );
+    final response = await _api.dio.post<Map<String, dynamic>>('/api/v1/site-audit', data: {'conversationId': conversationId, 'url': url, 'authorized': true});
     return ApiClient.payload(response)['file'] as Map<String, dynamic>;
   }
 
-  Future<Map<String, dynamic>> installTemplate({
-    required String templateId,
-    required String providerCredentialId,
-    required String model,
-  }) async {
-    final response = await _api.dio.post<Map<String, dynamic>>(
-      '/api/v1/agent-templates',
-      data: {
-        'templateId': templateId,
-        'providerCredentialId': providerCredentialId,
-        'model': model,
-      },
-    );
+  Future<Map<String, dynamic>> installTemplate({ required String templateId, required String providerCredentialId, required String model }) async {
+    final response = await _api.dio.post<Map<String, dynamic>>('/api/v1/agent-templates', data: {'templateId': templateId, 'providerCredentialId': providerCredentialId, 'model': model});
     return ApiClient.payload(response);
   }
 
-  Future<void> createMcpServer({
-    required String name,
-    required String endpoint,
-    String? bearerToken,
-  }) async {
-    await _api.dio.post<Map<String, dynamic>>(
-      '/api/v1/mcp',
-      data: {
-        'action': 'create',
-        'name': name,
-        'endpoint': endpoint,
-        if (bearerToken != null && bearerToken.isNotEmpty) 'bearerToken': bearerToken,
-      },
-    );
+  Future<void> createMcpServer({ required String name, required String endpoint, String? bearerToken }) async {
+    await _api.dio.post<Map<String, dynamic>>('/api/v1/mcp', data: {
+      'action': 'create', 'name': name, 'endpoint': endpoint,
+      if (bearerToken != null && bearerToken.isNotEmpty) 'bearerToken': bearerToken,
+    });
   }
 
   Future<void> syncMcpServer(String serverId) async {
-    await _api.dio.post<Map<String, dynamic>>(
-      '/api/v1/mcp',
-      data: {'action': 'sync', 'serverId': serverId},
-    );
+    await _api.dio.post<Map<String, dynamic>>('/api/v1/mcp', data: {'action': 'sync', 'serverId': serverId});
   }
 
-  Future<void> createProvider({
-    required String provider,
-    required String name,
-    required String apiKey,
-    required String testModel,
-    String? baseUrl,
-  }) async {
-    await _api.dio.post<Map<String, dynamic>>(
-      '/api/v1/provider-credentials',
-      data: {
-        'provider': provider,
-        'name': name,
-        'apiKey': apiKey,
-        'testModel': testModel,
-        if (baseUrl != null && baseUrl.isNotEmpty) 'baseUrl': baseUrl,
-      },
-    );
+  Future<Map<String, dynamic>> readMcpResource({ required String serverId, required String uri }) async {
+    final response = await _api.dio.post<Map<String, dynamic>>('/api/v1/mcp', data: {'action': 'read_resource', 'serverId': serverId, 'uri': uri});
+    return ApiClient.payload(response)['result'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> renderMcpPrompt({ required String serverId, required String name, Map<String, String> arguments = const {} }) async {
+    final response = await _api.dio.post<Map<String, dynamic>>('/api/v1/mcp', data: {'action': 'get_prompt', 'serverId': serverId, 'name': name, 'arguments': arguments});
+    return ApiClient.payload(response)['result'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> callMcpTool({ required String toolId, Map<String, dynamic> arguments = const {} }) async {
+    final response = await _api.dio.post<Map<String, dynamic>>('/api/v1/mcp', data: {'action': 'call', 'toolId': toolId, 'arguments': arguments});
+    return ApiClient.payload(response);
+  }
+
+  Future<void> createProvider({ required String provider, required String name, required String apiKey, required String testModel, String? baseUrl }) async {
+    await _api.dio.post<Map<String, dynamic>>('/api/v1/provider-credentials', data: {
+      'provider': provider, 'name': name, 'apiKey': apiKey, 'testModel': testModel,
+      if (baseUrl != null && baseUrl.isNotEmpty) 'baseUrl': baseUrl,
+    });
   }
 
   Future<Map<String, dynamic>> chatAppearance() async {
@@ -289,14 +273,8 @@ class PlatformRepository {
     return ApiClient.payload(response)['chat'] as Map<String, dynamic>;
   }
 
-  Future<Map<String, dynamic>> saveChatAppearance({
-    required String theme,
-    required String wallpaper,
-  }) async {
-    final response = await _api.dio.put<Map<String, dynamic>>(
-      '/api/mobile/v1/preferences',
-      data: {'theme': theme, 'wallpaper': wallpaper},
-    );
+  Future<Map<String, dynamic>> saveChatAppearance({ required String theme, required String wallpaper }) async {
+    final response = await _api.dio.put<Map<String, dynamic>>('/api/mobile/v1/preferences', data: {'theme': theme, 'wallpaper': wallpaper});
     return ApiClient.payload(response)['chat'] as Map<String, dynamic>;
   }
 }
