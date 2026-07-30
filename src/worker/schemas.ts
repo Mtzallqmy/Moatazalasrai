@@ -12,8 +12,14 @@ export const documentParsePayloadSchema = z.object({
   documentId: uuid,
 }).strict();
 
+export const agentRunResumePayloadSchema = z.object({
+  organizationId: uuid,
+  approvalId: z.string().min(1).max(200),
+}).strict();
+
 export type AgentTeamRunPayload = z.infer<typeof agentTeamRunPayloadSchema>;
 export type DocumentParsePayload = z.infer<typeof documentParsePayloadSchema>;
+export type AgentRunResumePayload = z.infer<typeof agentRunResumePayloadSchema>;
 
-export const supportedWorkerTasks = ["agent-team-run", "document-parse"] as const;
+export const supportedWorkerTasks = ["agent-team-run", "document-parse", "agent-run-resume"] as const;
 export type SupportedWorkerTask = typeof supportedWorkerTasks[number];
