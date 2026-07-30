@@ -15,6 +15,7 @@ import { decryptSecret, encryptSecret } from "@/lib/security/encryption";
 
 export const HIGGSFIELD_MCP_ENDPOINT = "https://mcp.higgsfield.ai/mcp";
 export const HIGGSFIELD_OAUTH_SCOPES = "openid email offline_access";
+export const DEFAULT_APP_URL = "https://moatazbot.duckdns.org";
 
 type StoredOAuthData = {
   redirectUri: string;
@@ -40,6 +41,17 @@ function equalSecret(left: string, right: string) {
   const leftBytes = Buffer.from(left);
   const rightBytes = Buffer.from(right);
   return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes);
+}
+
+function publicAppUrl() {
+  const configured = process.env.APP_URL?.trim() || DEFAULT_APP_URL;
+  try {
+    const url = new URL(configured);
+    if (url.protocol !== "https:" || url.username || url.password) return DEFAULT_APP_URL;
+    return url.origin;
+  } catch {
+    return DEFAULT_APP_URL;
+  }
 }
 
 export function isOfficialHiggsfieldEndpoint(endpoint: string) {
@@ -73,14 +85,14 @@ export class DatabaseMcpOAuthProvider implements OAuthClientProvider {
   get clientMetadata(): OAuthClientMetadata {
     return {
       client_name: "Moataz AI",
-      client_uri: "https://moatazalasrai-production.up.railway.app",
+      client_uri: publicAppUrl(),
       redirect_uris: [this.data.redirectUri],
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       token_endpoint_auth_method: "none",
       scope: HIGGSFIELD_OAUTH_SCOPES,
       software_id: "moataz-ai-higgsfield-mcp",
-      software_version: "1.0.0",
+      software_version: "1.3.0",
     };
   }
 
