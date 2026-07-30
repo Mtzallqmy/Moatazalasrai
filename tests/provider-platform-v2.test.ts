@@ -16,7 +16,7 @@ describe("provider platform v2", () => {
       openrouter: "https://openrouter.ai/api/v1",
       huggingface: "https://router.huggingface.co/v1",
       groq: "https://api.groq.com/openai/v1",
-      together: "https://api.together.xyz/v1",
+      together: "https://api.together.ai/v1",
       "nvidia-nim": "https://integrate.api.nvidia.com/v1",
       fireworks: "https://api.fireworks.ai/inference/v1",
       deepinfra: "https://api.deepinfra.com/v1/openai",
