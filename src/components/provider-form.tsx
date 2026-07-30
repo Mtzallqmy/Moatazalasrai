@@ -9,7 +9,17 @@ type ValidationResult = {
   normalizedBaseUrl: string;
   models: string[];
   latencyMs: number;
+  baseUrlAdjusted?: boolean;
 };
+
+type ErrorPayload = {
+  message?: string;
+  code?: string;
+  action?: { ar?: string };
+  details?: Array<{ path?: string }>;
+};
+
+const AGENTROUTER_BASE_URL = "https://co.agentrouter.org/v1";
 
 const defaults: Record<Provider, string> = {
   openai: "https://api.openai.com/v1",
@@ -17,6 +27,12 @@ const defaults: Record<Provider, string> = {
   gemini: "https://generativelanguage.googleapis.com/v1beta",
   openai_compatible: "",
 };
+
+function errorText(error: ErrorPayload | undefined, fallback: string) {
+  if (!error) return fallback;
+  const action = error.action?.ar?.trim();
+  return [error.message?.trim() || fallback, action].filter(Boolean).join(" ");
+}
 
 export function ProviderForm() {
   const router = useRouter();
@@ -28,37 +44,56 @@ export function ProviderForm() {
   const [testModel, setTestModel] = useState("");
 
   const modelPreview = useMemo(() => validation?.models.slice(0, 12) ?? [], [validation]);
+  const canSave = Boolean(validation && testModel && loading === null);
+
+  function resetValidation() {
+    setValidation(null);
+    setTestModel("");
+  }
 
   function changeProvider(value: Provider) {
     setProvider(value);
     setBaseUrl(defaults[value]);
-    setValidation(null);
-    setTestModel("");
+    resetValidation();
     setMessage(null);
+  }
+
+  function useAgentRouter() {
+    setProvider("openai_compatible");
+    setBaseUrl(AGENTROUTER_BASE_URL);
+    resetValidation();
+    setMessage("تم ضبط عنوان AgentRouter الرسمي. أدخل المفتاح ثم افحص الاتصال لجلب النماذج.");
   }
 
   async function requestValidation(form: FormData): Promise<ValidationResult | null> {
     setLoading("validate");
     setMessage(null);
+    const submittedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
     try {
       const response = await fetch("/api/dashboard/providers/validate", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ provider, baseUrl, apiKey: form.get("apiKey") }),
       });
-      const payload = await response.json().catch(() => null) as { success?: boolean; data?: ValidationResult; error?: { message?: string } } | null;
+      const payload = await response.json().catch(() => null) as {
+        success?: boolean;
+        data?: ValidationResult;
+        error?: ErrorPayload;
+      } | null;
       if (!response.ok || !payload?.success || !payload.data) {
-        setValidation(null);
-        setMessage(payload?.error?.message ?? "تعذر فحص الاتصال بالمزود.");
+        resetValidation();
+        setMessage(errorText(payload?.error, "تعذر فحص الاتصال بالمزود."));
         return null;
       }
       setValidation(payload.data);
       setTestModel(payload.data.models[0] ?? "");
       setBaseUrl(payload.data.normalizedBaseUrl);
-      setMessage(`نجح الاتصال خلال ${payload.data.latencyMs}ms وتم العثور على ${payload.data.models.length} نموذجًا.`);
+      const adjusted = payload.data.baseUrlAdjusted
+        || submittedBaseUrl !== payload.data.normalizedBaseUrl.replace(/\/+$/, "");
+      setMessage(`${adjusted ? `تم تصحيح Base URL إلى ${payload.data.normalizedBaseUrl}. ` : ""}نجح الاتصال خلال ${payload.data.latencyMs}ms وتم العثور على ${payload.data.models.length} نموذجًا. اختر نموذج الاختبار ثم احفظ.`);
       return payload.data;
     } catch {
-      setValidation(null);
+      resetValidation();
       setMessage("تعذر الوصول إلى الخادم. تحقق من الاتصال وحاول مجددًا.");
       return null;
     } finally {
@@ -75,6 +110,10 @@ export function ProviderForm() {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    if (!validation || !testModel) {
+      setMessage("افحص الاتصال واجلب النماذج أولًا، ثم اختر نموذج اختبار قبل الحفظ.");
+      return;
+    }
     setLoading("save");
     setMessage(null);
     try {
@@ -89,16 +128,19 @@ export function ProviderForm() {
           testModel,
         }),
       });
-      const payload = await response.json().catch(() => null) as { success?: boolean; data?: { discoveredModels?: string[] }; error?: { message?: string } } | null;
+      const payload = await response.json().catch(() => null) as {
+        success?: boolean;
+        data?: { discoveredModels?: string[] };
+        error?: ErrorPayload;
+      } | null;
       if (!response.ok || !payload?.success) {
-        setMessage(payload?.error?.message ?? "تعذر حفظ الاتصال.");
+        setMessage(errorText(payload?.error, "تعذر حفظ الاتصال."));
         return;
       }
       event.currentTarget.reset();
       setProvider("openai");
       setBaseUrl(defaults.openai);
-      setValidation(null);
-      setTestModel("");
+      resetValidation();
       setMessage(`تم التحقق والحفظ المشفر بنجاح. النماذج المكتشفة: ${payload.data?.discoveredModels?.length ?? 0}.`);
       router.refresh();
     } catch {
@@ -132,17 +174,25 @@ export function ProviderForm() {
 
       <label className="grid gap-2 text-sm text-stone-300 sm:col-span-2">
         Base URL
-        <input value={baseUrl} onChange={(event) => { setBaseUrl(event.target.value); setValidation(null); }} required type="url" dir="ltr" className="rounded-2xl border border-stone-700 bg-stone-950/70 px-4 py-3 font-mono text-sm outline-none focus:border-emerald-200/60" placeholder="https://provider.example.com/v1" />
+        <input value={baseUrl} onChange={(event) => { setBaseUrl(event.target.value); resetValidation(); }} required type="url" dir="ltr" className="rounded-2xl border border-stone-700 bg-stone-950/70 px-4 py-3 font-mono text-sm outline-none focus:border-emerald-200/60" placeholder="https://provider.example.com/v1" />
       </label>
+
+      {provider === "openai_compatible" ? (
+        <div className="sm:col-span-2">
+          <button type="button" onClick={useAgentRouter} disabled={loading !== null} className="secondary-button px-3 py-2 text-xs disabled:opacity-60">استخدام عنوان AgentRouter الرسمي</button>
+          <p className="mt-2 text-xs text-stone-400" dir="ltr">{AGENTROUTER_BASE_URL}</p>
+        </div>
+      ) : null}
 
       <label className="grid gap-2 text-sm text-stone-300 sm:col-span-2">
         مفتاح API
-        <input name="apiKey" required type="password" minLength={8} maxLength={1000} autoComplete="off" dir="ltr" className="rounded-2xl border border-stone-700 bg-stone-950/70 px-4 py-3 font-mono outline-none focus:border-emerald-200/60" placeholder="••••••••••••••••" />
+        <input name="apiKey" required type="password" minLength={8} maxLength={1000} autoComplete="off" dir="ltr" onChange={resetValidation} className="rounded-2xl border border-stone-700 bg-stone-950/70 px-4 py-3 font-mono outline-none focus:border-emerald-200/60" placeholder="••••••••••••••••" />
       </label>
 
-      <div className="flex flex-wrap gap-3 sm:col-span-2">
+      <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
         <button disabled={loading !== null} onClick={validate} className="secondary-button disabled:cursor-not-allowed disabled:opacity-60" type="button">{loading === "validate" ? "جارٍ الفحص..." : "فحص الاتصال وجلب النماذج"}</button>
-        <button disabled={loading !== null} className="primary-button disabled:cursor-not-allowed disabled:opacity-60" type="submit">{loading === "save" ? "جارٍ التحقق والحفظ..." : "تحقق واحفظ الاتصال"}</button>
+        <button disabled={!canSave} className="primary-button disabled:cursor-not-allowed disabled:opacity-50" type="submit">{loading === "save" ? "جارٍ التحقق والحفظ..." : "تحقق واحفظ الاتصال"}</button>
+        {!validation ? <span className="text-xs text-stone-400">يُفعّل الحفظ بعد نجاح جلب النماذج.</span> : null}
       </div>
 
       {message ? <p className="rounded-2xl border border-stone-700 bg-stone-950/50 px-4 py-3 text-sm text-stone-200 sm:col-span-2" role="status">{message}</p> : null}
@@ -159,7 +209,7 @@ export function ProviderForm() {
           </div>
           <label className="mt-4 grid gap-2 text-sm text-stone-300">
             نموذج اختبار التوليد قبل الحفظ
-            <select value={testModel} onChange={(event) => setTestModel(event.target.value)} dir="ltr" className="rounded-2xl border border-stone-700 bg-stone-950/70 px-4 py-3 font-mono text-sm">
+            <select value={testModel} onChange={(event) => setTestModel(event.target.value)} required dir="ltr" className="rounded-2xl border border-stone-700 bg-stone-950/70 px-4 py-3 font-mono text-sm">
               {validation.models.map((model) => <option key={model} value={model}>{model}</option>)}
             </select>
           </label>

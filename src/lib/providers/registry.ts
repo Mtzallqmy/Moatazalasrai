@@ -1,4 +1,5 @@
 import { providerAdapters } from "@/lib/providers/adapters";
+import { canonicalizeProviderBaseUrl } from "@/lib/providers/base-url";
 import { ProviderError, type ProviderKind, type ProviderRequest } from "@/lib/providers/types";
 
 export function getProviderAdapter(kind: ProviderKind) {
@@ -18,7 +19,8 @@ export async function validateProvider(input: {
   signal?: AbortSignal;
 }) {
   const adapter = getProviderAdapter(input.provider);
-  const baseUrl = input.baseUrl?.trim() || adapter.defaultBaseUrl;
+  const requestedBaseUrl = input.baseUrl?.trim() || adapter.defaultBaseUrl;
+  const baseUrl = canonicalizeProviderBaseUrl(input.provider, requestedBaseUrl);
   const stages: Array<{ stage: string; status: "passed"; latencyMs?: number }> = [];
   const startedAt = performance.now();
   const discovery = await adapter.discoverModels({
@@ -53,6 +55,7 @@ export async function validateProvider(input: {
     latencyMs: Math.round(performance.now() - startedAt),
     stages,
     modelTest,
+    baseUrlAdjusted: requestedBaseUrl.replace(/\/+$/, "") !== discovery.normalizedBaseUrl.replace(/\/+$/, ""),
   };
 }
 
