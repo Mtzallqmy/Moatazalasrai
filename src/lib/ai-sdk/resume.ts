@@ -1,6 +1,10 @@
 import { and, eq } from "drizzle-orm";
 import { type ModelMessage, type ToolApprovalResponse } from "ai";
 import { db } from "@/db";
+import {
+  agentTeamRunsRuntime,
+  agentTeamRunStepsRuntime,
+} from "@/db/agent-runtime-schema";
 import { agentVersions, modelCatalog, providerCredentials, runs } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
 import { decryptSecret } from "@/lib/security/encryption";
@@ -13,10 +17,45 @@ import {
   getToolApprovalForResume,
 } from "@/lib/ai-sdk/approvals";
 import { completeAgentRun, failAgentRun } from "@/lib/agents/runtime";
+import { enqueueAgentTeamRun } from "@/worker/queue";
 
 function checkpointMessages(value: unknown[]): ModelMessage[] {
   if (!Array.isArray(value)) throw new ApiError(409, "RUN_CHECKPOINT_INVALID", "نقطة الاستئناف لا تحتوي سياقًا صالحًا.");
   return value as ModelMessage[];
+}
+
+async function resumeOwningTeamRun(input: {
+  organizationId: string;
+  runId: string;
+  output: string;
+}) {
+  const [step] = await db().select().from(agentTeamRunStepsRuntime).where(and(
+    eq(agentTeamRunStepsRuntime.organizationId, input.organizationId),
+    eq(agentTeamRunStepsRuntime.runId, input.runId),
+  )).limit(1);
+  if (!step) return;
+  await db().transaction(async (tx) => {
+    await tx.update(agentTeamRunStepsRuntime).set({
+      status: "completed",
+      output: input.output,
+      errorCode: null,
+      completedAt: new Date(),
+    }).where(and(
+      eq(agentTeamRunStepsRuntime.id, step.id),
+      eq(agentTeamRunStepsRuntime.organizationId, input.organizationId),
+    ));
+    await tx.update(agentTeamRunsRuntime).set({
+      status: "queued",
+      errorCode: null,
+      completedAt: null,
+      updatedAt: new Date(),
+    }).where(and(
+      eq(agentTeamRunsRuntime.id, step.teamRunId),
+      eq(agentTeamRunsRuntime.organizationId, input.organizationId),
+      eq(agentTeamRunsRuntime.status, "waiting_approval"),
+    ));
+  });
+  await enqueueAgentTeamRun({ organizationId: input.organizationId, teamRunId: step.teamRunId });
 }
 
 export async function resumeAgentRunAfterApproval(input: {
@@ -61,7 +100,9 @@ export async function resumeAgentRunAfterApproval(input: {
     type: "tool-approval-response",
     approvalId: approval.approvalId,
     approved,
-    reason: approval.reason ?? (approved ? "Approved by an authorized organization user." : "Rejected by an authorized organization user."),
+    reason: approval.reason ?? (approved
+      ? "Approved by an authorized organization user."
+      : "Rejected by an authorized organization user."),
   };
   const messages: ModelMessage[] = [
     ...checkpointMessages(state.messages),
@@ -133,6 +174,11 @@ export async function resumeAgentRunAfterApproval(input: {
       attemptCount: state.candidateIndex + 1,
       requestedProviderCredentialId: null,
       requestedModel: null,
+    });
+    await resumeOwningTeamRun({
+      organizationId: input.organizationId,
+      runId: run.id,
+      output: result.text,
     });
     return completed.run;
   } catch (error) {
