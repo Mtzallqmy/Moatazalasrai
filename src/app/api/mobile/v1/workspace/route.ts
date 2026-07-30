@@ -8,6 +8,7 @@ import {
   organizations,
   users,
 } from "@/db/schema";
+import { mcpPrompts, mcpResources, mcpResourceTemplates } from "@/db/mcp-catalog-schema";
 import { authenticateApiKey } from "@/lib/auth/api-key";
 import { apiFailure, apiSuccess, getRequestId, handleApiError } from "@/lib/http/api";
 
@@ -21,7 +22,8 @@ export async function GET(request: Request) {
       return apiFailure(401, "UNAUTHORIZED", "جلسة التطبيق غير صالحة.", requestId);
     }
     const canAdminister = administrativeRoles.has(principal.role ?? "");
-    const [organization, servers, tools, members, audit] = await Promise.all([
+    const canReadMcp = principal.scopes.includes("mcp:read");
+    const [organization, servers, tools, resources, resourceTemplates, prompts, members, audit] = await Promise.all([
       db().select({
         id: organizations.id,
         name: organizations.name,
@@ -29,64 +31,37 @@ export async function GET(request: Request) {
         defaultModel: organizations.defaultModel,
         updatedAt: organizations.updatedAt,
       }).from(organizations).where(eq(organizations.id, principal.organizationId)).limit(1),
-      principal.scopes.includes("mcp:read")
+      canReadMcp
         ? db().select({
-          id: mcpServers.id,
-          name: mcpServers.name,
-          endpoint: mcpServers.endpoint,
-          authMode: mcpServers.authMode,
-          status: mcpServers.status,
-          enabled: mcpServers.enabled,
-          serverName: mcpServers.serverName,
-          serverVersion: mcpServers.serverVersion,
-          protocolVersion: mcpServers.protocolVersion,
-          lastConnectedAt: mcpServers.lastConnectedAt,
-          lastErrorCode: mcpServers.lastErrorCode,
-          oauthConnectedAt: mcpServers.oauthConnectedAt,
-        }).from(mcpServers).where(eq(mcpServers.organizationId, principal.organizationId))
-          .orderBy(desc(mcpServers.updatedAt))
+          id: mcpServers.id, name: mcpServers.name, endpoint: mcpServers.endpoint, authMode: mcpServers.authMode,
+          status: mcpServers.status, enabled: mcpServers.enabled, serverName: mcpServers.serverName,
+          serverVersion: mcpServers.serverVersion, protocolVersion: mcpServers.protocolVersion,
+          capabilities: mcpServers.capabilities, lastConnectedAt: mcpServers.lastConnectedAt,
+          lastErrorCode: mcpServers.lastErrorCode, oauthConnectedAt: mcpServers.oauthConnectedAt,
+        }).from(mcpServers).where(eq(mcpServers.organizationId, principal.organizationId)).orderBy(desc(mcpServers.updatedAt))
         : Promise.resolve([]),
-      principal.scopes.includes("mcp:read")
+      canReadMcp
         ? db().select({
-          id: mcpTools.id,
-          serverId: mcpTools.serverId,
-          name: mcpTools.name,
-          title: mcpTools.title,
-          description: mcpTools.description,
-          capability: mcpTools.capability,
-          mediaType: mcpTools.mediaType,
-          risk: mcpTools.risk,
-          enabled: mcpTools.enabled,
-        }).from(mcpTools).where(and(
-          eq(mcpTools.organizationId, principal.organizationId),
-          eq(mcpTools.enabled, true),
-        )).orderBy(asc(mcpTools.name))
+          id: mcpTools.id, serverId: mcpTools.serverId, name: mcpTools.name, title: mcpTools.title,
+          description: mcpTools.description, inputSchema: mcpTools.inputSchema, outputSchema: mcpTools.outputSchema,
+          capability: mcpTools.capability, mediaType: mcpTools.mediaType, risk: mcpTools.risk, enabled: mcpTools.enabled,
+        }).from(mcpTools).where(and(eq(mcpTools.organizationId, principal.organizationId), eq(mcpTools.enabled, true))).orderBy(asc(mcpTools.name))
+        : Promise.resolve([]),
+      canReadMcp ? db().select().from(mcpResources).where(and(eq(mcpResources.organizationId, principal.organizationId), eq(mcpResources.enabled, true))).orderBy(asc(mcpResources.name)) : Promise.resolve([]),
+      canReadMcp ? db().select().from(mcpResourceTemplates).where(and(eq(mcpResourceTemplates.organizationId, principal.organizationId), eq(mcpResourceTemplates.enabled, true))).orderBy(asc(mcpResourceTemplates.name)) : Promise.resolve([]),
+      canReadMcp ? db().select().from(mcpPrompts).where(and(eq(mcpPrompts.organizationId, principal.organizationId), eq(mcpPrompts.enabled, true))).orderBy(asc(mcpPrompts.name)) : Promise.resolve([]),
+      canAdminister
+        ? db().select({
+          id: organizationMembers.id, userId: users.id, name: users.name, email: users.email,
+          role: organizationMembers.role, createdAt: organizationMembers.createdAt,
+        }).from(organizationMembers).innerJoin(users, eq(users.id, organizationMembers.userId))
+          .where(eq(organizationMembers.organizationId, principal.organizationId)).orderBy(asc(organizationMembers.createdAt))
         : Promise.resolve([]),
       canAdminister
         ? db().select({
-          id: organizationMembers.id,
-          userId: users.id,
-          name: users.name,
-          email: users.email,
-          role: organizationMembers.role,
-          createdAt: organizationMembers.createdAt,
-        }).from(organizationMembers)
-          .innerJoin(users, eq(users.id, organizationMembers.userId))
-          .where(eq(organizationMembers.organizationId, principal.organizationId))
-          .orderBy(asc(organizationMembers.createdAt))
-        : Promise.resolve([]),
-      canAdminister
-        ? db().select({
-          id: auditLogs.id,
-          actorType: auditLogs.actorType,
-          action: auditLogs.action,
-          resourceType: auditLogs.resourceType,
-          resourceId: auditLogs.resourceId,
-          createdAt: auditLogs.createdAt,
-        }).from(auditLogs)
-          .where(eq(auditLogs.organizationId, principal.organizationId))
-          .orderBy(desc(auditLogs.createdAt))
-          .limit(100)
+          id: auditLogs.id, actorType: auditLogs.actorType, action: auditLogs.action,
+          resourceType: auditLogs.resourceType, resourceId: auditLogs.resourceId, createdAt: auditLogs.createdAt,
+        }).from(auditLogs).where(eq(auditLogs.organizationId, principal.organizationId)).orderBy(desc(auditLogs.createdAt)).limit(100)
         : Promise.resolve([]),
     ]);
     return apiSuccess({
@@ -95,10 +70,11 @@ export async function GET(request: Request) {
         canManage: canAdminister,
         canWriteProviders: principal.scopes.includes("providers:write"),
         canWriteMcp: principal.scopes.includes("mcp:write"),
+        canReadMcp,
         canWriteAgents: principal.scopes.includes("agents:write"),
         canWriteTeams: principal.scopes.includes("teams:write"),
       },
-      mcp: { servers, tools },
+      mcp: { servers, tools, resources, resourceTemplates, prompts },
       members,
       audit,
     }, requestId);
