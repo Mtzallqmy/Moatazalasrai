@@ -1,9 +1,16 @@
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { agentTeamRunsRuntime } from "@/db/agent-runtime-schema";
-import { agentTeamMembers, agentTeams, agents } from "@/db/schema";
-import { createAgentTeamRun } from "@/lib/agents/team-runtime";
+import {
+  agentTeamRunsRuntime,
+  agentTeamRunStepsRuntime,
+} from "@/db/agent-runtime-schema";
+import { agentTeamMembers, agentTeams, agents, auditLogs } from "@/db/schema";
+import {
+  cancelAgentTeamRun,
+  createAgentTeamRun,
+  retryAgentTeamRun,
+} from "@/lib/agents/team-runtime";
 import { requireSession } from "@/lib/auth/authorization";
 import { apiSuccess, ApiError, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 
@@ -20,6 +27,8 @@ const actionSchema = z.discriminatedUnion("action", [
     teamId: z.string().uuid(),
     input: z.string().trim().min(1).max(20_000),
   }).strict(),
+  z.object({ action: z.literal("cancel"), teamRunId: z.string().uuid() }).strict(),
+  z.object({ action: z.literal("retry"), teamRunId: z.string().uuid() }).strict(),
 ]);
 
 export async function GET(request: Request) {
@@ -35,15 +44,23 @@ export async function GET(request: Request) {
       db().select().from(agentTeamRunsRuntime).where(eq(agentTeamRunsRuntime.organizationId, session.organizationId))
         .orderBy(desc(agentTeamRunsRuntime.createdAt)).limit(20),
     ]);
-    const members = teams.length ? await db().select().from(agentTeamMembers)
-      .where(and(
+    const [members, steps] = await Promise.all([
+      teams.length ? db().select().from(agentTeamMembers).where(and(
         eq(agentTeamMembers.organizationId, session.organizationId),
         inArray(agentTeamMembers.teamId, teams.map((team) => team.id)),
-      )) : [];
+      )) : Promise.resolve([]),
+      runs.length ? db().select().from(agentTeamRunStepsRuntime).where(and(
+        eq(agentTeamRunStepsRuntime.organizationId, session.organizationId),
+        inArray(agentTeamRunStepsRuntime.teamRunId, runs.map((run) => run.id)),
+      )).orderBy(agentTeamRunStepsRuntime.position) : Promise.resolve([]),
+    ]);
     return apiSuccess({
       agents: agentRows,
       teams: teams.map((team) => ({ ...team, members: members.filter((member) => member.teamId === team.id) })),
-      runs,
+      runs: runs.map((run) => ({
+        ...run,
+        steps: steps.filter((step) => step.teamRunId === run.id),
+      })),
     }, requestId);
   } catch (error) {
     return handleApiError(error, requestId, "/api/dashboard/teams");
@@ -80,23 +97,58 @@ export async function POST(request: Request) {
           role: agentId === body.supervisorAgentId ? "supervisor" : "worker",
           position,
         })));
+        await tx.insert(auditLogs).values({
+          organizationId: session.organizationId,
+          actorType: "user",
+          actorId: session.userId,
+          action: "agent_team.created",
+          resourceType: "agent_team",
+          resourceId: created.id,
+          metadata: { requestId, memberCount: ids.length },
+        });
         return created;
       });
       return apiSuccess({ team }, requestId, 201);
     }
-    const session = await requireSession("agents:run");
-    const idempotencyKey = request.headers.get("idempotency-key")?.trim() ?? crypto.randomUUID();
-    const run = await createAgentTeamRun({
+
+    const session = await requireSession(body.action === "run" ? "agents:run" : "agents:manage");
+    if (body.action === "run") {
+      const idempotencyKey = request.headers.get("idempotency-key")?.trim() ?? crypto.randomUUID();
+      const run = await createAgentTeamRun({
+        organizationId: session.organizationId,
+        teamId: body.teamId,
+        prompt: body.input,
+        requestId: idempotencyKey,
+        userId: session.userId,
+      });
+      await db().insert(auditLogs).values({
+        organizationId: session.organizationId,
+        actorType: "user",
+        actorId: session.userId,
+        action: "agent_team_run.queued",
+        resourceType: "agent_team_run",
+        resourceId: run.id,
+        metadata: { requestId, teamId: body.teamId, idempotencyKey },
+      });
+      const response = apiSuccess({ run }, requestId, 202);
+      response.headers.set("location", `/api/v1/team-runs/${run.id}`);
+      response.headers.set("retry-after", "2");
+      return response;
+    }
+
+    const run = body.action === "cancel"
+      ? await cancelAgentTeamRun(session.organizationId, body.teamRunId)
+      : await retryAgentTeamRun(session.organizationId, body.teamRunId);
+    await db().insert(auditLogs).values({
       organizationId: session.organizationId,
-      teamId: body.teamId,
-      prompt: body.input,
-      requestId: idempotencyKey,
-      userId: session.userId,
+      actorType: "user",
+      actorId: session.userId,
+      action: body.action === "cancel" ? "agent_team_run.cancel_requested" : "agent_team_run.retry_queued",
+      resourceType: "agent_team_run",
+      resourceId: body.teamRunId,
+      metadata: { requestId },
     });
-    const response = apiSuccess({ run }, requestId, 202);
-    response.headers.set("location", `/api/v1/team-runs/${run.id}`);
-    response.headers.set("retry-after", "2");
-    return response;
+    return apiSuccess({ run }, requestId, body.action === "retry" ? 202 : 200);
   } catch (error) {
     return handleApiError(error, requestId, "/api/dashboard/teams");
   }
