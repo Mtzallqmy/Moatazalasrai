@@ -31,15 +31,16 @@ const publicFields = {
 };
 
 function publicConfig(kind: "telegram" | "github", config: Record<string, unknown>) {
+  const agentId = typeof config.agentId === "string" ? config.agentId : null;
   if (kind === "telegram") {
     return {
       botUsername: config.botUsername,
       botName: config.botName,
-      agentId: config.agentId,
+      agentId,
       webhookActive: config.webhookActive === true,
     };
   }
-  return { login: config.login, accountName: config.accountName };
+  return { login: config.login, accountName: config.accountName, agentId };
 }
 
 async function validateAgent(organizationId: string, agentId?: string | null) {
@@ -49,7 +50,7 @@ async function validateAgent(organizationId: string, agentId?: string | null) {
     eq(agents.organizationId, organizationId),
     eq(agents.status, "published"),
   )).limit(1);
-  if (!agent) throw new ApiError(422, "AGENT_UNAVAILABLE", "اختر وكيلًا منشورًا لتكامل Telegram.");
+  if (!agent) throw new ApiError(422, "AGENT_UNAVAILABLE", "اختر وكيلًا منشورًا من المؤسسة الحالية لهذا التكامل.");
 }
 
 async function verifyIntegration(kind: "telegram" | "github", token: string) {
@@ -107,7 +108,10 @@ export async function POST(request: Request) {
       [result] = await db().update(integrations).set({
         config: { ...created.config, webhookActive: true },
         updatedAt: new Date(),
-      }).where(eq(integrations.id, created.id)).returning(publicFields);
+      }).where(and(
+        eq(integrations.id, created.id),
+        eq(integrations.organizationId, session.organizationId),
+      )).returning(publicFields);
     }
     await db().insert(auditLogs).values({
       organizationId: session.organizationId,
@@ -116,7 +120,7 @@ export async function POST(request: Request) {
       action: "integration.created",
       resourceType: "integration",
       resourceId: created.id,
-      metadata: { kind: created.kind, requestId },
+      metadata: { kind: created.kind, agentId: body.agentId ?? null, requestId },
     });
     return apiSuccess({ ...result, config: publicConfig(result.kind, result.config) }, requestId, 201);
   } catch (error) {
@@ -138,6 +142,7 @@ export async function PATCH(request: Request) {
     await validateAgent(session.organizationId, body.agentId);
     const token = body.token ?? decryptSecret(current.encryptedToken);
     const verifiedConfig = body.token ? await verifyIntegration(current.kind, token) : {};
+    const previousAgentId = typeof current.config.agentId === "string" ? current.config.agentId : null;
     let config: Record<string, unknown> = {
       ...current.config,
       ...verifiedConfig,
@@ -154,19 +159,47 @@ export async function PATCH(request: Request) {
       });
       config = { ...config, webhookSecretHash: hashApiKey(webhookSecret), webhookActive: true };
     }
-    const [updated] = await db().update(integrations).set({
-      ...(body.name === undefined ? {} : { name: body.name }),
-      ...(body.enabled === undefined ? {} : { enabled: body.enabled }),
-      ...(body.token === undefined ? {} : {
-        encryptedToken: encryptSecret(body.token),
-        tokenHint: maskSecret(body.token),
-      }),
-      config,
-      status: "verified",
-      lastVerifiedAt: body.token ? new Date() : current.lastVerifiedAt,
-      lastErrorCode: null,
-      updatedAt: new Date(),
-    }).where(eq(integrations.id, current.id)).returning(publicFields);
+    const now = new Date();
+    const updated = await db().transaction(async (tx) => {
+      const [row] = await tx.update(integrations).set({
+        ...(body.name === undefined ? {} : { name: body.name }),
+        ...(body.enabled === undefined ? {} : { enabled: body.enabled }),
+        ...(body.token === undefined ? {} : {
+          encryptedToken: encryptSecret(body.token),
+          tokenHint: maskSecret(body.token),
+        }),
+        config,
+        status: "verified",
+        lastVerifiedAt: body.token ? now : current.lastVerifiedAt,
+        lastErrorCode: null,
+        updatedAt: now,
+      }).where(and(
+        eq(integrations.id, current.id),
+        eq(integrations.organizationId, session.organizationId),
+      )).returning(publicFields);
+      if (!row) throw new ApiError(404, "INTEGRATION_NOT_FOUND", "التكامل غير موجود.");
+      const nextAgentId = typeof config.agentId === "string" ? config.agentId : null;
+      await tx.insert(auditLogs).values({
+        organizationId: session.organizationId,
+        actorType: "user",
+        actorId: session.userId,
+        action: body.agentId !== undefined && previousAgentId !== nextAgentId
+          ? "integration.agent_changed"
+          : "integration.updated",
+        resourceType: "integration",
+        resourceId: current.id,
+        metadata: {
+          kind: current.kind,
+          previousAgentId,
+          agentId: nextAgentId,
+          enabled: row.enabled,
+          webhookReactivated: body.activateWebhook === true,
+          tokenRotated: body.token !== undefined,
+          requestId,
+        },
+      });
+      return row;
+    });
     return apiSuccess({ ...updated, config: publicConfig(updated.kind, updated.config) }, requestId);
   } catch (error) {
     return handleApiError(error, requestId, "/api/dashboard/integrations");
@@ -179,19 +212,22 @@ export async function DELETE(request: Request) {
     assertSameOrigin(request);
     const session = await requireSession("integrations:manage");
     const body = await parseJson(request, integrationDeleteSchema, 4 * 1024);
-    const [deleted] = await db().delete(integrations).where(and(
-      eq(integrations.id, body.id),
-      eq(integrations.organizationId, session.organizationId),
-    )).returning({ id: integrations.id, kind: integrations.kind });
-    if (!deleted) throw new ApiError(404, "INTEGRATION_NOT_FOUND", "التكامل غير موجود.");
-    await db().insert(auditLogs).values({
-      organizationId: session.organizationId,
-      actorType: "user",
-      actorId: session.userId,
-      action: "integration.deleted",
-      resourceType: "integration",
-      resourceId: deleted.id,
-      metadata: { kind: deleted.kind, requestId },
+    const deleted = await db().transaction(async (tx) => {
+      const [row] = await tx.delete(integrations).where(and(
+        eq(integrations.id, body.id),
+        eq(integrations.organizationId, session.organizationId),
+      )).returning({ id: integrations.id, kind: integrations.kind });
+      if (!row) throw new ApiError(404, "INTEGRATION_NOT_FOUND", "التكامل غير موجود.");
+      await tx.insert(auditLogs).values({
+        organizationId: session.organizationId,
+        actorType: "user",
+        actorId: session.userId,
+        action: "integration.deleted",
+        resourceType: "integration",
+        resourceId: row.id,
+        metadata: { kind: row.kind, requestId },
+      });
+      return row;
     });
     return apiSuccess({ deleted: true, id: deleted.id }, requestId);
   } catch (error) {
