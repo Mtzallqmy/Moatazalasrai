@@ -1,5 +1,6 @@
 import { and, asc, count, desc, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
+import { providerCredentialHealthEvents } from "@/db/provider-health-schema";
 import {
   agentVersions,
   agents,
@@ -14,6 +15,12 @@ import {
 import { rankModels, type InputKind } from "@/server/models/router";
 import { decryptSecret } from "@/lib/security/encryption";
 import { ApiError } from "@/lib/http/api";
+import {
+  isCredentialScopedProviderError,
+  prioritizeProviderCandidates,
+  providerCircuitOpenUntil,
+  shouldFallbackProviderError,
+} from "@/lib/providers/failure-policy";
 import { generateWithProvider, streamWithProvider } from "@/lib/providers/registry";
 import { ProviderError, type ProviderContentPart, type ProviderMessage, type ProviderUsage } from "@/lib/providers/types";
 import { safeTelemetry } from "@/ai/observability/telemetry";
@@ -138,26 +145,31 @@ export async function prepareAgentRun(input: {
     };
   }));
 
-  let ranked = input.inputKind
-    ? rankModels(routable, input.inputKind)
-    : routable.filter((candidate) =>
-      candidate.providerCredentialId === (input.providerCredentialId ?? version.providerCredentialId)
-      && candidate.model === (input.model ?? version.model));
-  if (input.providerCredentialId || input.model) {
-    ranked = ranked.filter((candidate) =>
-      (!input.providerCredentialId || candidate.providerCredentialId === input.providerCredentialId)
-      && (!input.model || candidate.model === input.model));
-  }
-  if (ranked.length === 0) {
-    if (input.inputKind === "image") {
+  const inputKind = input.inputKind ?? "text";
+  const ranked = rankModels(routable, inputKind);
+  const preferredCredentialId = input.providerCredentialId
+    ?? agent.defaultProviderCredentialId
+    ?? version.providerCredentialId;
+  const preferredModel = input.model ?? agent.defaultModel ?? version.model;
+  const explicitSelection = Boolean(input.providerCredentialId || input.model);
+  const prioritized = prioritizeProviderCandidates(
+    ranked,
+    (candidate) => explicitSelection
+      ? (!input.providerCredentialId || candidate.providerCredentialId === input.providerCredentialId)
+        && (!input.model || candidate.model === input.model)
+      : candidate.providerCredentialId === preferredCredentialId && candidate.model === preferredModel,
+  );
+
+  if (prioritized.length === 0) {
+    if (inputKind === "image") {
       throw new ApiError(422, "VISION_MODEL_REQUIRED", "لا يوجد نموذج مفعّل يدعم تحليل الصور. اربط نموذج Vision ثم أعد المحاولة.");
     }
-    if (input.inputKind === "audio" || input.inputKind === "video") {
+    if (inputKind === "audio" || inputKind === "video") {
       throw new ApiError(422, "MEDIA_MODEL_REQUIRED", "لا يوجد نموذج مفعّل يدعم هذا النوع من الوسائط.");
     }
     throw new ApiError(422, "PROVIDER_OR_MODEL_UNAVAILABLE", "لا يوجد مزود متحقق ونموذج مناسب لتشغيل الوكيل.");
   }
-  const candidates = ranked.slice(0, 3).flatMap((candidate) => {
+  const candidates = prioritized.flatMap((candidate) => {
     const credential = credentialById.get(candidate.providerCredentialId);
     return credential ? [{ credential, model: candidate.model }] : [];
   });
@@ -195,18 +207,25 @@ export async function prepareAgentRun(input: {
       runId: created.id,
       sequence: 1,
       type: "run.created",
-      payload: { agentId: agent.id, version: version.version, requestId: input.requestId },
+      payload: {
+        agentId: agent.id,
+        version: version.version,
+        requestId: input.requestId,
+        requestedProviderCredentialId: input.providerCredentialId ?? null,
+        requestedModel: input.model ?? null,
+      },
     });
     return [created];
   });
 
   return {
     run,
-    credential: primary.credential,
     candidates,
     version: { ...version, model: primary.model },
     context: context.messages,
     estimatedInputTokens: context.estimatedInputTokens,
+    requestedProviderCredentialId: input.providerCredentialId ?? null,
+    requestedModel: input.model ?? null,
   };
 }
 
@@ -220,7 +239,69 @@ async function beginProviderRequest(runId: string) {
   });
 }
 
+async function recordCredentialFailure(input: {
+  organizationId: string;
+  runId: string;
+  providerCredentialId: string;
+  model: string;
+  error: ProviderError;
+}) {
+  try {
+    await db().transaction(async (tx) => {
+      const [credential] = await tx.select({
+        failures: providerCredentials.consecutiveFailures,
+        validationStatus: providerCredentials.validationStatus,
+      }).from(providerCredentials).where(and(
+        eq(providerCredentials.id, input.providerCredentialId),
+        eq(providerCredentials.organizationId, input.organizationId),
+      )).limit(1);
+      if (!credential) return;
+      const failures = credential.failures + 1;
+      const circuitOpenUntil = providerCircuitOpenUntil(input.error, failures);
+      const invalidCredential = input.error.code === "PROVIDER_UNAUTHORIZED"
+        || input.error.code === "PROVIDER_FORBIDDEN";
+      await tx.update(providerCredentials).set({
+        consecutiveFailures: failures,
+        lastErrorCode: input.error.code,
+        circuitOpenUntil,
+        ...(invalidCredential ? { validationStatus: "failed" as const } : {}),
+        updatedAt: new Date(),
+      }).where(and(
+        eq(providerCredentials.id, input.providerCredentialId),
+        eq(providerCredentials.organizationId, input.organizationId),
+      ));
+      if (input.error.code === "PROVIDER_ENDPOINT_NOT_FOUND") {
+        await tx.update(modelCatalog).set({ available: false, updatedAt: new Date() }).where(and(
+          eq(modelCatalog.organizationId, input.organizationId),
+          eq(modelCatalog.providerCredentialId, input.providerCredentialId),
+          eq(modelCatalog.model, input.model),
+        ));
+      }
+      await tx.insert(providerCredentialHealthEvents).values({
+        organizationId: input.organizationId,
+        providerCredentialId: input.providerCredentialId,
+        runId: input.runId,
+        outcome: "failed",
+        model: input.model,
+        errorCode: input.error.code,
+        providerStatus: input.error.providerStatus,
+        retryable: input.error.retryable,
+        circuitOpenUntil,
+      });
+    });
+  } catch (healthError) {
+    console.error(JSON.stringify(safeTelemetry({
+      operation: "provider.health.record_failure",
+      runId: input.runId,
+      providerCredentialId: input.providerCredentialId,
+      status: "error",
+      errorCode: healthError instanceof Error ? healthError.name : "UNKNOWN",
+    })));
+  }
+}
+
 async function completeRun(input: {
+  organizationId: string;
   runId: string;
   conversationId: string;
   providerCredentialId: string;
@@ -228,17 +309,37 @@ async function completeRun(input: {
   usage: ProviderUsage;
   providerRequestId?: string;
   model: string;
+  attemptCount: number;
+  requestedProviderCredentialId: string | null;
+  requestedModel: string | null;
 }) {
   const completedAt = new Date();
-  console.info(JSON.stringify(safeTelemetry({ operation: "agent.run", runId: input.runId, providerCredentialId: input.providerCredentialId, model: input.model, status: "ok" })));
+  const fallbackUsed = input.attemptCount > 1
+    || Boolean(input.requestedProviderCredentialId && input.requestedProviderCredentialId !== input.providerCredentialId)
+    || Boolean(input.requestedModel && input.requestedModel !== input.model);
+  console.info(JSON.stringify(safeTelemetry({
+    operation: "agent.run",
+    runId: input.runId,
+    providerCredentialId: input.providerCredentialId,
+    model: input.model,
+    status: "ok",
+  })));
   return db().transaction(async (tx) => {
+    const routing = {
+      attemptCount: input.attemptCount,
+      fallbackUsed,
+      requestedProviderCredentialId: input.requestedProviderCredentialId,
+      requestedModel: input.requestedModel,
+      providerCredentialId: input.providerCredentialId,
+      model: input.model,
+    };
     const [assistantMessage] = await tx.insert(messages).values({
       conversationId: input.conversationId,
       role: "assistant",
       content: input.text,
       providerCredentialId: input.providerCredentialId,
       model: input.model,
-      metadata: { runId: input.runId, model: input.model },
+      metadata: { runId: input.runId, model: input.model, routing },
     }).returning();
     const [completed] = await tx.update(runs).set({
       status: "completed",
@@ -257,22 +358,44 @@ async function completeRun(input: {
           inputTokens: input.usage.inputTokens,
           outputTokens: input.usage.outputTokens,
           providerRequestId: input.providerRequestId,
+          routing,
         },
       },
-      { runId: input.runId, sequence: 5, type: "run.completed", payload: {} },
+      { runId: input.runId, sequence: 5, type: "run.completed", payload: { fallbackUsed } },
     ]);
     await tx.update(conversations).set({ updatedAt: completedAt }).where(eq(conversations.id, input.conversationId));
     await tx.update(providerCredentials).set({
+      validationStatus: "verified",
       consecutiveFailures: 0,
       lastErrorCode: null,
       circuitOpenUntil: null,
       updatedAt: completedAt,
-    }).where(eq(providerCredentials.id, input.providerCredentialId));
+    }).where(and(
+      eq(providerCredentials.id, input.providerCredentialId),
+      eq(providerCredentials.organizationId, input.organizationId),
+    ));
+    await tx.update(modelCatalog).set({
+      available: true,
+      lastSeenAt: completedAt,
+      updatedAt: completedAt,
+    }).where(and(
+      eq(modelCatalog.organizationId, input.organizationId),
+      eq(modelCatalog.providerCredentialId, input.providerCredentialId),
+      eq(modelCatalog.model, input.model),
+    ));
+    await tx.insert(providerCredentialHealthEvents).values({
+      organizationId: input.organizationId,
+      providerCredentialId: input.providerCredentialId,
+      runId: input.runId,
+      outcome: "completed",
+      model: input.model,
+      retryable: false,
+    });
     return { run: completed, assistantMessage };
   });
 }
 
-async function failRun(runId: string, error: ProviderError, credentialId?: string) {
+async function failRun(runId: string, error: ProviderError) {
   console.error(JSON.stringify(safeTelemetry({ operation: "agent.run", runId, status: "error", errorCode: error.code })));
   await db().transaction(async (tx) => {
     await tx.update(runs).set({
@@ -292,19 +415,6 @@ async function failRun(runId: string, error: ProviderError, credentialId?: strin
         ? []
         : [{ runId, sequence: 5, type: "run.failed", payload: { code: error.code } }]),
     ]);
-    if (credentialId && error.code !== "PROVIDER_CANCELLED") {
-      const [credential] = await tx.select({ failures: providerCredentials.consecutiveFailures })
-        .from(providerCredentials)
-        .where(eq(providerCredentials.id, credentialId))
-        .limit(1);
-      const failures = (credential?.failures ?? 0) + 1;
-      await tx.update(providerCredentials).set({
-        consecutiveFailures: failures,
-        lastErrorCode: error.code,
-        circuitOpenUntil: failures >= 3 ? new Date(Date.now() + 5 * 60_000) : null,
-        updatedAt: new Date(),
-      }).where(eq(providerCredentials.id, credentialId));
-    }
   });
 }
 
@@ -315,6 +425,8 @@ export async function executeAgentRun(input: {
   message: string;
   conversationId: string;
   requestId?: string;
+  providerCredentialId?: string;
+  model?: string;
   inputKind?: InputKind;
   media?: ProviderContentPart[];
 }) {
@@ -325,10 +437,12 @@ export async function executeAgentRun(input: {
   activeControllers.set(prepared.run.id, controller);
   try {
     let lastError: ProviderError | undefined;
-    let lastCredentialId: string | undefined;
-    for (const [index, candidate] of prepared.candidates.entries()) {
-      lastCredentialId = candidate.credential.id;
-      if (index > 0) {
+    let attemptCount = 0;
+    const blockedCredentialIds = new Set<string>();
+    for (const candidate of prepared.candidates) {
+      if (blockedCredentialIds.has(candidate.credential.id)) continue;
+      attemptCount += 1;
+      if (attemptCount > 1) {
         await db().update(runs).set({
           provider: candidate.credential.provider,
           model: candidate.model,
@@ -346,6 +460,7 @@ export async function executeAgentRun(input: {
           requestId,
         });
         return completeRun({
+          organizationId: input.organizationId,
           runId: prepared.run.id,
           conversationId: input.conversationId,
           providerCredentialId: candidate.credential.id,
@@ -353,17 +468,30 @@ export async function executeAgentRun(input: {
           usage: result,
           providerRequestId: result.providerRequestId,
           model: candidate.model,
+          attemptCount,
+          requestedProviderCredentialId: prepared.requestedProviderCredentialId,
+          requestedModel: prepared.requestedModel,
         });
       } catch (error) {
         const safe = safeProviderError(error);
         lastError = safe;
-        const mayFallback = safe.retryable || safe.code === "PROVIDER_REJECTED_INPUT";
-        if (!mayFallback || index === prepared.candidates.length - 1) break;
+        await recordCredentialFailure({
+          organizationId: input.organizationId,
+          runId: prepared.run.id,
+          providerCredentialId: candidate.credential.id,
+          model: candidate.model,
+          error: safe,
+        });
+        if (isCredentialScopedProviderError(safe)) blockedCredentialIds.add(candidate.credential.id);
+        if (!shouldFallbackProviderError(safe)) break;
       }
     }
     const safe = lastError ?? new ProviderError("RUN_FAILED", "تعذر إكمال تشغيل الوكيل.", 502);
-    await failRun(prepared.run.id, safe, lastCredentialId);
-    throw new ApiError(safe.httpStatus, safe.code, safe.message, { runId: prepared.run.id });
+    await failRun(prepared.run.id, safe);
+    throw new ApiError(safe.httpStatus, safe.code, safe.message, {
+      runId: prepared.run.id,
+      providerStatus: safe.providerStatus,
+    });
   } finally {
     activeControllers.delete(prepared.run.id);
   }
@@ -393,11 +521,16 @@ export async function* streamAgentRun(input: {
   let usage: ProviderUsage = { inputTokens: null, outputTokens: null };
   let providerRequestId: string | undefined;
   let activeCandidate = prepared.candidates[0]!;
+  let attemptCount = 0;
+  let lastError: ProviderError | undefined;
+  const blockedCredentialIds = new Set<string>();
   try {
     let providerCompleted = false;
-    for (const [index, candidate] of prepared.candidates.entries()) {
+    for (const candidate of prepared.candidates) {
+      if (blockedCredentialIds.has(candidate.credential.id)) continue;
       activeCandidate = candidate;
-      if (index > 0) {
+      attemptCount += 1;
+      if (attemptCount > 1) {
         await db().update(runs).set({
           provider: candidate.credential.provider,
           model: candidate.model,
@@ -428,16 +561,36 @@ export async function* streamAgentRun(input: {
         break;
       } catch (error) {
         const safe = safeProviderError(error);
-        const mayFallback = text.length === 0
-          && (safe.retryable || safe.code === "PROVIDER_REJECTED_INPUT")
-          && index < prepared.candidates.length - 1;
+        lastError = safe;
+        await recordCredentialFailure({
+          organizationId: input.organizationId,
+          runId: prepared.run.id,
+          providerCredentialId: candidate.credential.id,
+          model: candidate.model,
+          error: safe,
+        });
+        if (isCredentialScopedProviderError(safe)) blockedCredentialIds.add(candidate.credential.id);
+        const mayFallback = text.length === 0 && shouldFallbackProviderError(safe);
         if (!mayFallback) throw safe;
         usage = { inputTokens: null, outputTokens: null };
         providerRequestId = undefined;
       }
     }
-    if (!providerCompleted || !text.trim()) throw new ProviderError("PROVIDER_EMPTY_OUTPUT", "لم يُرجع النموذج نصًا.", 502);
+    if (!providerCompleted || !text.trim()) {
+      const safe = lastError ?? new ProviderError("PROVIDER_EMPTY_OUTPUT", "لم يُرجع النموذج نصًا.", 502);
+      if (!lastError) {
+        await recordCredentialFailure({
+          organizationId: input.organizationId,
+          runId: prepared.run.id,
+          providerCredentialId: activeCandidate.credential.id,
+          model: activeCandidate.model,
+          error: safe,
+        });
+      }
+      throw safe;
+    }
     const completed = await completeRun({
+      organizationId: input.organizationId,
       runId: prepared.run.id,
       conversationId: input.conversationId,
       providerCredentialId: activeCandidate.credential.id,
@@ -445,17 +598,25 @@ export async function* streamAgentRun(input: {
       usage,
       providerRequestId,
       model: activeCandidate.model,
+      attemptCount,
+      requestedProviderCredentialId: prepared.requestedProviderCredentialId,
+      requestedModel: prepared.requestedModel,
     });
     yield {
       type: "complete" as const,
       runId: prepared.run.id,
       messageId: completed.assistantMessage.id,
       usage,
+      model: activeCandidate.model,
+      fallbackUsed: attemptCount > 1,
     };
   } catch (error) {
     const safe = safeProviderError(error);
-    await failRun(prepared.run.id, safe, activeCandidate.credential.id);
-    throw new ApiError(safe.httpStatus, safe.code, safe.message, { runId: prepared.run.id });
+    await failRun(prepared.run.id, safe);
+    throw new ApiError(safe.httpStatus, safe.code, safe.message, {
+      runId: prepared.run.id,
+      providerStatus: safe.providerStatus,
+    });
   } finally {
     activeControllers.delete(prepared.run.id);
     input.requestSignal?.removeEventListener("abort", abortFromRequest);

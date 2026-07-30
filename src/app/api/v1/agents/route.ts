@@ -14,34 +14,60 @@ export async function GET(request: Request) {
     const rows = await db().select().from(agents)
       .where(eq(agents.organizationId, principal.organizationId))
       .orderBy(desc(agents.updatedAt));
-    const linked = rows.length === 0 ? [] : await db().select({
-      agentId: agentVersions.agentId,
-      version: agentVersions.version,
-      model: agentVersions.model,
-      provider: providerCredentials.provider,
-      providerEnabled: providerCredentials.enabled,
-      providerStatus: providerCredentials.validationStatus,
-      discoveredModels: providerCredentials.discoveredModels,
-      circuitOpenUntil: providerCredentials.circuitOpenUntil,
-      lastErrorCode: providerCredentials.lastErrorCode,
-    }).from(agentVersions)
-      .innerJoin(providerCredentials, eq(providerCredentials.id, agentVersions.providerCredentialId))
-      .where(inArray(agentVersions.agentId, rows.map((agent) => agent.id)));
+    const [linked, organizationCredentials] = await Promise.all([
+      rows.length === 0 ? Promise.resolve([]) : db().select({
+        agentId: agentVersions.agentId,
+        version: agentVersions.version,
+        model: agentVersions.model,
+        providerCredentialId: providerCredentials.id,
+        provider: providerCredentials.provider,
+        providerEnabled: providerCredentials.enabled,
+        providerStatus: providerCredentials.validationStatus,
+        discoveredModels: providerCredentials.discoveredModels,
+        circuitOpenUntil: providerCredentials.circuitOpenUntil,
+        lastErrorCode: providerCredentials.lastErrorCode,
+      }).from(agentVersions)
+        .innerJoin(providerCredentials, eq(providerCredentials.id, agentVersions.providerCredentialId))
+        .where(inArray(agentVersions.agentId, rows.map((agent) => agent.id))),
+      db().select({
+        id: providerCredentials.id,
+        enabled: providerCredentials.enabled,
+        validationStatus: providerCredentials.validationStatus,
+        discoveredModels: providerCredentials.discoveredModels,
+        circuitOpenUntil: providerCredentials.circuitOpenUntil,
+      }).from(providerCredentials).where(eq(providerCredentials.organizationId, principal.organizationId)),
+    ]);
     const runtimeByAgent = new Map(linked.map((entry) => [`${entry.agentId}:${entry.version}`, entry]));
     const now = new Date();
+    const healthyCredentialIds = new Set(organizationCredentials.filter((credential) => (
+      credential.enabled
+      && credential.validationStatus === "verified"
+      && credential.discoveredModels.length > 0
+      && (!credential.circuitOpenUntil || credential.circuitOpenUntil <= now)
+    )).map((credential) => credential.id));
     const safeRows = rows.map((agent) => {
       const runtime = runtimeByAgent.get(`${agent.id}:${agent.currentVersion}`);
       const modelAvailable = runtime?.discoveredModels.includes(runtime.model) ?? false;
       const cooldown = Boolean(runtime?.circuitOpenUntil && runtime.circuitOpenUntil > now);
-      const runtimeStatus = !runtime || !runtime.providerEnabled || runtime.providerStatus !== "verified" || !modelAvailable
-        ? "unavailable"
-        : cooldown ? "cooldown" : "ready";
+      const primaryReady = Boolean(
+        runtime
+        && runtime.providerEnabled
+        && runtime.providerStatus === "verified"
+        && modelAvailable
+        && !cooldown,
+      );
+      const fallbackAvailable = !primaryReady && healthyCredentialIds.size > 0;
+      const runtimeStatus = primaryReady || fallbackAvailable
+        ? "ready"
+        : cooldown ? "cooldown" : "unavailable";
       return {
         ...agent,
         runtimeStatus,
         runtimeModel: runtime?.model ?? null,
         runtimeProvider: runtime?.provider ?? null,
         runtimeErrorCode: runtime?.lastErrorCode ?? null,
+        runtimeFallbackAvailable: fallbackAvailable,
+        runtimePrimaryCredentialId: runtime?.providerCredentialId ?? null,
       };
     });
     return apiSuccess({ agents: safeRows }, requestId);
@@ -64,7 +90,7 @@ export async function POST(request: Request) {
       models: providerCredentials.discoveredModels,
     }).from(providerCredentials).where(and(
       eq(providerCredentials.id, body.providerCredentialId),
-      eq(providerCredentials.organizationId, principal.organizationId)
+      eq(providerCredentials.organizationId, principal.organizationId),
     )).limit(1);
     if (!credential) throw new ApiError(404, "PROVIDER_NOT_FOUND", "اتصال المزود غير موجود.");
     if (!credential.enabled || credential.validationStatus !== "verified" || !credential.models.includes(body.model)) {

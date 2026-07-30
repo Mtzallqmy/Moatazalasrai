@@ -9,25 +9,33 @@ import { ProviderError } from "@/lib/providers/types";
 import { encryptSecret, maskSecret } from "@/lib/security/encryption";
 import { inferModelCapabilities, isFreeTierModel } from "@/server/models/capabilities";
 
+const publicProviderSelection = {
+  id: providerCredentials.id,
+  provider: providerCredentials.provider,
+  name: providerCredentials.name,
+  baseUrl: providerCredentials.baseUrl,
+  secretHint: providerCredentials.secretHint,
+  discoveredModels: providerCredentials.discoveredModels,
+  validationStatus: providerCredentials.validationStatus,
+  lastValidatedAt: providerCredentials.lastValidatedAt,
+  lastValidationLatencyMs: providerCredentials.lastValidationLatencyMs,
+  lastErrorCode: providerCredentials.lastErrorCode,
+  consecutiveFailures: providerCredentials.consecutiveFailures,
+  circuitOpenUntil: providerCredentials.circuitOpenUntil,
+  enabled: providerCredentials.enabled,
+  createdAt: providerCredentials.createdAt,
+  updatedAt: providerCredentials.updatedAt,
+};
+
 export async function GET(request: Request) {
   const requestId = getRequestId(request);
   try {
     const principal = await authenticateApiKey(request);
     if (!principal) return apiFailure(401, "UNAUTHORIZED", "مفتاح المنصة غير صالح.", requestId);
     requireApiScope(principal, "providers:read");
-    const rows = await db().select({
-      id: providerCredentials.id,
-      provider: providerCredentials.provider,
-      name: providerCredentials.name,
-      baseUrl: providerCredentials.baseUrl,
-      secretHint: providerCredentials.secretHint,
-      discoveredModels: providerCredentials.discoveredModels,
-      validationStatus: providerCredentials.validationStatus,
-      lastValidatedAt: providerCredentials.lastValidatedAt,
-      enabled: providerCredentials.enabled,
-      createdAt: providerCredentials.createdAt,
-      updatedAt: providerCredentials.updatedAt,
-    }).from(providerCredentials).where(eq(providerCredentials.organizationId, principal.organizationId));
+    const rows = await db().select(publicProviderSelection)
+      .from(providerCredentials)
+      .where(eq(providerCredentials.organizationId, principal.organizationId));
     return apiSuccess({ credentials: rows }, requestId);
   } catch (error) {
     return handleApiError(error, requestId, "/api/v1/provider-credentials");
@@ -64,17 +72,7 @@ export async function POST(request: Request) {
         validationStatus: "verified",
         lastValidatedAt: new Date(),
         lastValidationLatencyMs: discovery.latencyMs,
-      }).returning({
-        id: providerCredentials.id,
-        provider: providerCredentials.provider,
-        name: providerCredentials.name,
-        baseUrl: providerCredentials.baseUrl,
-        secretHint: providerCredentials.secretHint,
-        discoveredModels: providerCredentials.discoveredModels,
-        validationStatus: providerCredentials.validationStatus,
-        lastValidatedAt: providerCredentials.lastValidatedAt,
-        enabled: providerCredentials.enabled,
-      });
+      }).returning(publicProviderSelection);
       if (!credential) throw new Error("PROVIDER_CREATE_FAILED");
       if (discovery.models.length > 0) {
         await tx.insert(modelCatalog).values(discovery.models.map((model) => ({
