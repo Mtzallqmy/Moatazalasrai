@@ -173,6 +173,7 @@ export function ProviderForm() {
 
   const models = validation?.models ?? [];
   const modelPreview = models.slice(0, 16);
+  const canSave = Boolean(validation && testModel && loading === null);
 
   return (
     <form onSubmit={submit} className="soft-card grid gap-4 p-5 sm:grid-cols-2 sm:p-6">
@@ -220,7 +221,7 @@ export function ProviderForm() {
 
       <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
         <button disabled={loading !== null} onClick={validate} className="secondary-button disabled:opacity-60" type="button">{loading === "validate" ? "جارٍ فحص الشبكة والمفتاح..." : "فحص الاتصال وجلب النماذج"}</button>
-        <button disabled={!validation || !testModel || loading !== null} className="primary-button disabled:opacity-50" type="submit">{loading === "save" ? "جارٍ اختبار التوليد والحفظ..." : "اختبر واحفظ الاتصال"}</button>
+        <button disabled={!canSave} className="primary-button disabled:opacity-50" type="submit">{loading === "save" ? "جارٍ اختبار التوليد والحفظ..." : "اختبر واحفظ الاتصال"}</button>
         {!validation ? <span className="text-xs text-[var(--text-secondary)]">الحفظ لا يتاح قبل نجاح فحص حقيقي.</span> : null}
       </div>
 
