@@ -173,7 +173,7 @@ class PlatformRepository {
         'attachmentIds': attachmentIds,
         'inputKind': inputKind,
         'mcpResources': mcpResources,
-        if (mcpPrompt != null) 'mcpPrompt': mcpPrompt,
+        'mcpPrompt': ?mcpPrompt,
       },
       options: Options(headers: {'idempotency-key': 'chat-${DateTime.now().microsecondsSinceEpoch}'}),
     );
