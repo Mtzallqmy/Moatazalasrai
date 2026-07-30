@@ -43,7 +43,7 @@ export async function POST(request: Request) {
       data: Buffer.from(file.content).toString("base64"),
     }));
     const combinedMedia = [...media, ...mcpContext.media];
-    if (combinedMedia.reduce((sum, item) => sum + base64Bytes(item.data), 0) > 20 * 1024 * 1024) {
+    if (combinedMedia.reduce((sum, item) => sum + (item.type === "image" ? base64Bytes(item.data) : 0), 0) > 20 * 1024 * 1024) {
       throw new ApiError(413, "VISION_PAYLOAD_TOO_LARGE", "إجمالي الصور والمصادر المرسلة للنموذج يتجاوز 20 ميجابايت.");
     }
     const effectiveInputKind = combinedMedia.length > 0
