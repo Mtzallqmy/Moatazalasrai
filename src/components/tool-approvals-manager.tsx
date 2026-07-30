@@ -63,7 +63,10 @@ export function ToolApprovalsManager() {
   }, []);
 
   useEffect(() => {
-    void load().catch((error) => setMessage(error instanceof Error ? error.message : "تعذر تحميل طلبات الموافقة."));
+    const timer = window.setTimeout(() => {
+      void load().catch((error) => setMessage(error instanceof Error ? error.message : "تعذر تحميل طلبات الموافقة."));
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [load]);
 
   useEffect(() => {
