@@ -2,7 +2,6 @@ import { and, desc, eq, gt, max, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { agentRunCheckpoints } from "@/db/agent-runtime-schema";
-import { runs } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
 import { decryptSecret, encryptSecret } from "@/lib/security/encryption";
 import { runCheckpointTtlSeconds } from "@/lib/ai-sdk/limits";
