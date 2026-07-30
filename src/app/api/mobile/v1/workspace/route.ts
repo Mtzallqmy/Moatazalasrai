@@ -34,6 +34,7 @@ export async function GET(request: Request) {
           id: mcpServers.id,
           name: mcpServers.name,
           endpoint: mcpServers.endpoint,
+          authMode: mcpServers.authMode,
           status: mcpServers.status,
           enabled: mcpServers.enabled,
           serverName: mcpServers.serverName,
@@ -41,6 +42,7 @@ export async function GET(request: Request) {
           protocolVersion: mcpServers.protocolVersion,
           lastConnectedAt: mcpServers.lastConnectedAt,
           lastErrorCode: mcpServers.lastErrorCode,
+          oauthConnectedAt: mcpServers.oauthConnectedAt,
         }).from(mcpServers).where(eq(mcpServers.organizationId, principal.organizationId))
           .orderBy(desc(mcpServers.updatedAt))
         : Promise.resolve([]),
@@ -51,6 +53,8 @@ export async function GET(request: Request) {
           name: mcpTools.name,
           title: mcpTools.title,
           description: mcpTools.description,
+          capability: mcpTools.capability,
+          mediaType: mcpTools.mediaType,
           risk: mcpTools.risk,
           enabled: mcpTools.enabled,
         }).from(mcpTools).where(and(

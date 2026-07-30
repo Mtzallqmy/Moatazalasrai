@@ -482,8 +482,13 @@ export const mcpServers = pgTable("mcp_servers", {
   name: text("name").notNull(),
   endpoint: text("endpoint").notNull(),
   transport: text("transport").notNull().default("streamable_http"),
+  authMode: text("auth_mode").notNull().default("bearer"),
   encryptedBearerToken: text("encrypted_bearer_token"),
   tokenHint: text("token_hint"),
+  encryptedOauthData: text("encrypted_oauth_data"),
+  oauthScopes: text("oauth_scopes"),
+  oauthExpiresAt: timestamp("oauth_expires_at", { withTimezone: true }),
+  oauthConnectedAt: timestamp("oauth_connected_at", { withTimezone: true }),
   enabled: boolean("enabled").notNull().default(true),
   status: text("status").notNull().default("pending"),
   protocolVersion: text("protocol_version"),
@@ -510,6 +515,8 @@ export const mcpTools = pgTable("mcp_tools", {
   outputSchema: jsonb("output_schema").$type<Record<string, unknown>>(),
   annotations: jsonb("annotations").$type<Record<string, unknown>>().notNull().default({}),
   schemaHash: text("schema_hash").notNull(),
+  capability: text("capability").notNull().default("general"),
+  mediaType: text("media_type"),
   enabled: boolean("enabled").notNull().default(true),
   risk: text("risk").notNull().default("medium"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -517,6 +524,7 @@ export const mcpTools = pgTable("mcp_tools", {
 }, (table) => [
   uniqueIndex("mcp_tools_server_name_idx").on(table.serverId, table.name),
   index("mcp_tools_org_enabled_idx").on(table.organizationId, table.enabled),
+  index("mcp_tools_org_capability_idx").on(table.organizationId, table.capability, table.enabled),
 ]);
 
 export const agentMcpTools = pgTable("agent_mcp_tools", {
