@@ -1,0 +1,25 @@
+name: Refresh lockfile
+
+on:
+  push:
+    branches: [feat/ai-sdk-graphile-worker-production]
+
+permissions:
+  contents: read
+
+jobs:
+  lockfile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+          cache: npm
+      - run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-lock-node22
+          path: package-lock.json
+          if-no-files-found: error
