@@ -63,7 +63,9 @@ export async function requestToolApproval(input: {
       capability: input.capability,
     }).returning();
     if (!created) throw new Error("TOOL_APPROVAL_CREATE_FAILED");
-    await tx.update(runs).set({ status: "waiting_approval" }).where(and(
+    await tx.update(runs).set({
+      status: "waiting_approval" as typeof runs.$inferInsert.status,
+    }).where(and(
       eq(runs.id, input.runId),
       eq(runs.organizationId, input.organizationId),
     ));
@@ -174,7 +176,6 @@ export async function getToolApprovalForResume(organizationId: string, approvalI
   )).limit(1);
   if (!row) throw new ApiError(404, "TOOL_APPROVAL_NOT_FOUND", "طلب الموافقة غير موجود.");
   if (!row.runId || !row.toolCallId) throw new ApiError(409, "TOOL_APPROVAL_INVALID", "طلب الموافقة غير مرتبط بتشغيل صالح.");
-  if (!inArray) throw new Error("UNREACHABLE");
   if (row.status !== "approved" && row.status !== "rejected") {
     throw new ApiError(409, "TOOL_APPROVAL_NOT_DECIDED", "لم يُتخذ قرار صالح لهذه الموافقة.");
   }
