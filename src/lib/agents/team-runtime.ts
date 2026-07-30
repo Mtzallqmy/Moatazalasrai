@@ -26,11 +26,19 @@ type PersistedTeam = {
   workers: Array<{ agent: TeamAgent; position: number }>;
 };
 
+class TeamWaitingApproval extends Error {
+  constructor(public readonly runId: string) {
+    super("TEAM_RUN_WAITING_APPROVAL");
+    this.name = "TeamWaitingApproval";
+  }
+}
+
 function stableStepRequestId(teamRunId: string, stepType: TeamStepType, position: number) {
   return `team:${teamRunId}:${stepType}:${position}`;
 }
 
 function safeTeamErrorCode(error: unknown) {
+  if (error instanceof TeamWaitingApproval) return "TEAM_RUN_WAITING_APPROVAL";
   if (error instanceof ApiError) return error.code;
   if (error instanceof Error && /^[A-Z0-9_]{3,100}$/.test(error.message)) return error.message;
   return "TEAM_RUN_FAILED";
@@ -200,6 +208,9 @@ async function runMember(input: {
   if (step.status === "completed" && step.output) {
     return { agentId: input.agent.id, agentName: input.agent.name, output: step.output, runId: step.runId };
   }
+  if (step.status === "waiting_approval" && step.runId) {
+    throw new TeamWaitingApproval(step.runId);
+  }
 
   const stableRequestId = step.stableRequestId ?? stableStepRequestId(input.teamRunId, input.stepType, input.position);
   const conversationId = await ensureStepConversation({
@@ -228,6 +239,13 @@ async function runMember(input: {
       }).where(and(eq(agentTeamRunStepsRuntime.id, step.id), eq(agentTeamRunStepsRuntime.organizationId, input.organizationId)));
       return { agentId: input.agent.id, agentName: input.agent.name, output: existingById.output, runId: existingById.id };
     }
+    if (existingById?.status === "waiting_approval") {
+      await db().update(agentTeamRunStepsRuntime).set({ status: "waiting_approval" }).where(and(
+        eq(agentTeamRunStepsRuntime.id, step.id),
+        eq(agentTeamRunStepsRuntime.organizationId, input.organizationId),
+      ));
+      throw new TeamWaitingApproval(existingById.id);
+    }
   }
 
   const firstRequestId = stableRequestId;
@@ -241,6 +259,14 @@ async function runMember(input: {
       completedAt: new Date(),
     }).where(and(eq(agentTeamRunStepsRuntime.id, step.id), eq(agentTeamRunStepsRuntime.organizationId, input.organizationId)));
     return { agentId: input.agent.id, agentName: input.agent.name, output: existing.output, runId: existing.id };
+  }
+  if (existing?.status === "waiting_approval") {
+    await db().update(agentTeamRunStepsRuntime).set({
+      runId: existing.id,
+      status: "waiting_approval",
+      errorCode: null,
+    }).where(and(eq(agentTeamRunStepsRuntime.id, step.id), eq(agentTeamRunStepsRuntime.organizationId, input.organizationId)));
+    throw new TeamWaitingApproval(existing.id);
   }
 
   const requestId = existing ? `${stableRequestId}:retry:${input.teamAttempt}` : firstRequestId;
@@ -261,6 +287,14 @@ async function runMember(input: {
       message: input.prompt,
       requestId,
     });
+    if (result.run?.status === "waiting_approval") {
+      await db().update(agentTeamRunStepsRuntime).set({
+        runId: result.run.id,
+        status: "waiting_approval",
+        errorCode: null,
+      }).where(and(eq(agentTeamRunStepsRuntime.id, step.id), eq(agentTeamRunStepsRuntime.organizationId, input.organizationId)));
+      throw new TeamWaitingApproval(result.run.id);
+    }
     await assertNotCancelled(input.organizationId, input.teamRunId);
     const output = result.assistantMessage?.content ?? result.run?.output ?? "";
     if (!output.trim()) throw new ApiError(502, "TEAM_STEP_EMPTY_OUTPUT", "لم يُرجع وكيل الفريق نتيجة.");
@@ -275,6 +309,7 @@ async function runMember(input: {
     }).where(and(eq(agentTeamRunStepsRuntime.id, step.id), eq(agentTeamRunStepsRuntime.organizationId, input.organizationId)));
     return { agentId: input.agent.id, agentName: input.agent.name, output, runId: result.run?.id };
   } catch (error) {
+    if (error instanceof TeamWaitingApproval) throw error;
     const completedAt = new Date();
     await db().update(agentTeamRunStepsRuntime).set({
       status: "failed",
@@ -358,6 +393,7 @@ export async function executePersistedAgentTeamRun(input: {
     )).limit(1);
     if (!current) throw new ApiError(404, "TEAM_RUN_NOT_FOUND", "تشغيل الفريق غير موجود.");
     if (current.status === "completed" || current.status === "cancelled") return current;
+    if (current.status === "waiting_approval") return current;
     if (current.cancelRequestedAt) {
       const [cancelled] = await db().update(agentTeamRunsRuntime).set({
         status: "cancelled",
@@ -426,20 +462,15 @@ export async function executePersistedAgentTeamRun(input: {
       }).where(and(eq(agentTeamRunsRuntime.id, running.id), eq(agentTeamRunsRuntime.organizationId, input.organizationId))).returning();
       return completed ?? running;
     } catch (error) {
+      const waiting = error instanceof TeamWaitingApproval;
       const cancelled = safeTeamErrorCode(error) === "TEAM_RUN_CANCELLED";
-      await db().update(agentTeamRunsRuntime).set({
-        status: cancelled ? "cancelled" : "failed",
-        errorCode: cancelled ? null : safeTeamErrorCode(error),
-        completedAt: new Date(),
+      const [updated] = await db().update(agentTeamRunsRuntime).set({
+        status: waiting ? "waiting_approval" : cancelled ? "cancelled" : "failed",
+        errorCode: waiting || cancelled ? null : safeTeamErrorCode(error),
+        completedAt: waiting ? null : new Date(),
         updatedAt: new Date(),
-      }).where(and(eq(agentTeamRunsRuntime.id, running.id), eq(agentTeamRunsRuntime.organizationId, input.organizationId)));
-      if (cancelled) {
-        const [row] = await db().select().from(agentTeamRunsRuntime).where(and(
-          eq(agentTeamRunsRuntime.id, running.id),
-          eq(agentTeamRunsRuntime.organizationId, input.organizationId),
-        )).limit(1);
-        return row ?? running;
-      }
+      }).where(and(eq(agentTeamRunsRuntime.id, running.id), eq(agentTeamRunsRuntime.organizationId, input.organizationId))).returning();
+      if (waiting || cancelled) return updated ?? running;
       throw error;
     }
   });
@@ -455,7 +486,7 @@ export async function cancelAgentTeamRun(organizationId: string, teamRunId: stri
   const now = new Date();
   const [updated] = await db().update(agentTeamRunsRuntime).set({
     cancelRequestedAt: now,
-    ...(current.status === "queued" ? { status: "cancelled", completedAt: now } : {}),
+    ...(["queued", "waiting_approval"].includes(current.status) ? { status: "cancelled", completedAt: now } : {}),
     updatedAt: now,
   }).where(and(eq(agentTeamRunsRuntime.id, teamRunId), eq(agentTeamRunsRuntime.organizationId, organizationId))).returning();
   return updated ?? current;
