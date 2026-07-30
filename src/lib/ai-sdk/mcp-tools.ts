@@ -43,7 +43,12 @@ function validInputSchema(value: Record<string, unknown>) {
   if (type !== undefined && type !== "object") {
     throw new ApiError(422, "MCP_TOOL_SCHEMA_INVALID", "مخطط أداة MCP يجب أن يصف كائن JSON.");
   }
-  return { type: "object", additionalProperties: true, ...value };
+  return { type: "object" as const, additionalProperties: true, ...value };
+}
+
+function aiJsonSchema(value: Record<string, unknown>) {
+  // AI SDK accepts JSON Schema 7. MCP schemas are validated above; the cast is limited to this external-library boundary.
+  return jsonSchema<Record<string, unknown>>(value as never);
 }
 
 export async function loadAgentMcpTools(input: {
@@ -106,18 +111,16 @@ export async function loadAgentMcpTools(input: {
         row.tool.description ?? row.tool.name,
         `MCP server: ${row.server.name}. Original tool: ${row.tool.name}.`,
       ].join(" "),
-      inputSchema: jsonSchema<Record<string, unknown>>(schema),
-      outputSchema: row.tool.outputSchema
-        ? jsonSchema<Record<string, unknown>>(row.tool.outputSchema)
-        : undefined,
-      needsApproval: ({ args }) => evaluateToolApproval({
+      inputSchema: aiJsonSchema(schema),
+      outputSchema: row.tool.outputSchema ? aiJsonSchema(row.tool.outputSchema) : undefined,
+      needsApproval: (rawArguments) => evaluateToolApproval({
         approvalMode,
         risk: row.tool.risk,
         capability: row.tool.capability,
         name: row.tool.name,
         description: row.tool.description,
         annotations: row.tool.annotations,
-        arguments: objectArguments(args),
+        arguments: objectArguments(rawArguments),
       }).requiresApproval,
       execute: async (rawArguments, options) => {
         const args = objectArguments(rawArguments);
