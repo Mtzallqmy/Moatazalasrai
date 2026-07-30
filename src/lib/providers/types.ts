@@ -7,6 +7,7 @@ export type ProviderMessage = { role: "system" | "user" | "assistant"; content: 
 export type ProviderRequest = {
   apiKey: string;
   baseUrl: string;
+  providerSlug?: string;
   model: string;
   messages: ProviderMessage[];
   temperature: number;
