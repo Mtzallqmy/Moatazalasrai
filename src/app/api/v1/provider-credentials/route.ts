@@ -6,7 +6,7 @@ import { ApiError, apiFailure, apiSuccess, getRequestId, handleApiError, parseJs
 import { providerDeleteSchema, providerInputSchema, providerUpdateSchema } from "@/lib/http/contracts";
 import { getProviderPreset, resolveProviderPreset } from "@/lib/providers/catalog";
 import { defaultBaseUrl, inferProviderSlug, validateProvider } from "@/lib/providers/registry";
-import { ProviderError, type ProviderKind } from "@/lib/providers/types";
+import type { ProviderKind } from "@/lib/providers/types";
 import { decryptSecret, encryptSecret, maskSecret } from "@/lib/security/encryption";
 import { inferModelCapabilities, isFreeTierModel } from "@/server/models/capabilities";
 
@@ -33,24 +33,21 @@ const publicProviderSelection = {
 function publicProvider<T extends { provider: ProviderKind; baseUrl: string }>(row: T) {
   const providerSlug = inferProviderSlug(row.provider, row.baseUrl);
   const preset = getProviderPreset(providerSlug);
-  return { ...row, providerSlug, providerLabel: preset?.labelAr ?? preset?.label ?? providerSlug, apiStyle: preset?.apiStyle ?? "openai_chat" };
+  return {
+    ...row,
+    providerSlug,
+    providerLabel: preset?.labelAr ?? preset?.label ?? providerSlug,
+    apiStyle: preset?.apiStyle ?? "openai_chat",
+  };
 }
 
 function requestedPreset(provider: ProviderKind, slug?: string) {
   if (!slug) return resolveProviderPreset({ provider });
   const preset = getProviderPreset(slug);
-  if (!preset || preset.provider !== provider) throw new ApiError(400, "PROVIDER_PRESET_INVALID", "نوع المزود لا يطابق الإعداد المختار.");
-  return preset;
-}
-
-function mapProviderError(error: unknown): never {
-  if (error instanceof ProviderError) {
-    throw new ApiError(error.httpStatus, error.code, error.message, {
-      providerStatus: error.providerStatus,
-      retryAfterMs: error.retryAfterMs,
-    });
+  if (!preset || preset.provider !== provider) {
+    throw new ApiError(400, "PROVIDER_PRESET_INVALID", "نوع المزود لا يطابق الإعداد المختار.");
   }
-  throw error;
+  return preset;
 }
 
 async function replaceModels(input: {
@@ -147,14 +144,18 @@ export async function POST(request: Request) {
       action: "provider_credential.created",
       resourceType: "provider_credential",
       resourceId: created.id,
-      metadata: { provider: created.provider, providerSlug: discovery.providerSlug, modelCount: discovery.models.length, requestId },
+      metadata: {
+        provider: created.provider,
+        providerSlug: discovery.providerSlug,
+        modelCount: discovery.models.length,
+        requestId,
+      },
     });
     return apiSuccess({ credential: publicProvider(created) }, requestId, 201, {
       latencyMs: discovery.latencyMs,
       modelTest: discovery.modelTest,
     });
   } catch (error) {
-    if (error instanceof ProviderError) mapProviderError(error);
     return handleApiError(error, requestId, "/api/v1/provider-credentials");
   }
 }
@@ -175,7 +176,9 @@ export async function PATCH(request: Request) {
 
     const currentSlug = inferProviderSlug(current.provider, current.baseUrl);
     const preset = requestedPreset(current.provider, body.providerSlug ?? currentSlug);
-    const nextBaseUrl = body.baseUrl ?? (body.providerSlug && body.providerSlug !== currentSlug ? preset.defaultBaseUrl : current.baseUrl);
+    const nextBaseUrl = body.baseUrl ?? (body.providerSlug && body.providerSlug !== currentSlug
+      ? preset.defaultBaseUrl
+      : current.baseUrl);
     if (!nextBaseUrl) throw new ApiError(400, "BASE_URL_REQUIRED", "يلزم Base URL صالح.");
     const connectionChanged = body.revalidate === true
       || Boolean(body.apiKey)
@@ -218,7 +221,10 @@ export async function PATCH(request: Request) {
         circuitOpenUntil: null,
         enabled: body.enabled ?? true,
       } : {}),
-      ...(body.apiKey && apiKey ? { encryptedSecret: encryptSecret(apiKey), secretHint: maskSecret(apiKey) } : {}),
+      ...(body.apiKey && apiKey ? {
+        encryptedSecret: encryptSecret(apiKey),
+        secretHint: maskSecret(apiKey),
+      } : {}),
       updatedAt: new Date(),
     }).where(and(
       eq(providerCredentials.id, current.id),
@@ -226,13 +232,15 @@ export async function PATCH(request: Request) {
       activeProvider,
     )).returning(publicProviderSelection);
     if (!updated) throw new ApiError(404, "PROVIDER_NOT_FOUND", "اتصال المزود غير موجود.");
-    if (discovery) await replaceModels({
-      organizationId: principal.organizationId,
-      credentialId: updated.id,
-      provider: updated.provider,
-      models: discovery.models,
-      latencyMs: discovery.latencyMs,
-    });
+    if (discovery) {
+      await replaceModels({
+        organizationId: principal.organizationId,
+        credentialId: updated.id,
+        provider: updated.provider,
+        models: discovery.models,
+        latencyMs: discovery.latencyMs,
+      });
+    }
     await db().insert(auditLogs).values({
       organizationId: principal.organizationId,
       actorType: "api_key",
@@ -244,7 +252,6 @@ export async function PATCH(request: Request) {
     });
     return apiSuccess({ credential: publicProvider(updated) }, requestId);
   } catch (error) {
-    if (error instanceof ProviderError) mapProviderError(error);
     return handleApiError(error, requestId, "/api/v1/provider-credentials");
   }
 }
@@ -267,18 +274,31 @@ export async function DELETE(request: Request) {
     await db().transaction(async (tx) => {
       await tx.execute(sql`
         UPDATE "provider_credentials"
-        SET "deleted_at" = ${now}, "enabled" = false, "last_error_code" = 'PROVIDER_DELETED', "updated_at" = ${now}
-        WHERE "id" = ${current.id} AND "organization_id" = ${principal.organizationId} AND "deleted_at" IS NULL
+        SET "deleted_at" = ${now},
+            "enabled" = false,
+            "last_error_code" = 'PROVIDER_DELETED',
+            "updated_at" = ${now}
+        WHERE "id" = ${current.id}
+          AND "organization_id" = ${principal.organizationId}
+          AND "deleted_at" IS NULL
       `);
       await tx.update(modelCatalog).set({ available: false, updatedAt: now }).where(and(
         eq(modelCatalog.organizationId, principal.organizationId),
         eq(modelCatalog.providerCredentialId, current.id),
       ));
-      await tx.update(organizations).set({ defaultProviderCredentialId: null, defaultModel: null, updatedAt: now }).where(and(
+      await tx.update(organizations).set({
+        defaultProviderCredentialId: null,
+        defaultModel: null,
+        updatedAt: now,
+      }).where(and(
         eq(organizations.id, principal.organizationId),
         eq(organizations.defaultProviderCredentialId, current.id),
       ));
-      await tx.update(agents).set({ defaultProviderCredentialId: null, defaultModel: null, updatedAt: now }).where(and(
+      await tx.update(agents).set({
+        defaultProviderCredentialId: null,
+        defaultModel: null,
+        updatedAt: now,
+      }).where(and(
         eq(agents.organizationId, principal.organizationId),
         eq(agents.defaultProviderCredentialId, current.id),
       ));
