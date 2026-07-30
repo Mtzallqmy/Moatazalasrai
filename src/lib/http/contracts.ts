@@ -22,9 +22,7 @@ export const loginSchema = z.object({
   password: z.string().min(1).max(128),
 }).strict();
 
-export const switchOrganizationSchema = z.object({
-  organizationId: uuidSchema,
-}).strict();
+export const switchOrganizationSchema = z.object({ organizationId: uuidSchema }).strict();
 
 export const providerInputSchema = z.object({
   provider: providerKindSchema,
@@ -34,12 +32,7 @@ export const providerInputSchema = z.object({
   testModel: z.string().trim().min(1).max(200).optional(),
 }).strict();
 
-export const providerValidationSchema = providerInputSchema.pick({
-  provider: true,
-  apiKey: true,
-  baseUrl: true,
-  testModel: true,
-});
+export const providerValidationSchema = providerInputSchema.pick({ provider: true, apiKey: true, baseUrl: true, testModel: true });
 
 export const providerUpdateSchema = z.object({
   id: uuidSchema,
@@ -79,6 +72,22 @@ export const conversationActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("move"), conversationId: uuidSchema, folderId: uuidSchema.nullable() }).strict(),
 ]);
 
+const mcpArgumentsSchema = z.record(
+  z.string().trim().min(1).max(100),
+  z.string().max(20_000),
+).refine((value) => Object.keys(value).length <= 40, "Too many MCP arguments.");
+
+export const mcpResourceSelectionSchema = z.object({
+  serverId: uuidSchema,
+  uri: z.string().trim().min(1).max(4096),
+}).strict();
+
+export const mcpPromptSelectionSchema = z.object({
+  serverId: uuidSchema,
+  name: z.string().trim().min(1).max(200),
+  arguments: mcpArgumentsSchema.default({}),
+}).strict();
+
 export const chatStreamSchema = z.object({
   conversationId: uuidSchema,
   message: z.string().trim().min(1).max(30_000),
@@ -89,6 +98,8 @@ export const chatStreamSchema = z.object({
   inputKind: z.enum(["text", "image", "file", "coding", "summary", "analysis", "audio", "video"]).default("text"),
   knowledgeBaseId: uuidSchema.optional(),
   useMemory: z.boolean().default(false),
+  mcpResources: z.array(mcpResourceSelectionSchema).max(12).default([]),
+  mcpPrompt: mcpPromptSelectionSchema.optional(),
 }).strict();
 
 export const runCancelSchema = z.object({ runId: uuidSchema }).strict();

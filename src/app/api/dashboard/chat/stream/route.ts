@@ -2,6 +2,7 @@ import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { agentMemories, agents, attachments, conversations, messages } from "@/db/schema";
 import { aiFeatureEnabled } from "@/ai/config";
+import { buildMcpChatContext } from "@/ai/mcp/context";
 import { retrieveKnowledge } from "@/ai/rag/retriever";
 import { streamAgentRun } from "@/lib/agents/runtime";
 import { requireSession } from "@/lib/auth/authorization";
@@ -18,26 +19,20 @@ function sse(event: string, data: unknown) {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
+function base64Bytes(value: string) {
+  return Math.floor(value.length * 0.75);
+}
+
 export async function POST(request: Request) {
   const requestId = getRequestId(request);
   try {
     assertSameOrigin(request);
     const session = await requireSession("agents:run");
-    await enforceRateLimit({
-      scope: "chat.send",
-      key: `${session.organizationId}:${session.userId}`,
-      limit: 30,
-      windowMs: 60_000,
-    });
-    const body = await parseJson(request, chatStreamSchema, 48 * 1024);
-    const [conversation] = await db().select({
-      id: conversations.id,
-      agentId: conversations.agentId,
-    }).from(conversations)
-      .innerJoin(agents, and(
-        eq(agents.id, conversations.agentId),
-        eq(agents.organizationId, session.organizationId),
-      ))
+    await enforceRateLimit({ scope: "chat.send", key: `${session.organizationId}:${session.userId}`, limit: 30, windowMs: 60_000 });
+    const body = await parseJson(request, chatStreamSchema, 96 * 1024);
+    const [conversation] = await db().select({ id: conversations.id, agentId: conversations.agentId })
+      .from(conversations)
+      .innerJoin(agents, and(eq(agents.id, conversations.agentId), eq(agents.organizationId, session.organizationId)))
       .where(and(
         eq(conversations.id, body.conversationId),
         eq(conversations.organizationId, session.organizationId),
@@ -45,27 +40,28 @@ export async function POST(request: Request) {
         isNull(conversations.archivedAt),
         isNull(conversations.deletedAt),
         eq(agents.status, "published"),
-      ))
-      .limit(1);
+      )).limit(1);
     if (!conversation) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة أو الوكيل غير متاح.");
 
-    const attachmentData = await attachmentContext(
-      session.organizationId,
-      conversation.id,
-      body.attachmentIds,
-    );
+    const [attachmentData, mcpContext] = await Promise.all([
+      attachmentContext(session.organizationId, conversation.id, body.attachmentIds),
+      buildMcpChatContext({ organizationId: session.organizationId, userId: session.userId, resources: body.mcpResources, prompt: body.mcpPrompt }),
+    ]);
     const imageRows = attachmentData.rows.filter((file) => ["image/jpeg", "image/png", "image/webp", "image/gif"].includes(file.mimeType));
-    if (imageRows.reduce((sum, file) => sum + file.sizeBytes, 0) > 20 * 1024 * 1024) {
-      throw new ApiError(413, "VISION_PAYLOAD_TOO_LARGE", "إجمالي الصور المرسلة للنموذج يتجاوز 20 ميجابايت.");
-    }
     const media = imageRows.map((file) => ({
       type: "image" as const,
       mediaType: file.mimeType as "image/jpeg" | "image/png" | "image/webp" | "image/gif",
       data: Buffer.from(file.content).toString("base64"),
     }));
-    const effectiveInputKind = attachmentData.rows.length > 0
-      ? inputKindForAttachments(attachmentData.rows.map((file) => file.mimeType))
-      : body.inputKind;
+    const combinedMedia = [...media, ...mcpContext.media];
+    if (combinedMedia.reduce((sum, item) => sum + (item.type === "image" ? base64Bytes(item.data) : 0), 0) > 20 * 1024 * 1024) {
+      throw new ApiError(413, "VISION_PAYLOAD_TOO_LARGE", "إجمالي الصور والمصادر المرسلة للنموذج يتجاوز 20 ميجابايت.");
+    }
+    const effectiveInputKind = combinedMedia.length > 0
+      ? "image"
+      : attachmentData.rows.length > 0
+        ? inputKindForAttachments(attachmentData.rows.map((file) => file.mimeType))
+        : body.inputKind;
     const knowledge = body.knowledgeBaseId && aiFeatureEnabled("RAG")
       ? await retrieveKnowledge({ organizationId: session.organizationId, knowledgeBaseId: body.knowledgeBaseId, query: body.message })
       : { text: "", citations: [] };
@@ -96,6 +92,7 @@ export async function POST(request: Request) {
           requestId,
           attachmentIds: body.attachmentIds,
           attachments: attachmentData.rows.map((file) => ({ id: file.id, filename: file.filename, mimeType: file.mimeType, sizeBytes: file.sizeBytes, processingStatus: file.processingStatus })),
+          mcpReferences: mcpContext.references,
         },
       }).returning();
       if (created && body.attachmentIds.length > 0) {
@@ -115,20 +112,22 @@ export async function POST(request: Request) {
             id: file.id, filename: file.filename, mimeType: file.mimeType, sizeBytes: file.sizeBytes, processingStatus: file.processingStatus,
           })) },
           requestId,
+          mcpReferences: mcpContext.references,
         })));
         if (knowledge.citations.length) controller.enqueue(encoder.encode(sse("citations", { citations: knowledge.citations })));
         try {
           for await (const event of streamAgentRun({
             organizationId: session.organizationId,
+            userId: session.userId,
             agentId: conversation.agentId,
             conversationId: conversation.id,
-            message: `${body.message}${attachmentData.text}${memoryText}${knowledge.text ? `\n\n[سياق معرفة موثق]\n${knowledge.text}` : ""}`,
+            message: `${body.message}${attachmentData.text}${mcpContext.text}${memoryText}${knowledge.text ? `\n\n[سياق معرفة موثق]\n${knowledge.text}` : ""}`,
             requestId,
             requestSignal: request.signal,
             providerCredentialId: body.providerCredentialId,
             model: body.model,
             inputKind: effectiveInputKind,
-            media,
+            media: combinedMedia,
           })) {
             controller.enqueue(encoder.encode(sse(event.type, event)));
           }

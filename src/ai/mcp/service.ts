@@ -3,9 +3,21 @@ import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { mcpServers, mcpToolCalls, mcpTools } from "@/db/schema";
+import {
+  mcpContentReads,
+  mcpPrompts,
+  mcpResources,
+  mcpResourceTemplates,
+} from "@/db/mcp-catalog-schema";
 import { ApiError } from "@/lib/http/api";
 import { decryptSecret } from "@/lib/security/encryption";
-import { callRemoteMcpTool, discoverMcpServer, finishMcpOAuth } from "./client";
+import {
+  callRemoteMcpTool,
+  discoverMcpServer,
+  finishMcpOAuth,
+  getRemoteMcpPrompt,
+  readRemoteMcpResource,
+} from "./client";
 import {
   DatabaseMcpOAuthProvider,
   HIGGSFIELD_MCP_ENDPOINT,
@@ -20,6 +32,16 @@ function digest(value: unknown) {
 function publicResult(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
   return { value };
+}
+
+function payloadBytes(value: unknown) {
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+
+function maxMcpPayloadBytes() {
+  const configured = Number(process.env.MCP_MAX_CONTENT_BYTES ?? 25 * 1024 * 1024);
+  if (!Number.isFinite(configured)) return 25 * 1024 * 1024;
+  return Math.min(Math.max(Math.floor(configured), 1024 * 1024), 100 * 1024 * 1024);
 }
 
 async function serverSecret(server: typeof mcpServers.$inferSelect) {
@@ -59,10 +81,95 @@ async function serverConnection(server: typeof mcpServers.$inferSelect, origin?:
   };
 }
 
+function templateMayResolve(template: string, uri: string) {
+  const first = template.indexOf("{");
+  if (first < 0) return template === uri;
+  const last = template.lastIndexOf("}");
+  const prefix = template.slice(0, first);
+  const suffix = last >= first ? template.slice(last + 1) : "";
+  return uri.startsWith(prefix) && uri.endsWith(suffix) && uri.length >= prefix.length + suffix.length;
+}
+
+async function assertResourceAllowed(organizationId: string, serverId: string, uri: string) {
+  const [resource, templates] = await Promise.all([
+    db().select({ id: mcpResources.id }).from(mcpResources).where(and(
+      eq(mcpResources.organizationId, organizationId),
+      eq(mcpResources.serverId, serverId),
+      eq(mcpResources.uri, uri),
+      eq(mcpResources.enabled, true),
+    )).limit(1),
+    db().select({ uriTemplate: mcpResourceTemplates.uriTemplate }).from(mcpResourceTemplates).where(and(
+      eq(mcpResourceTemplates.organizationId, organizationId),
+      eq(mcpResourceTemplates.serverId, serverId),
+      eq(mcpResourceTemplates.enabled, true),
+    )),
+  ]);
+  if (resource[0] || templates.some((row) => templateMayResolve(row.uriTemplate, uri))) return;
+  throw new ApiError(404, "MCP_RESOURCE_NOT_DISCOVERED", "المورد غير موجود في فهرس MCP الموثوق لهذا الخادم.");
+}
+
+async function assertPromptAllowed(organizationId: string, serverId: string, name: string) {
+  const [prompt] = await db().select({ id: mcpPrompts.id }).from(mcpPrompts).where(and(
+    eq(mcpPrompts.organizationId, organizationId),
+    eq(mcpPrompts.serverId, serverId),
+    eq(mcpPrompts.name, name),
+    eq(mcpPrompts.enabled, true),
+  )).limit(1);
+  if (!prompt) throw new ApiError(404, "MCP_PROMPT_NOT_DISCOVERED", "قالب MCP غير موجود أو معطل.");
+}
+
+async function recordContentRead<T>(input: {
+  organizationId: string;
+  serverId: string;
+  userId?: string | null;
+  kind: "resource" | "prompt";
+  identifier: string;
+  operation: () => Promise<T>;
+}) {
+  const [row] = await db().insert(mcpContentReads).values({
+    organizationId: input.organizationId,
+    serverId: input.serverId,
+    requestedByUserId: input.userId,
+    kind: input.kind,
+    identifier: input.identifier,
+  }).returning({ id: mcpContentReads.id, createdAt: mcpContentReads.createdAt });
+  if (!row) throw new Error("MCP_CONTENT_READ_CREATE_FAILED");
+  try {
+    const result = await input.operation();
+    const bytes = payloadBytes(result);
+    if (bytes > maxMcpPayloadBytes()) {
+      throw new ApiError(413, "MCP_CONTENT_TOO_LARGE", "حجم محتوى MCP يتجاوز الحد الإنتاجي المسموح.", {
+        bytes,
+        maxBytes: maxMcpPayloadBytes(),
+      });
+    }
+    const completedAt = new Date();
+    await db().update(mcpContentReads).set({
+      status: "completed",
+      payloadBytes: bytes,
+      resultDigest: digest(result),
+      durationMs: completedAt.getTime() - row.createdAt.getTime(),
+      completedAt,
+    }).where(eq(mcpContentReads.id, row.id));
+    return result;
+  } catch (error) {
+    const completedAt = new Date();
+    await db().update(mcpContentReads).set({
+      status: "failed",
+      errorCode: error instanceof ApiError ? error.code : error instanceof Error ? error.name : "MCP_CONTENT_READ_FAILED",
+      durationMs: completedAt.getTime() - row.createdAt.getTime(),
+      completedAt,
+    }).where(eq(mcpContentReads.id, row.id));
+    throw error;
+  }
+}
+
 export async function startHiggsfieldOAuth(organizationId: string, serverId: string, origin?: string) {
   const server = await getMcpServer(organizationId, serverId);
   const connection = await serverConnection(server, origin);
-  if (!connection.authProvider) throw new ApiError(400, "MCP_OAUTH_NOT_ENABLED", "OAuth غير مفعّل لهذا الاتصال.");
+  if (!("authProvider" in connection) || !connection.authProvider) {
+    throw new ApiError(400, "MCP_OAUTH_NOT_ENABLED", "OAuth غير مفعّل لهذا الاتصال.");
+  }
   try {
     const discovered = await discoverMcpServer(connection);
     return { connected: true as const, discovered };
@@ -89,7 +196,7 @@ export async function completeHiggsfieldOAuth(input: {
 }) {
   const server = await getMcpServer(input.organizationId, input.serverId);
   const connection = await serverConnection(server, input.origin);
-  const provider = connection.authProvider;
+  const provider = "authProvider" in connection ? connection.authProvider : undefined;
   if (!provider || !provider.verifyState(input.state)) {
     throw new ApiError(400, "MCP_OAUTH_STATE_INVALID", "تعذر التحقق من حالة OAuth. أعد بدء الربط.");
   }
@@ -111,15 +218,26 @@ export async function syncMcpServer(organizationId: string, serverId: string, or
         protocolVersion: "2025-11-25",
         serverName: discovered.server?.name ?? null,
         serverVersion: discovered.server?.version ?? null,
-        capabilities: discovered.capabilities as Record<string, unknown>,
+        capabilities: {
+          ...(discovered.capabilities as Record<string, unknown>),
+          discoveryErrors: discovered.discoveryErrors,
+          catalogCounts: {
+            tools: discovered.tools.length,
+            resources: discovered.resources.length,
+            resourceTemplates: discovered.resourceTemplates.length,
+            prompts: discovered.prompts.length,
+          },
+        },
         lastConnectedAt: new Date(),
-        lastErrorCode: null,
+        lastErrorCode: discovered.discoveryErrors[0] ?? null,
         updatedAt: new Date(),
       }).where(eq(mcpServers.id, server.id));
-      await tx.update(mcpTools).set({
-        enabled: false,
-        updatedAt: new Date(),
-      }).where(eq(mcpTools.serverId, server.id));
+
+      await tx.update(mcpTools).set({ enabled: false, updatedAt: new Date() }).where(eq(mcpTools.serverId, server.id));
+      await tx.update(mcpResources).set({ enabled: false, updatedAt: new Date() }).where(eq(mcpResources.serverId, server.id));
+      await tx.update(mcpResourceTemplates).set({ enabled: false, updatedAt: new Date() }).where(eq(mcpResourceTemplates.serverId, server.id));
+      await tx.update(mcpPrompts).set({ enabled: false, updatedAt: new Date() }).where(eq(mcpPrompts.serverId, server.id));
+
       for (const tool of discovered.tools) {
         const inputSchema = tool.inputSchema as Record<string, unknown>;
         const outputSchema = tool.outputSchema as Record<string, unknown> | undefined;
@@ -159,6 +277,91 @@ export async function syncMcpServer(organizationId: string, serverId: string, or
           },
         });
       }
+
+      for (const resource of discovered.resources) {
+        await tx.insert(mcpResources).values({
+          organizationId,
+          serverId: server.id,
+          uri: resource.uri,
+          name: resource.name,
+          title: resource.title,
+          description: resource.description,
+          mimeType: resource.mimeType,
+          sizeBytes: typeof resource.size === "number" && resource.size <= 2_147_483_647 ? resource.size : null,
+          annotations: resource.annotations ?? {},
+          icons: resource.icons ?? [],
+          metadata: resource._meta ?? {},
+          enabled: true,
+        }).onConflictDoUpdate({
+          target: [mcpResources.serverId, mcpResources.uri],
+          set: {
+            name: resource.name,
+            title: resource.title,
+            description: resource.description,
+            mimeType: resource.mimeType,
+            sizeBytes: typeof resource.size === "number" && resource.size <= 2_147_483_647 ? resource.size : null,
+            annotations: resource.annotations ?? {},
+            icons: resource.icons ?? [],
+            metadata: resource._meta ?? {},
+            enabled: true,
+            updatedAt: new Date(),
+          },
+        });
+      }
+
+      for (const template of discovered.resourceTemplates) {
+        await tx.insert(mcpResourceTemplates).values({
+          organizationId,
+          serverId: server.id,
+          uriTemplate: template.uriTemplate,
+          name: template.name,
+          title: template.title,
+          description: template.description,
+          mimeType: template.mimeType,
+          annotations: template.annotations ?? {},
+          icons: template.icons ?? [],
+          metadata: template._meta ?? {},
+          enabled: true,
+        }).onConflictDoUpdate({
+          target: [mcpResourceTemplates.serverId, mcpResourceTemplates.uriTemplate],
+          set: {
+            name: template.name,
+            title: template.title,
+            description: template.description,
+            mimeType: template.mimeType,
+            annotations: template.annotations ?? {},
+            icons: template.icons ?? [],
+            metadata: template._meta ?? {},
+            enabled: true,
+            updatedAt: new Date(),
+          },
+        });
+      }
+
+      for (const prompt of discovered.prompts) {
+        await tx.insert(mcpPrompts).values({
+          organizationId,
+          serverId: server.id,
+          name: prompt.name,
+          title: prompt.title,
+          description: prompt.description,
+          arguments: prompt.arguments ?? [],
+          icons: prompt.icons ?? [],
+          metadata: prompt._meta ?? {},
+          enabled: true,
+        }).onConflictDoUpdate({
+          target: [mcpPrompts.serverId, mcpPrompts.name],
+          set: {
+            title: prompt.title,
+            description: prompt.description,
+            arguments: prompt.arguments ?? [],
+            icons: prompt.icons ?? [],
+            metadata: prompt._meta ?? {},
+            enabled: true,
+            updatedAt: new Date(),
+          },
+        });
+      }
     });
     return discovered;
   } catch (error) {
@@ -175,8 +378,60 @@ export async function syncMcpServer(organizationId: string, serverId: string, or
       lastErrorCode: error instanceof Error ? error.name : "MCP_CONNECTION_FAILED",
       updatedAt: new Date(),
     }).where(eq(mcpServers.id, server.id));
-    throw new ApiError(502, "MCP_CONNECTION_FAILED", "تعذر الاتصال بخادم MCP أو اكتشاف أدواته.");
+    throw new ApiError(502, "MCP_CONNECTION_FAILED", "تعذر الاتصال بخادم MCP أو اكتشاف محتواه.");
   }
+}
+
+export async function readMcpResource(input: {
+  organizationId: string;
+  serverId: string;
+  uri: string;
+  userId?: string | null;
+}) {
+  const server = await getMcpServer(input.organizationId, input.serverId);
+  await assertResourceAllowed(input.organizationId, server.id, input.uri);
+  const connection = await serverConnection(server);
+  return recordContentRead({
+    organizationId: input.organizationId,
+    serverId: server.id,
+    userId: input.userId,
+    kind: "resource",
+    identifier: input.uri,
+    operation: () => readRemoteMcpResource({
+      ...connection,
+      uri: input.uri,
+    }),
+  });
+}
+
+export async function renderMcpPrompt(input: {
+  organizationId: string;
+  serverId: string;
+  name: string;
+  arguments?: Record<string, string>;
+  userId?: string | null;
+}) {
+  const server = await getMcpServer(input.organizationId, input.serverId);
+  await assertPromptAllowed(input.organizationId, server.id, input.name);
+  const connection = await serverConnection(server);
+  return recordContentRead({
+    organizationId: input.organizationId,
+    serverId: server.id,
+    userId: input.userId,
+    kind: "prompt",
+    identifier: input.name,
+    operation: () => getRemoteMcpPrompt({
+      ...connection,
+      name: input.name,
+      arguments: input.arguments,
+    }),
+  });
+}
+
+function toolTimeoutMs(capability: string) {
+  if (capability === "video_generation") return 15 * 60_000;
+  if (capability === "image_generation" || capability === "media_processing") return 8 * 60_000;
+  return 2 * 60_000;
 }
 
 export async function executeMcpTool(input: {
@@ -214,6 +469,7 @@ export async function executeMcpTool(input: {
       ...await serverConnection(row.server),
       name: row.tool.name,
       arguments: input.arguments,
+      timeoutMs: toolTimeoutMs(row.tool.capability),
     });
     const completedAt = new Date();
     await db().update(mcpToolCalls).set({
