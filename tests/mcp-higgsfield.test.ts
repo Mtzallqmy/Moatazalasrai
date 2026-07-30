@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_APP_URL,
   HIGGSFIELD_MCP_ENDPOINT,
   isOfficialHiggsfieldEndpoint,
 } from "@/ai/mcp/oauth";
@@ -9,6 +10,7 @@ import { classifyMcpTool } from "@/ai/mcp/tools";
 describe("Higgsfield MCP integration", () => {
   it("pins OAuth to the official Streamable HTTP endpoint", () => {
     expect(HIGGSFIELD_MCP_ENDPOINT).toBe("https://mcp.higgsfield.ai/mcp");
+    expect(DEFAULT_APP_URL).toBe("https://moatazbot.duckdns.org");
     expect(isOfficialHiggsfieldEndpoint(HIGGSFIELD_MCP_ENDPOINT)).toBe(true);
     expect(isOfficialHiggsfieldEndpoint("https://mcp.higgsfield.ai.evil.test/mcp")).toBe(false);
     expect(isOfficialHiggsfieldEndpoint("http://mcp.higgsfield.ai/mcp")).toBe(false);
