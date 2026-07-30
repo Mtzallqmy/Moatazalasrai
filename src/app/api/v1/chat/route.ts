@@ -55,7 +55,13 @@ export async function POST(request: Request) {
       conversationId: conversation.id,
       role: "user",
       content: body.message,
-      metadata: { requestId, attachmentIds: body.attachmentIds, mcpReferences: mcpContext.references },
+      metadata: {
+        requestId,
+        attachmentIds: body.attachmentIds,
+        mcpReferences: mcpContext.references,
+        requestedProviderCredentialId: body.providerCredentialId ?? null,
+        requestedModel: body.model ?? null,
+      },
     }).returning({ id: messages.id });
     if (userMessage && body.attachmentIds.length > 0) {
       await db().update(attachments).set({ messageId: userMessage.id }).where(and(
@@ -70,6 +76,8 @@ export async function POST(request: Request) {
       conversationId: conversation.id,
       message: `${body.message}${context.text}${mcpContext.text}`,
       requestId,
+      providerCredentialId: body.providerCredentialId,
+      model: body.model,
       inputKind: effectiveInputKind,
       media: combinedMedia,
     });
