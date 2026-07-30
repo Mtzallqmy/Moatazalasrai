@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import { and, desc, eq, gt } from "drizzle-orm";
+import { and, desc, eq, gt, lte, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { toolApprovalsRuntime } from "@/db/agent-runtime-schema";
 import { auditLogs, runs } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
-import { encryptSecret, decryptSecret } from "@/lib/security/encryption";
+import { decryptSecret, encryptSecret } from "@/lib/security/encryption";
 import { toolApprovalTtlSeconds } from "@/lib/ai-sdk/limits";
 import { appendRunEvent } from "@/lib/ai-sdk/run-events";
 import { persistRunStep } from "@/lib/ai-sdk/run-steps";
@@ -13,6 +13,15 @@ import { redactedArgumentSummary } from "@/lib/ai-sdk/approval-policy";
 
 function digest(value: unknown) {
   return createHash("sha256").update(JSON.stringify(value ?? null)).digest("hex");
+}
+
+function publicApprovalArguments(encryptedArguments: string | null) {
+  if (!encryptedArguments) return {};
+  try {
+    return redactedArgumentSummary(JSON.parse(decryptSecret(encryptedArguments)));
+  } catch {
+    return { unavailable: true };
+  }
 }
 
 export async function requestToolApproval(input: {
@@ -63,7 +72,7 @@ export async function requestToolApproval(input: {
       capability: input.capability,
     }).returning();
     if (!created) throw new Error("TOOL_APPROVAL_CREATE_FAILED");
-    await tx.update(runs).set({ status: "waiting_approval" }).where(and(
+    await tx.update(runs).set({ status: sql`'waiting_approval'::run_status` }).where(and(
       eq(runs.id, input.runId),
       eq(runs.organizationId, input.organizationId),
     ));
@@ -113,10 +122,21 @@ export async function requestToolApproval(input: {
 
 export async function listPendingToolApprovals(organizationId: string) {
   const now = new Date();
-  await db().update(toolApprovalsRuntime).set({ status: "expired", updatedAt: now }).where(and(
+  const expired = await db().update(toolApprovalsRuntime).set({ status: "expired", updatedAt: now }).where(and(
     eq(toolApprovalsRuntime.organizationId, organizationId),
     eq(toolApprovalsRuntime.status, "pending"),
-  ));
+    lte(toolApprovalsRuntime.expiresAt, now),
+  )).returning({ id: toolApprovalsRuntime.id, runId: toolApprovalsRuntime.runId, toolId: toolApprovalsRuntime.toolId });
+  if (expired.length) {
+    await db().insert(auditLogs).values(expired.map((row) => ({
+      organizationId,
+      actorType: "system" as const,
+      action: "tool_approval.expired",
+      resourceType: "tool_approval",
+      resourceId: row.id,
+      metadata: { runId: row.runId, toolId: row.toolId },
+    })));
+  }
   const rows = await db().select().from(toolApprovalsRuntime).where(and(
     eq(toolApprovalsRuntime.organizationId, organizationId),
     eq(toolApprovalsRuntime.status, "pending"),
@@ -125,9 +145,7 @@ export async function listPendingToolApprovals(organizationId: string) {
   return rows.map((row) => ({
     ...row,
     encryptedArguments: undefined,
-    argumentsSummary: row.encryptedArguments
-      ? redactedArgumentSummary(JSON.parse(decryptSecret(row.encryptedArguments)))
-      : {},
+    argumentsSummary: publicApprovalArguments(row.encryptedArguments),
   }));
 }
 
@@ -140,9 +158,7 @@ export async function getToolApproval(organizationId: string, approvalId: string
   return {
     ...row,
     encryptedArguments: undefined,
-    argumentsSummary: row.encryptedArguments
-      ? redactedArgumentSummary(JSON.parse(decryptSecret(row.encryptedArguments)))
-      : {},
+    argumentsSummary: publicApprovalArguments(row.encryptedArguments),
   };
 }
 
@@ -208,10 +224,7 @@ export async function decideToolApproval(input: {
   return result;
 }
 
-export async function consumeToolApproval(input: {
-  organizationId: string;
-  approvalId: string;
-}) {
+export async function consumeToolApproval(input: { organizationId: string; approvalId: string }) {
   const now = new Date();
   const [updated] = await db().update(toolApprovalsRuntime).set({
     status: "consumed",
