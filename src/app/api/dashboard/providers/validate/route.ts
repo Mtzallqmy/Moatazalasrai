@@ -44,8 +44,10 @@ export async function POST(request: Request) {
 
     let validationId: string | undefined;
     let validationExpiresAt: Date | undefined;
-    if (result.modelTest) {
+    const modelTest = result.modelTest;
+    if (modelTest) {
       validationExpiresAt = new Date(Date.now() + providerValidationTtlSeconds() * 1000);
+      const expiresAt = validationExpiresAt;
       const [created] = await db().transaction(async (tx) => {
         const [row] = await tx.insert(providerValidationSessions).values({
           organizationId: session.organizationId,
@@ -55,9 +57,9 @@ export async function POST(request: Request) {
           normalizedBaseUrl: result.normalizedBaseUrl,
           apiKeyHash: hashApiKey(providerInput.apiKey),
           models: result.models,
-          testedModel: result.modelTest.model,
+          testedModel: modelTest.model,
           latencyMs: result.latencyMs,
-          expiresAt: validationExpiresAt!,
+          expiresAt,
         }).returning({ id: providerValidationSessions.id });
         if (!row) throw new Error("PROVIDER_VALIDATION_SESSION_CREATE_FAILED");
         await tx.insert(auditLogs).values({
@@ -70,7 +72,7 @@ export async function POST(request: Request) {
           metadata: {
             provider: providerInput.provider,
             providerSlug: result.providerSlug,
-            testedModel: result.modelTest?.model,
+            testedModel: modelTest.model,
             modelCount: result.models.length,
             requestId,
           },
@@ -84,7 +86,7 @@ export async function POST(request: Request) {
       ...result,
       validationId,
       validationExpiresAt: validationExpiresAt?.toISOString(),
-      verificationStatus: result.modelTest ? "verified" : "models_discovered",
+      verificationStatus: modelTest ? "verified" : "models_discovered",
     }, requestId);
   } catch (error) {
     if (error instanceof ProviderError) {
