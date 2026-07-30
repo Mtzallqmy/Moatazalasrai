@@ -20,266 +20,52 @@ export type ProviderPreset = {
   manualModelAllowed: boolean;
 };
 
-export const providerPresets = [
-  {
-    slug: "openai",
-    label: "OpenAI",
-    labelAr: "OpenAI",
-    descriptionAr: "واجهة OpenAI الأصلية عبر Responses API مع اكتشاف النماذج.",
-    provider: "openai",
-    apiStyle: "native_openai",
-    defaultBaseUrl: "https://api.openai.com/v1",
-    category: "first_party",
-    baseUrlEditable: false,
-    manualModelAllowed: true,
-  },
-  {
-    slug: "anthropic",
-    label: "Anthropic",
-    labelAr: "Anthropic Claude",
-    descriptionAr: "واجهة Anthropic Messages الأصلية ومفاتيح x-api-key.",
-    provider: "anthropic",
-    apiStyle: "native_anthropic",
-    defaultBaseUrl: "https://api.anthropic.com",
-    category: "first_party",
-    baseUrlEditable: false,
-    manualModelAllowed: true,
-  },
-  {
-    slug: "google-gemini",
-    label: "Google Gemini",
-    labelAr: "Google Gemini",
-    descriptionAr: "واجهة Gemini الأصلية مع generateContent وstreamGenerateContent.",
-    provider: "gemini",
-    apiStyle: "native_gemini",
-    defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
-    category: "first_party",
-    baseUrlEditable: false,
-    manualModelAllowed: true,
-  },
-  {
-    slug: "google-gemini-openai",
-    label: "Gemini OpenAI compatibility",
-    labelAr: "Gemini المتوافق مع OpenAI",
-    descriptionAr: "طبقة Google الرسمية المتوافقة مع OpenAI SDK.",
-    provider: "openai_compatible",
-    apiStyle: "openai_chat",
-    defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-    category: "first_party",
-    baseUrlEditable: false,
-    manualModelAllowed: true,
-  },
-  {
-    slug: "openrouter",
-    label: "OpenRouter",
-    labelAr: "OpenRouter",
-    descriptionAr: "موجّه نماذج متعدد المزودين بواجهة OpenAI-compatible.",
-    provider: "openai_compatible",
-    apiStyle: "openai_chat",
-    defaultBaseUrl: "https://openrouter.ai/api/v1",
-    category: "router",
-    baseUrlEditable: false,
-    manualModelAllowed: true,
-  },
-  {
-    slug: "huggingface",
-    label: "Hugging Face Inference Providers",
-    labelAr: "Hugging Face Inference Providers",
-    descriptionAr: "موجّه Hugging Face للنماذج الحوارية ومزودي الاستدلال.",
-    provider: "openai_compatible",
-    apiStyle: "openai_chat",
-    defaultBaseUrl: "https://router.huggingface.co/v1",
-    category: "router",
-    baseUrlEditable: false,
-    manualModelAllowed: true,
-  },
-  {
-    slug: "groq",
-    label: "GroqCloud",
-    labelAr: "GroqCloud",
-    descriptionAr: "استدلال سريع متوافق مع OpenAI مع بث وقائمة نماذج.",
-    provider: "openai_compatible",
-    apiStyle: "openai_chat",
-    defaultBaseUrl: "https://api.groq.com/openai/v1",
-    category: "inference",
-    baseUrlEditable: false,
-    manualModelAllowed: true,
-  },
-  {
-    slug: "together",
-    label: "Together AI",
-    labelAr: "Together AI",
-    descriptionAr: "نماذج مفتوحة وواجهات Chat/Vision متوافقة مع OpenAI.",
-    provider: "openai_compatible",
-    apiStyle: "openai_chat",
-    defaultBaseUrl: "https://api.together.xyz/v1",
-    category: "inference",
-    baseUrlEditable: false,
-    manualModelAllowed: true,
-  },
-  {
-    slug: "nvidia-nim",
-    label: "NVIDIA NIM / API Catalog",
-    labelAr: "NVIDIA NIM",
-    descriptionAr: "واجهات NVIDIA NIM المتوافقة مع OpenAI؛ يمكن تغيير العنوان لنشر NIM خاص.",
-    provider: "openai_compatible",
-    apiStyle: "openai_chat",
-    defaultBaseUrl: "https://integrate.api.nvidia.com/v1",
-    category: "inference",
-    baseUrlEditable: true,
-    manualModelAllowed: true,
-  },
-  {
-    slug: "aws-bedrock-mantle",
-    label: "Amazon Bedrock Mantle",
-    labelAr: "Amazon Bedrock — OpenAI compatibility",
-    descriptionAr: "واجهة Bedrock Mantle المتوافقة مع OpenAI Responses API باستخدام Bedrock API key.",
-    provider: "openai_compatible",
-    apiStyle: "openai_responses",
-    defaultBaseUrl: "https://bedrock-mantle.us-east-1.api.aws/v1",
-    category: "cloud",
-    baseUrlEditable: true,
-    manualModelAllowed: true,
-  },
-  {
-    slug: "fireworks",
-    label: "Fireworks AI",
-    labelAr: "Fireworks AI",
-    descriptionAr: "نماذج Serverless وOn-demand عبر OpenAI-compatible API.",
-    provider: "openai_compatible",
-    apiStyle: "openai_chat",
-    defaultBaseUrl: "https://api.fireworks.ai/inference/v1",
-    category: "inference",
-    baseUrlEditable: false,
-    manualModelAllowed: true,
-  },
-  {
-    slug: "deepinfra",
-    label: "DeepInfra",
-    labelAr: "DeepInfra",
-    descriptionAr: "واجهة DeepInfra المتوافقة مع OpenAI للنص والرؤية.",
-    provider: "openai_compatible",
-    apiStyle: "openai_chat",
-    defaultBaseUrl: "https://api.deepinfra.com/v1/openai",
-    category: "inference",
-    baseUrlEditable: false,
-    manualModelAllowed: true,
-  },
-  {
-    slug: "mistral",
-    label: "Mistral AI",
-    labelAr: "Mistral AI",
-    descriptionAr: "واجهة Mistral الرسمية المتوافقة مع OpenAI Chat Completions.",
-    provider: "openai_compatible",
-    apiStyle: "openai_chat",
-    defaultBaseUrl: "https://api.mistral.ai/v1",
-    category: "first_party",
-    baseUrlEditable: false,
-    manualModelAllowed: true,
-  },
-  {
-    slug: "deepseek",
-    label: "DeepSeek",
-    labelAr: "DeepSeek",
-    descriptionAr: "واجهة DeepSeek المتوافقة مع OpenAI.",
-    provider: "openai_compatible",
-    apiStyle: "openai_chat",
-    defaultBaseUrl: "https://api.deepseek.com",
-    category: "first_party",
-    baseUrlEditable: false,
-    manualModelAllowed: true,
-  },
-  {
-    slug: "xai",
-    label: "xAI",
-    labelAr: "xAI Grok",
-    descriptionAr: "واجهة xAI Responses API المتوافقة مع OpenAI.",
-    provider: "openai_compatible",
-    apiStyle: "openai_responses",
-    defaultBaseUrl: "https://api.x.ai/v1",
-    category: "first_party",
-    baseUrlEditable: false,
-    manualModelAllowed: true,
-  },
-  {
-    slug: "perplexity-sonar",
-    label: "Perplexity Sonar",
-    labelAr: "Perplexity Sonar",
-    descriptionAr: "واجهة Sonar المتوافقة مع OpenAI Chat Completions.",
-    provider: "openai_compatible",
-    apiStyle: "openai_chat",
-    defaultBaseUrl: "https://api.perplexity.ai",
-    category: "first_party",
-    baseUrlEditable: false,
-    manualModelAllowed: true,
-  },
-  {
-    slug: "perplexity-agent",
-    label: "Perplexity Agent API",
-    labelAr: "Perplexity Agent API",
-    descriptionAr: "واجهة Perplexity Agent المتوافقة مع OpenAI Responses API.",
-    provider: "openai_compatible",
-    apiStyle: "openai_responses",
-    defaultBaseUrl: "https://api.perplexity.ai/v1",
-    category: "first_party",
-    baseUrlEditable: false,
-    manualModelAllowed: true,
-  },
-  {
-    slug: "cerebras",
-    label: "Cerebras Inference",
-    labelAr: "Cerebras Inference",
-    descriptionAr: "استدلال Cerebras المتوافق مع OpenAI.",
-    provider: "openai_compatible",
-    apiStyle: "openai_chat",
-    defaultBaseUrl: "https://api.cerebras.ai/v1",
-    category: "inference",
-    baseUrlEditable: false,
-    manualModelAllowed: true,
-  },
-  {
-    slug: "sambanova",
-    label: "SambaNova Cloud",
-    labelAr: "SambaNova Cloud",
-    descriptionAr: "واجهة SambaCloud المتوافقة مع OpenAI.",
-    provider: "openai_compatible",
-    apiStyle: "openai_chat",
-    defaultBaseUrl: "https://api.sambanova.ai/v1",
-    category: "inference",
-    baseUrlEditable: true,
-    manualModelAllowed: true,
-  },
-  {
-    slug: "agentrouter",
-    label: "AgentRouter",
-    labelAr: "AgentRouter",
-    descriptionAr: "موجّه AgentRouter عبر عنوانه الرسمي.",
-    provider: "openai_compatible",
-    apiStyle: "openai_chat",
-    defaultBaseUrl: "https://co.agentrouter.org/v1",
-    category: "router",
-    baseUrlEditable: false,
-    manualModelAllowed: true,
-  },
-  {
-    slug: "custom-openai-compatible",
-    label: "Custom OpenAI-compatible",
-    labelAr: "مزود مخصص متوافق مع OpenAI",
-    descriptionAr: "أي خدمة موثوقة توفر /models و/chat/completions أو نموذجًا يدويًا.",
-    provider: "openai_compatible",
-    apiStyle: "openai_chat",
-    defaultBaseUrl: "",
-    category: "custom",
-    baseUrlEditable: true,
-    manualModelAllowed: true,
-  },
-] as const satisfies readonly ProviderPreset[];
+type PresetOptions = Pick<ProviderPreset, "category" | "baseUrlEditable">;
 
-const presetMap = new Map<string, ProviderPreset>(providerPresets.map((preset) => [preset.slug, preset]));
+function preset(
+  slug: string,
+  label: string,
+  labelAr: string,
+  descriptionAr: string,
+  provider: ProviderKind,
+  apiStyle: ProviderApiStyle,
+  defaultBaseUrl: string,
+  options: PresetOptions,
+): ProviderPreset {
+  return { slug, label, labelAr, descriptionAr, provider, apiStyle, defaultBaseUrl, ...options, manualModelAllowed: true };
+}
+
+const fixed = (category: ProviderPreset["category"]): PresetOptions => ({ category, baseUrlEditable: false });
+const editable = (category: ProviderPreset["category"]): PresetOptions => ({ category, baseUrlEditable: true });
+
+export const providerPresets: readonly ProviderPreset[] = [
+  preset("openai", "OpenAI", "OpenAI", "واجهة OpenAI الأصلية عبر Responses API مع اكتشاف النماذج.", "openai", "native_openai", "https://api.openai.com/v1", fixed("first_party")),
+  preset("anthropic", "Anthropic", "Anthropic Claude", "واجهة Anthropic Messages الأصلية ومفاتيح x-api-key.", "anthropic", "native_anthropic", "https://api.anthropic.com", fixed("first_party")),
+  preset("google-gemini", "Google Gemini", "Google Gemini", "واجهة Gemini الأصلية مع generateContent والبث.", "gemini", "native_gemini", "https://generativelanguage.googleapis.com/v1beta", fixed("first_party")),
+  preset("google-gemini-openai", "Gemini OpenAI compatibility", "Gemini المتوافق مع OpenAI", "طبقة Google الرسمية المتوافقة مع OpenAI SDK.", "openai_compatible", "openai_chat", "https://generativelanguage.googleapis.com/v1beta/openai", fixed("first_party")),
+  preset("openrouter", "OpenRouter", "OpenRouter", "موجّه نماذج متعدد المزودين بواجهة OpenAI-compatible.", "openai_compatible", "openai_chat", "https://openrouter.ai/api/v1", fixed("router")),
+  preset("huggingface", "Hugging Face Inference Providers", "Hugging Face Inference Providers", "موجّه Hugging Face للنماذج الحوارية ومزودي الاستدلال.", "openai_compatible", "openai_chat", "https://router.huggingface.co/v1", fixed("router")),
+  preset("groq", "GroqCloud", "GroqCloud", "استدلال سريع متوافق مع OpenAI مع بث وقائمة نماذج.", "openai_compatible", "openai_chat", "https://api.groq.com/openai/v1", fixed("inference")),
+  preset("together", "Together AI", "Together AI", "نماذج مفتوحة وواجهات Chat/Vision متوافقة مع OpenAI.", "openai_compatible", "openai_chat", "https://api.together.ai/v1", fixed("inference")),
+  preset("nvidia-nim", "NVIDIA NIM / API Catalog", "NVIDIA NIM", "واجهات NVIDIA NIM المتوافقة مع OpenAI؛ يمكن تغيير العنوان لنشر NIM خاص.", "openai_compatible", "openai_chat", "https://integrate.api.nvidia.com/v1", editable("inference")),
+  preset("aws-bedrock-mantle", "Amazon Bedrock Mantle", "Amazon Bedrock — OpenAI compatibility", "واجهة Bedrock Mantle المتوافقة مع OpenAI Responses API باستخدام Bedrock API key.", "openai_compatible", "openai_responses", "https://bedrock-mantle.us-east-1.api.aws/v1", editable("cloud")),
+  preset("fireworks", "Fireworks AI", "Fireworks AI", "نماذج Serverless وOn-demand عبر OpenAI-compatible API.", "openai_compatible", "openai_chat", "https://api.fireworks.ai/inference/v1", fixed("inference")),
+  preset("deepinfra", "DeepInfra", "DeepInfra", "واجهة DeepInfra المتوافقة مع OpenAI للنص والرؤية.", "openai_compatible", "openai_chat", "https://api.deepinfra.com/v1/openai", fixed("inference")),
+  preset("mistral", "Mistral AI", "Mistral AI", "واجهة Mistral الرسمية المتوافقة مع OpenAI Chat Completions.", "openai_compatible", "openai_chat", "https://api.mistral.ai/v1", fixed("first_party")),
+  preset("deepseek", "DeepSeek", "DeepSeek", "واجهة DeepSeek المتوافقة مع OpenAI.", "openai_compatible", "openai_chat", "https://api.deepseek.com", fixed("first_party")),
+  preset("xai", "xAI", "xAI Grok", "واجهة xAI Responses API المتوافقة مع OpenAI.", "openai_compatible", "openai_responses", "https://api.x.ai/v1", fixed("first_party")),
+  preset("perplexity-sonar", "Perplexity Sonar", "Perplexity Sonar", "واجهة Sonar المتوافقة مع OpenAI Chat Completions.", "openai_compatible", "openai_chat", "https://api.perplexity.ai", fixed("first_party")),
+  preset("perplexity-agent", "Perplexity Agent API", "Perplexity Agent API", "واجهة Perplexity Agent المتوافقة مع OpenAI Responses API.", "openai_compatible", "openai_responses", "https://api.perplexity.ai/v1", fixed("first_party")),
+  preset("cerebras", "Cerebras Inference", "Cerebras Inference", "استدلال Cerebras المتوافق مع OpenAI.", "openai_compatible", "openai_chat", "https://api.cerebras.ai/v1", fixed("inference")),
+  preset("sambanova", "SambaNova Cloud", "SambaNova Cloud", "واجهة SambaCloud المتوافقة مع OpenAI.", "openai_compatible", "openai_chat", "https://api.sambanova.ai/v1", editable("inference")),
+  preset("agentrouter", "AgentRouter", "AgentRouter", "موجّه AgentRouter عبر عنوانه الرسمي.", "openai_compatible", "openai_chat", "https://co.agentrouter.org/v1", fixed("router")),
+  preset("custom-openai-compatible", "Custom OpenAI-compatible", "مزود مخصص متوافق مع OpenAI", "أي خدمة موثوقة توفر /models و/chat/completions أو نموذجًا يدويًا.", "openai_compatible", "openai_chat", "", editable("custom")),
+];
+
+const presetMap = new Map(providerPresets.map((item) => [item.slug, item]));
 
 export function getProviderPreset(slug?: string | null) {
-  if (!slug) return undefined;
-  return presetMap.get(slug);
+  return slug ? presetMap.get(slug) : undefined;
 }
 
 export function defaultProviderSlug(provider: ProviderKind) {
@@ -290,11 +76,10 @@ export function defaultProviderSlug(provider: ProviderKind) {
 }
 
 export function resolveProviderPreset(input: { provider: ProviderKind; providerSlug?: string | null }) {
-  const preset = getProviderPreset(input.providerSlug ?? defaultProviderSlug(input.provider));
-  if (!preset || preset.provider !== input.provider) return getProviderPreset(defaultProviderSlug(input.provider))!;
-  return preset;
+  const selected = getProviderPreset(input.providerSlug ?? defaultProviderSlug(input.provider));
+  return selected?.provider === input.provider ? selected : getProviderPreset(defaultProviderSlug(input.provider))!;
 }
 
 export function publicProviderCatalog() {
-  return providerPresets.map((preset) => ({ ...preset }));
+  return providerPresets.map((item) => ({ ...item }));
 }
