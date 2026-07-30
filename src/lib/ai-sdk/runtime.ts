@@ -10,7 +10,7 @@ import { ProviderError, type ProviderMessage } from "@/lib/providers/types";
 import type { ProviderKind } from "@/lib/providers/types";
 import { createDirectLanguageModel } from "@/lib/ai-sdk/model-factory";
 import { loadAgentMcpTools, type ToolRuntimeState } from "@/lib/ai-sdk/mcp-tools";
-import { maxModelSteps } from "@/lib/ai-sdk/limits";
+import { maxModelStepsPerRun } from "@/lib/ai-sdk/limits";
 import { aiSdkTelemetry } from "@/lib/ai-sdk/telemetry";
 import { persistRunStep } from "@/lib/ai-sdk/run-steps";
 import { requestToolApproval } from "@/lib/ai-sdk/approvals";
@@ -73,6 +73,13 @@ function isApprovalRequestPart(value: unknown): value is ApprovalRequestPart {
     && "input" in toolCall;
 }
 
+function findApprovalRequest(parts: readonly unknown[]) {
+  for (const part of parts) {
+    if (isApprovalRequestPart(part)) return part;
+  }
+  return undefined;
+}
+
 function asArguments(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return value as Record<string, unknown>;
@@ -113,6 +120,14 @@ function modelMessages(context: ProviderMessage[]) {
     messages.push({ role: "user", content });
   }
   return { system, messages };
+}
+
+function checkpointMessages(system: string, messages: ModelMessage[], responseMessages: ModelMessage[]) {
+  return [
+    ...(system ? [{ role: "system" as const, content: system }] : []),
+    ...messages,
+    ...responseMessages,
+  ] satisfies ModelMessage[];
 }
 
 function normalizedUsage(usage: LanguageModelUsage | undefined) {
@@ -248,7 +263,7 @@ export async function executeAiSdkCandidate(input: {
   maxOutputTokens: number;
   abortSignal?: AbortSignal;
   allocateStep: () => number;
-}) : Promise<AiSdkExecutionResult> {
+}): Promise<AiSdkExecutionResult> {
   const state = initialState();
   try {
     const converted = input.resumeMessages
@@ -267,7 +282,7 @@ export async function executeAiSdkCandidate(input: {
       system: converted.system || undefined,
       messages: converted.messages,
       tools: loaded.hasTools ? loaded.tools : undefined,
-      stopWhen: stepCountIs(maxModelSteps()),
+      stopWhen: stepCountIs(maxModelStepsPerRun()),
       temperature: input.temperature,
       maxOutputTokens: input.maxOutputTokens,
       maxRetries: 0,
@@ -290,8 +305,8 @@ export async function executeAiSdkCandidate(input: {
           status: "completed",
           model: input.candidate.model,
           providerCredentialId: input.candidate.providerCredentialId,
-          input: { stepType: step.stepType },
-          output: { finishReason: step.finishReason },
+          input: { toolCallCount: step.toolCalls.length },
+          output: { finishReason: step.finishReason, toolResultCount: step.toolResults.length },
           usage: step.usage,
           metadata: {
             finishReason: step.finishReason,
@@ -304,12 +319,12 @@ export async function executeAiSdkCandidate(input: {
     state.toolExecuted = loaded.state.toolExecuted;
     state.toolResultSaved = loaded.state.toolResultSaved;
     state.sideEffectOccurred = loaded.state.sideEffectOccurred;
-    const approval = result.content.find(isApprovalRequestPart);
+    const approval = findApprovalRequest(result.content);
     if (approval) {
       state.approvalPending = true;
       await saveApproval({
         ...input,
-        messages: [...converted.messages, ...result.response.messages],
+        messages: checkpointMessages(converted.system, converted.messages, result.response.messages),
         approval,
         bindings: loaded.bindings,
         state,
@@ -349,7 +364,7 @@ export async function* streamAiSdkCandidate(input: {
   maxOutputTokens: number;
   abortSignal?: AbortSignal;
   allocateStep: () => number;
-}) : AsyncGenerator<{ type: "delta"; text: string } | { type: "result"; result: AiSdkExecutionResult }> {
+}): AsyncGenerator<{ type: "delta"; text: string } | { type: "result"; result: AiSdkExecutionResult }> {
   const state = initialState();
   try {
     const converted = modelMessages(input.context);
@@ -366,7 +381,7 @@ export async function* streamAiSdkCandidate(input: {
       system: converted.system || undefined,
       messages: converted.messages,
       tools: loaded.hasTools ? loaded.tools : undefined,
-      stopWhen: stepCountIs(maxModelSteps()),
+      stopWhen: stepCountIs(maxModelStepsPerRun()),
       temperature: input.temperature,
       maxOutputTokens: input.maxOutputTokens,
       maxRetries: 0,
@@ -389,8 +404,8 @@ export async function* streamAiSdkCandidate(input: {
           status: "completed",
           model: input.candidate.model,
           providerCredentialId: input.candidate.providerCredentialId,
-          input: { stepType: step.stepType },
-          output: { finishReason: step.finishReason },
+          input: { toolCallCount: step.toolCalls.length },
+          output: { finishReason: step.finishReason, toolResultCount: step.toolResults.length },
           usage: step.usage,
           metadata: {
             finishReason: step.finishReason,
@@ -415,12 +430,12 @@ export async function* streamAiSdkCandidate(input: {
       result.response,
       result.text,
     ]);
-    const approval = content.find(isApprovalRequestPart);
+    const approval = findApprovalRequest(content);
     if (approval) {
       state.approvalPending = true;
       await saveApproval({
         ...input,
-        messages: [...converted.messages, ...response.messages],
+        messages: checkpointMessages(converted.system, converted.messages, response.messages),
         approval,
         bindings: loaded.bindings,
         state,
