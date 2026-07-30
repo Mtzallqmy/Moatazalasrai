@@ -1,6 +1,10 @@
 import { makeWorkerUtils, type WorkerUtils } from "graphile-worker";
 import { env } from "@/lib/config/env";
-import type { AgentTeamRunPayload, DocumentParsePayload } from "@/worker/schemas";
+import type {
+  AgentRunResumePayload,
+  AgentTeamRunPayload,
+  DocumentParsePayload,
+} from "@/worker/schemas";
 
 let workerUtilsPromise: Promise<WorkerUtils> | null = null;
 
@@ -38,6 +42,17 @@ export async function enqueueDocumentParse(payload: DocumentParsePayload) {
     maxAttempts: 5,
     jobKey: `document-parse:${payload.documentId}`,
     jobKeyMode: "replace",
+  });
+  return { jobId: String(job.id) };
+}
+
+export async function enqueueAgentRunResume(payload: AgentRunResumePayload) {
+  const worker = await getWorkerUtils();
+  const job = await worker.addJob("agent-run-resume", payload, {
+    queueName: "agent-approvals",
+    maxAttempts: 5,
+    jobKey: `agent-run-resume:${payload.approvalId}`,
+    jobKeyMode: "unsafe_dedupe",
   });
   return { jobId: String(job.id) };
 }
