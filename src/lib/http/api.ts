@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { ZodError, type ZodType } from "zod";
 import { errorDescriptor } from "@/contracts/errors";
+import { ProviderError } from "@/lib/providers/types";
 
 export class ApiError extends Error {
   constructor(
@@ -64,13 +65,19 @@ export function handleApiError(error: unknown, requestId: string, route: string)
   if (error instanceof ApiError) {
     return apiFailure(error.status, error.code, error.message, requestId, error.details);
   }
+  if (error instanceof ProviderError) {
+    return apiFailure(error.httpStatus, error.code, error.message, requestId, {
+      providerStatus: error.providerStatus,
+      retryAfterMs: error.retryAfterMs,
+    });
+  }
   if (error instanceof ZodError) {
     return apiFailure(
       400,
       "VALIDATION_ERROR",
       "تعذر قبول البيانات المرسلة. راجع الحقول وحاول مجددًا.",
       requestId,
-      error.issues.map((issue) => ({ path: issue.path.join("."), code: issue.code })),
+      error.issues.map((issue) => ({ path: issue.path.join("."), code: issue.code, message: issue.message })),
     );
   }
   console.error(JSON.stringify({
