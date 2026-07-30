@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
-import "@fontsource-variable/alexandria";
 import "./globals.css";
+import "./typography.css";
 
 export const metadata: Metadata = {
   title: {

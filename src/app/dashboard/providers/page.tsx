@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { DashboardShell } from "@/components/dashboard-shell";
 import { ProviderForm } from "@/components/provider-form";
@@ -6,6 +6,8 @@ import { ProviderManager } from "@/components/provider-manager";
 import { db } from "@/db";
 import { providerCredentials } from "@/db/schema";
 import { currentSession } from "@/lib/auth/session";
+import { getProviderPreset } from "@/lib/providers/catalog";
+import { inferProviderSlug } from "@/lib/providers/registry";
 
 export default async function ProvidersPage() {
   const session = await currentSession();
@@ -23,16 +25,31 @@ export default async function ProvidersPage() {
     lastValidatedAt: providerCredentials.lastValidatedAt,
     lastValidationLatencyMs: providerCredentials.lastValidationLatencyMs,
     lastErrorCode: providerCredentials.lastErrorCode,
+    consecutiveFailures: providerCredentials.consecutiveFailures,
+    circuitOpenUntil: providerCredentials.circuitOpenUntil,
     enabled: providerCredentials.enabled,
     createdAt: providerCredentials.createdAt,
-  }).from(providerCredentials).where(eq(providerCredentials.organizationId, session.organizationId)).orderBy(desc(providerCredentials.createdAt));
+    updatedAt: providerCredentials.updatedAt,
+  }).from(providerCredentials).where(and(
+    eq(providerCredentials.organizationId, session.organizationId),
+    sql`"provider_credentials"."deleted_at" IS NULL`,
+  )).orderBy(desc(providerCredentials.createdAt));
 
-  return <DashboardShell session={session} activePath="/dashboard/providers" title="المزودون والنماذج" description="فحص API Key وBase URL فعليًا، جلب النماذج من المزود، ثم حفظ المفتاح مشفرًا.">
+  return <DashboardShell session={session} activePath="/dashboard/providers" title="المزودون والنماذج" description="اختبار مفاتيح API والنماذج فعليًا، إدارة دورة حياة الاتصالات، واستخدامها في الوكلاء والدردشات والتكاملات.">
     <ProviderForm />
-    <ProviderManager initialProviders={rows.map((row) => ({
-      ...row,
-      lastValidatedAt: row.lastValidatedAt?.toISOString() ?? null,
-      createdAt: row.createdAt.toISOString(),
-    }))} />
+    <ProviderManager initialProviders={rows.map((row) => {
+      const providerSlug = inferProviderSlug(row.provider, row.baseUrl);
+      const preset = getProviderPreset(providerSlug);
+      return {
+        ...row,
+        providerSlug,
+        providerLabel: preset?.labelAr ?? preset?.label ?? providerSlug,
+        apiStyle: preset?.apiStyle ?? "openai_chat",
+        lastValidatedAt: row.lastValidatedAt?.toISOString() ?? null,
+        circuitOpenUntil: row.circuitOpenUntil?.toISOString() ?? null,
+        createdAt: row.createdAt.toISOString(),
+        updatedAt: row.updatedAt.toISOString(),
+      };
+    })} />
   </DashboardShell>;
 }

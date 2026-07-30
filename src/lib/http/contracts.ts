@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const uuidSchema = z.uuid();
 export const providerKindSchema = z.enum(["openai", "anthropic", "gemini", "openai_compatible"]);
+export const providerSlugSchema = z.string().trim().toLowerCase().regex(/^[a-z0-9-]{2,80}$/);
 export const agentStatusSchema = z.enum(["draft", "published", "archived"]);
 export const roleSchema = z.enum(["owner", "admin", "developer", "operator", "viewer", "member"]);
 
@@ -26,22 +27,33 @@ export const switchOrganizationSchema = z.object({ organizationId: uuidSchema })
 
 export const providerInputSchema = z.object({
   provider: providerKindSchema,
+  providerSlug: providerSlugSchema.optional(),
   name: z.string().trim().min(2).max(80),
-  apiKey: z.string().trim().min(8).max(1000),
+  apiKey: z.string().trim().min(8).max(4000),
   baseUrl: z.url().max(2048).optional(),
-  testModel: z.string().trim().min(1).max(200).optional(),
+  testModel: z.string().trim().min(1).max(300).optional(),
+  manualModel: z.string().trim().min(1).max(300).optional(),
 }).strict();
 
-export const providerValidationSchema = providerInputSchema.pick({ provider: true, apiKey: true, baseUrl: true, testModel: true });
+export const providerValidationSchema = providerInputSchema.pick({
+  provider: true,
+  providerSlug: true,
+  apiKey: true,
+  baseUrl: true,
+  testModel: true,
+  manualModel: true,
+});
 
 export const providerUpdateSchema = z.object({
   id: uuidSchema,
+  providerSlug: providerSlugSchema.optional(),
   name: z.string().trim().min(2).max(80).optional(),
   baseUrl: z.url().max(2048).optional(),
-  apiKey: z.string().trim().min(8).max(1000).optional(),
+  apiKey: z.string().trim().min(8).max(4000).optional(),
   enabled: z.boolean().optional(),
   revalidate: z.boolean().optional(),
-  testModel: z.string().trim().min(1).max(200).optional(),
+  testModel: z.string().trim().min(1).max(300).optional(),
+  manualModel: z.string().trim().min(1).max(300).optional(),
 }).strict().refine((value) => Object.keys(value).length > 1, "No provider changes supplied.");
 
 export const providerDeleteSchema = z.object({ id: uuidSchema }).strict();
@@ -50,7 +62,7 @@ export const agentCreateSchema = z.object({
   name: z.string().trim().min(2).max(100),
   description: z.string().trim().max(1000).optional(),
   providerCredentialId: uuidSchema,
-  model: z.string().trim().min(1).max(200),
+  model: z.string().trim().min(1).max(300),
   instructions: z.string().trim().min(1).max(30_000),
   temperature: z.number().min(0).max(2).default(0.2),
   maxOutputTokens: z.number().int().min(64).max(32_768).default(2048),
@@ -94,7 +106,7 @@ export const chatStreamSchema = z.object({
   attachmentIds: z.array(uuidSchema).max(8).default([]),
   clientRequestId: uuidSchema.optional(),
   providerCredentialId: uuidSchema.optional(),
-  model: z.string().trim().min(1).max(200).optional(),
+  model: z.string().trim().min(1).max(300).optional(),
   inputKind: z.enum(["text", "image", "file", "coding", "summary", "analysis", "audio", "video"]).default("text"),
   knowledgeBaseId: uuidSchema.optional(),
   useMemory: z.boolean().default(false),

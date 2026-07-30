@@ -1,0 +1,47 @@
+html {
+  font-size: 16px;
+}
+
+body,
+button,
+input,
+select,
+textarea,
+summary {
+  font-family: "Noto Naskh Arabic", "Noto Sans Arabic", "Traditional Arabic", "Geeza Pro", Tahoma, Arial, sans-serif;
+  font-feature-settings: "kern", "liga", "calt";
+}
+
+body {
+  line-height: 1.72;
+  letter-spacing: 0;
+}
+
+button,
+input,
+select,
+textarea {
+  font-size: 1rem;
+  line-height: 1.55;
+}
+
+h1,
+h2,
+h3,
+h4,
+strong,
+b {
+  letter-spacing: 0;
+}
+
+:lang(en),
+[dir="ltr"],
+code,
+pre,
+.font-latin {
+  font-family: Inter, "Segoe UI", Arial, sans-serif;
+}
+
+@media (max-width: 640px) {
+  html { font-size: 15.5px; }
+}
