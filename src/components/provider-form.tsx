@@ -13,12 +13,16 @@ export type ValidationResult = {
   baseUrlAdjusted?: boolean;
   stages?: Array<{ stage: string; status: "passed" | "manual"; latencyMs?: number }>;
   modelTest?: { model: string; latencyMs: number };
+  validationId?: string;
+  validationExpiresAt?: string;
+  verificationStatus?: "models_discovered" | "verified";
 };
 
 type ErrorPayload = {
   message?: string;
+  requestId?: string;
   action?: { ar?: string };
-  details?: Array<{ message?: string }>;
+  details?: Array<{ path?: string; code?: string; message?: string }>;
 };
 
 const categoryLabels: Record<ProviderPreset["category"], string> = {
@@ -29,11 +33,20 @@ const categoryLabels: Record<ProviderPreset["category"], string> = {
   custom: "اتصال مخصص",
 };
 
+function formString(form: FormData, name: string) {
+  const value = form.get(name);
+  return typeof value === "string" ? value : "";
+}
+
 function errorText(error: ErrorPayload | undefined, fallback: string) {
+  const details = error?.details?.map((item) => (
+    item.message?.trim() || [item.path, item.code].filter(Boolean).join(": ")
+  )).filter(Boolean).join("، ");
   return [
     error?.message?.trim() || fallback,
-    error?.details?.map((item) => item.message).filter(Boolean).join("، "),
+    details,
     error?.action?.ar?.trim(),
+    error?.requestId ? `معرّف الطلب: ${error.requestId}` : null,
   ].filter(Boolean).join(" ");
 }
 
@@ -68,20 +81,23 @@ export function ProviderForm() {
     setMessage(null);
   }
 
-  async function requestValidation(form: FormData) {
-    setLoading("validate");
-    setMessage(null);
-    const submittedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
+  async function requestValidation(
+    form: FormData,
+    mode: "discover" | "verify",
+    selectedModel?: string,
+  ): Promise<{ data: ValidationResult } | { error: string }> {
     try {
       const response = await fetch("/api/dashboard/providers/validate", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          mode,
           provider: preset.provider,
           providerSlug: preset.slug,
           baseUrl: baseUrl.trim() || undefined,
-          apiKey: form.get("apiKey"),
+          apiKey: formString(form, "apiKey"),
           manualModel: manualModel.trim() || undefined,
+          testModel: selectedModel?.trim() || undefined,
         }),
       });
       const payload = await response.json().catch(() => null) as {
@@ -90,82 +106,110 @@ export function ProviderForm() {
         error?: ErrorPayload;
       } | null;
       if (!response.ok || !payload?.success || !payload.data) {
-        resetValidation();
-        setMessage(errorText(payload?.error, "تعذر فحص الاتصال بالمزود."));
-        return;
+        return { error: errorText(payload?.error, mode === "verify" ? "فشل اختبار التوليد للنموذج المحدد." : "تعذر فحص الاتصال بالمزود.") };
       }
-      const selected = manualModel.trim() && payload.data.models.includes(manualModel.trim())
-        ? manualModel.trim()
-        : payload.data.models[0] ?? "";
-      setValidation(payload.data);
-      setTestModel(selected);
-      setBaseUrl(payload.data.normalizedBaseUrl);
-      const adjusted = payload.data.baseUrlAdjusted
-        || submittedBaseUrl !== payload.data.normalizedBaseUrl.replace(/\/+$/, "");
-      const manualStage = payload.data.stages?.some((stage) => stage.status === "manual");
-      setMessage([
-        adjusted ? `تم اعتماد Base URL الآمن: ${payload.data.normalizedBaseUrl}.` : null,
-        `نجح الاتصال خلال ${payload.data.latencyMs}ms وتم العثور على ${payload.data.models.length} نموذجًا.`,
-        manualStage ? "استُخدم اسم النموذج اليدوي لأن المزود لا يوفر /models متوافقًا." : null,
-        "اختر نموذج الاختبار ثم احفظ الاتصال.",
-      ].filter(Boolean).join(" "));
+      return { data: payload.data };
     } catch {
-      resetValidation();
-      setMessage("تعذر الوصول إلى الخادم. تحقق من الاتصال وحاول مجددًا.");
-    } finally {
-      setLoading(null);
+      return { error: "تعذر الوصول إلى الخادم. تحقق من الاتصال وحاول مجددًا." };
     }
   }
 
   async function validate(event: FormEvent<HTMLButtonElement>) {
     const formElement = event.currentTarget.form;
     if (!formElement?.reportValidity()) return;
-    await requestValidation(new FormData(formElement));
+    const form = new FormData(formElement);
+    const submittedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
+    setLoading("validate");
+    setMessage(null);
+    const checked = await requestValidation(form, "discover");
+    if ("error" in checked) {
+      resetValidation();
+      setMessage(checked.error);
+      setLoading(null);
+      return;
+    }
+
+    const selected = checked.data.modelTest?.model
+      ?? (manualModel.trim() && checked.data.models.includes(manualModel.trim()) ? manualModel.trim() : checked.data.models[0] ?? "");
+    setValidation(checked.data);
+    setTestModel(selected);
+    setBaseUrl(checked.data.normalizedBaseUrl);
+    const adjusted = checked.data.baseUrlAdjusted
+      || submittedBaseUrl !== checked.data.normalizedBaseUrl.replace(/\/+$/, "");
+    const manualStage = checked.data.stages?.some((stage) => stage.status === "manual");
+    setMessage([
+      adjusted ? `تم اعتماد Base URL الآمن: ${checked.data.normalizedBaseUrl}.` : null,
+      `نجح الوصول إلى API وجلب ${checked.data.models.length} نموذجًا خلال ${checked.data.latencyMs}ms.`,
+      manualStage ? "استُخدم اسم النموذج اليدوي لأن المزود لا يوفر /models متوافقًا." : null,
+      checked.data.modelTest
+        ? `نجح اختبار توليد حقيقي للنموذج ${checked.data.modelTest.model}.`
+        : "لم يُحفظ الاتصال بعد. اختر نموذجًا؛ زر الحفظ سينفذ اختبار توليد حقيقي ثم يحفظ كل البيانات ذريًا.",
+    ].filter(Boolean).join(" "));
+    setLoading(null);
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formElement = event.currentTarget;
+    if (!formElement.reportValidity()) return;
     const form = new FormData(formElement);
     if (!validation || !testModel) {
       setMessage("افحص الاتصال واجلب النماذج أولًا، ثم اختر نموذج اختبار قبل الحفظ.");
       return;
     }
+
     setLoading("save");
     setMessage(null);
+    const verified = await requestValidation(form, "verify", testModel);
+    if ("error" in verified) {
+      setMessage(verified.error);
+      setLoading(null);
+      return;
+    }
+    if (!verified.data.modelTest || !verified.data.validationId) {
+      setMessage("لم يُصدر الخادم إثبات فحص صالحًا. أعد اختبار النموذج ثم حاول الحفظ.");
+      setLoading(null);
+      return;
+    }
+
+    setValidation(verified.data);
+    setTestModel(verified.data.modelTest.model);
+    setBaseUrl(verified.data.normalizedBaseUrl);
     try {
-      const response = await fetch("/api/dashboard/providers", {
+      const response = await fetch("/api/dashboard/providers/verified-save", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          validationId: verified.data.validationId,
           provider: preset.provider,
-          providerSlug: preset.slug,
-          baseUrl: baseUrl.trim() || undefined,
-          name: form.get("name"),
-          apiKey: form.get("apiKey"),
+          providerSlug: verified.data.providerSlug,
+          baseUrl: verified.data.normalizedBaseUrl,
+          name: formString(form, "name"),
+          apiKey: formString(form, "apiKey"),
           manualModel: manualModel.trim() || undefined,
-          testModel,
+          testModel: verified.data.modelTest.model,
         }),
       });
       const payload = await response.json().catch(() => null) as {
         success?: boolean;
-        data?: { discoveredModels?: string[]; providerLabel?: string };
+        data?: { discoveredModels?: string[]; providerLabel?: string; testedModel?: string };
         error?: ErrorPayload;
       } | null;
       if (!response.ok || !payload?.success) {
-        setMessage(errorText(payload?.error, "تعذر حفظ الاتصال."));
+        setMessage(errorText(payload?.error, "تعذر حفظ الاتصال بعد نجاح الاختبار."));
         return;
       }
+
       formElement.reset();
       const initial = providerPresets[0];
       setProviderSlug(initial.slug);
       setBaseUrl(initial.defaultBaseUrl);
       setManualModel("");
       resetValidation();
-      setMessage(`تم اختبار ${payload.data?.providerLabel ?? preset.labelAr} وحفظ المفتاح مشفرًا. النماذج المتاحة: ${payload.data?.discoveredModels?.length ?? 0}.`);
+      setMessage(`تم اختبار ${payload.data?.providerLabel ?? preset.labelAr} وحفظ المفتاح مشفرًا داخل معاملة واحدة. النموذج المختبر: ${payload.data?.testedModel ?? testModel}. النماذج المحفوظة: ${payload.data?.discoveredModels?.length ?? 0}.`);
       router.refresh();
     } catch {
-      setMessage("تعذر الوصول إلى الخادم. تحقق من الاتصال وحاول مجددًا.");
+      setMessage("تعذر الوصول إلى الخادم أثناء الحفظ. لم يُسجل الاتصال جزئيًا؛ أعد المحاولة.");
     } finally {
       setLoading(null);
     }
@@ -179,7 +223,7 @@ export function ProviderForm() {
     <form onSubmit={submit} className="soft-card grid gap-4 p-5 sm:grid-cols-2 sm:p-6">
       <div className="sm:col-span-2">
         <h2 className="text-lg font-bold">إضافة اتصال مزود حقيقي</h2>
-        <p className="mt-1 text-sm leading-7 text-[var(--text-secondary)]">اختر المنصة، أدخل مفتاحها، ثم نفّذ اتصالًا واختبار توليد حقيقيًا قبل الحفظ المشفر.</p>
+        <p className="mt-1 text-sm leading-7 text-[var(--text-secondary)]">يجلب الفحص النماذج أولًا، ثم ينفذ الحفظ اختبار توليد فعليًا ويكتب الاعتماد والفهرس وسجل التدقيق داخل معاملة واحدة.</p>
       </div>
 
       <label className="grid gap-2 text-sm sm:col-span-2">
@@ -204,7 +248,7 @@ export function ProviderForm() {
         <p className="mt-2 leading-7 text-[var(--text-secondary)]">{preset.descriptionAr}</p>
       </section>
 
-      <label className="grid gap-2 text-sm">اسم الاتصال<input name="name" required maxLength={80} className="form-control" placeholder={`${preset.labelAr} — الإنتاج`} /></label>
+      <label className="grid gap-2 text-sm">اسم الاتصال<input name="name" required minLength={2} maxLength={80} className="form-control" placeholder={`${preset.labelAr} — الإنتاج`} /></label>
       <label className="grid gap-2 text-sm">مفتاح API<input name="apiKey" required type="password" minLength={8} maxLength={4000} autoComplete="off" dir="ltr" onChange={resetValidation} className="form-control font-mono" placeholder="••••••••••••••••" /></label>
 
       <label className="grid gap-2 text-sm sm:col-span-2">
@@ -221,8 +265,8 @@ export function ProviderForm() {
 
       <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
         <button disabled={loading !== null} onClick={validate} className="secondary-button disabled:opacity-60" type="button">{loading === "validate" ? "جارٍ فحص الشبكة والمفتاح..." : "فحص الاتصال وجلب النماذج"}</button>
-        <button disabled={!canSave} className="primary-button disabled:opacity-50" type="submit">{loading === "save" ? "جارٍ اختبار التوليد والحفظ..." : "اختبر واحفظ الاتصال"}</button>
-        {!validation ? <span className="text-xs text-[var(--text-secondary)]">الحفظ لا يتاح قبل نجاح فحص حقيقي.</span> : null}
+        <button disabled={!canSave} className="primary-button disabled:opacity-50" type="submit">{loading === "save" ? "جارٍ اختبار النموذج والحفظ الذري..." : "اختبر النموذج واحفظ الاتصال"}</button>
+        {!validation ? <span className="text-xs text-[var(--text-secondary)]">الحفظ لا يتاح قبل اكتشاف النماذج.</span> : null}
       </div>
 
       {message ? <p className="rounded-2xl border border-[var(--border)] bg-[var(--surface-soft)] px-4 py-3 text-sm sm:col-span-2" role="status">{message}</p> : null}
