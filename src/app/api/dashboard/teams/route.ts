@@ -1,8 +1,9 @@
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { agentTeamMembers, agentTeamRuns, agentTeams, agents } from "@/db/schema";
-import { executeAgentTeam } from "@/lib/agents/team-runtime";
+import { agentTeamRunsRuntime } from "@/db/agent-runtime-schema";
+import { agentTeamMembers, agentTeams, agents } from "@/db/schema";
+import { createAgentTeamRun } from "@/lib/agents/team-runtime";
 import { requireSession } from "@/lib/auth/authorization";
 import { apiSuccess, ApiError, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 
@@ -31,11 +32,14 @@ export async function GET(request: Request) {
         .orderBy(asc(agents.name)),
       db().select().from(agentTeams).where(eq(agentTeams.organizationId, session.organizationId))
         .orderBy(desc(agentTeams.updatedAt)),
-      db().select().from(agentTeamRuns).where(eq(agentTeamRuns.organizationId, session.organizationId))
-        .orderBy(desc(agentTeamRuns.createdAt)).limit(20),
+      db().select().from(agentTeamRunsRuntime).where(eq(agentTeamRunsRuntime.organizationId, session.organizationId))
+        .orderBy(desc(agentTeamRunsRuntime.createdAt)).limit(20),
     ]);
     const members = teams.length ? await db().select().from(agentTeamMembers)
-      .where(inArray(agentTeamMembers.teamId, teams.map((team) => team.id))) : [];
+      .where(and(
+        eq(agentTeamMembers.organizationId, session.organizationId),
+        inArray(agentTeamMembers.teamId, teams.map((team) => team.id)),
+      )) : [];
     return apiSuccess({
       agents: agentRows,
       teams: teams.map((team) => ({ ...team, members: members.filter((member) => member.teamId === team.id) })),
@@ -82,14 +86,17 @@ export async function POST(request: Request) {
     }
     const session = await requireSession("agents:run");
     const idempotencyKey = request.headers.get("idempotency-key")?.trim() ?? crypto.randomUUID();
-    const run = await executeAgentTeam({
+    const run = await createAgentTeamRun({
       organizationId: session.organizationId,
       teamId: body.teamId,
       prompt: body.input,
       requestId: idempotencyKey,
       userId: session.userId,
     });
-    return apiSuccess({ run }, requestId, 201);
+    const response = apiSuccess({ run }, requestId, 202);
+    response.headers.set("location", `/api/v1/team-runs/${run.id}`);
+    response.headers.set("retry-after", "2");
+    return response;
   } catch (error) {
     return handleApiError(error, requestId, "/api/dashboard/teams");
   }
