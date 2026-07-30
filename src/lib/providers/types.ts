@@ -63,6 +63,7 @@ export class ProviderError extends Error {
     public readonly httpStatus: number,
     public readonly providerStatus?: number,
     public readonly retryable = false,
+    public readonly retryAfterMs?: number,
   ) {
     super(message);
     this.name = "ProviderError";
