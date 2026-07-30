@@ -146,8 +146,6 @@ export function ProviderManager({ initialProviders }: { initialProviders: Provid
     }
   }
 
-  const now = Date.now();
-
   return (
     <section className="soft-card mt-5 p-5 sm:p-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
@@ -170,7 +168,7 @@ export function ProviderManager({ initialProviders }: { initialProviders: Provid
             {providers.map((provider) => {
               const models = provider.discoveredModels.filter((model) => model.toLowerCase().includes(modelSearch.toLowerCase()));
               const isBusy = busy?.id === provider.id;
-              const circuitOpen = provider.circuitOpenUntil ? new Date(provider.circuitOpenUntil).getTime() > now : false;
+              const circuitOpen = Boolean(provider.circuitOpenUntil);
               const ready = provider.enabled && provider.validationStatus === "verified" && !circuitOpen;
               return (
                 <article key={provider.id} className="rounded-2xl border border-[var(--border)] bg-[var(--surface-soft)] p-4">
