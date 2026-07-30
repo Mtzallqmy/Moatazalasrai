@@ -2,7 +2,13 @@ import { createHash } from "node:crypto";
 import { and, desc, eq, gt, inArray, lte } from "drizzle-orm";
 import { db } from "@/db";
 import { toolApprovalsRuntime } from "@/db/agent-runtime-schema";
-import { auditLogs, runs } from "@/db/schema";
+import {
+  agents,
+  auditLogs,
+  mcpServers,
+  mcpTools,
+  runs,
+} from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
 import { encryptSecret, decryptSecret } from "@/lib/security/encryption";
 import { toolApprovalTtlSeconds } from "@/lib/ai-sdk/limits";
@@ -64,7 +70,7 @@ export async function requestToolApproval(input: {
     }).returning();
     if (!created) throw new Error("TOOL_APPROVAL_CREATE_FAILED");
     await tx.update(runs).set({
-      status: "waiting_approval" as typeof runs.$inferInsert.status,
+      status: "waiting_approval",
     }).where(and(
       eq(runs.id, input.runId),
       eq(runs.organizationId, input.organizationId),
@@ -149,6 +155,46 @@ function publicApproval(row: typeof toolApprovalsRuntime.$inferSelect) {
   };
 }
 
+async function hydrateApprovals(
+  organizationId: string,
+  rows: Array<typeof toolApprovalsRuntime.$inferSelect>,
+) {
+  if (rows.length === 0) return [];
+  const toolIds = [...new Set(rows.map((row) => row.toolId).filter((value) => /^[0-9a-f-]{36}$/i.test(value)))];
+  const serverIds = [...new Set(rows.map((row) => row.serverId).filter((value): value is string => Boolean(value)))];
+  const agentIds = [...new Set(rows.map((row) => row.agentId).filter((value): value is string => Boolean(value)))];
+  const [tools, servers, agentRows] = await Promise.all([
+    toolIds.length ? db().select({
+      id: mcpTools.id,
+      name: mcpTools.name,
+      title: mcpTools.title,
+    }).from(mcpTools).where(and(
+      eq(mcpTools.organizationId, organizationId),
+      inArray(mcpTools.id, toolIds),
+    )) : Promise.resolve([]),
+    serverIds.length ? db().select({ id: mcpServers.id, name: mcpServers.name }).from(mcpServers).where(and(
+      eq(mcpServers.organizationId, organizationId),
+      inArray(mcpServers.id, serverIds),
+    )) : Promise.resolve([]),
+    agentIds.length ? db().select({ id: agents.id, name: agents.name }).from(agents).where(and(
+      eq(agents.organizationId, organizationId),
+      inArray(agents.id, agentIds),
+    )) : Promise.resolve([]),
+  ]);
+  const toolById = new Map(tools.map((row) => [row.id, row]));
+  const serverById = new Map(servers.map((row) => [row.id, row]));
+  const agentById = new Map(agentRows.map((row) => [row.id, row]));
+  return rows.map((row) => {
+    const tool = toolById.get(row.toolId);
+    return {
+      ...publicApproval(row),
+      toolName: tool?.title ?? tool?.name ?? "أداة MCP",
+      serverName: row.serverId ? serverById.get(row.serverId)?.name ?? "خادم MCP" : "خادم MCP",
+      agentName: row.agentId ? agentById.get(row.agentId)?.name ?? "وكيل" : "وكيل",
+    };
+  });
+}
+
 export async function listPendingToolApprovals(organizationId: string) {
   await expirePendingApprovals(organizationId);
   const rows = await db().select().from(toolApprovalsRuntime).where(and(
@@ -156,7 +202,7 @@ export async function listPendingToolApprovals(organizationId: string) {
     eq(toolApprovalsRuntime.status, "pending"),
     gt(toolApprovalsRuntime.expiresAt, new Date()),
   )).orderBy(desc(toolApprovalsRuntime.createdAt));
-  return rows.map(publicApproval);
+  return hydrateApprovals(organizationId, rows);
 }
 
 export async function getToolApproval(organizationId: string, approvalId: string) {
@@ -166,7 +212,8 @@ export async function getToolApproval(organizationId: string, approvalId: string
     eq(toolApprovalsRuntime.approvalId, approvalId),
   )).limit(1);
   if (!row) throw new ApiError(404, "TOOL_APPROVAL_NOT_FOUND", "طلب الموافقة غير موجود.");
-  return publicApproval(row);
+  const [hydrated] = await hydrateApprovals(organizationId, [row]);
+  return hydrated!;
 }
 
 export async function getToolApprovalForResume(organizationId: string, approvalId: string) {
