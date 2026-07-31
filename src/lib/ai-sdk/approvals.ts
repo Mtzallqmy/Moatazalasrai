@@ -69,9 +69,7 @@ export async function requestToolApproval(input: {
       capability: input.capability,
     }).returning();
     if (!created) throw new Error("TOOL_APPROVAL_CREATE_FAILED");
-    await tx.update(runs).set({
-      status: "waiting_approval",
-    }).where(and(
+    await tx.update(runs).set({ status: "waiting_approval" }).where(and(
       eq(runs.id, input.runId),
       eq(runs.organizationId, input.organizationId),
     ));
@@ -164,22 +162,12 @@ async function hydrateApprovals(
   const serverIds = [...new Set(rows.map((row) => row.serverId).filter((value): value is string => Boolean(value)))];
   const agentIds = [...new Set(rows.map((row) => row.agentId).filter((value): value is string => Boolean(value)))];
   const [tools, servers, agentRows] = await Promise.all([
-    toolIds.length ? db().select({
-      id: mcpTools.id,
-      name: mcpTools.name,
-      title: mcpTools.title,
-    }).from(mcpTools).where(and(
-      eq(mcpTools.organizationId, organizationId),
-      inArray(mcpTools.id, toolIds),
-    )) : Promise.resolve([]),
-    serverIds.length ? db().select({ id: mcpServers.id, name: mcpServers.name }).from(mcpServers).where(and(
-      eq(mcpServers.organizationId, organizationId),
-      inArray(mcpServers.id, serverIds),
-    )) : Promise.resolve([]),
-    agentIds.length ? db().select({ id: agents.id, name: agents.name }).from(agents).where(and(
-      eq(agents.organizationId, organizationId),
-      inArray(agents.id, agentIds),
-    )) : Promise.resolve([]),
+    toolIds.length ? db().select({ id: mcpTools.id, name: mcpTools.name, title: mcpTools.title })
+      .from(mcpTools).where(and(eq(mcpTools.organizationId, organizationId), inArray(mcpTools.id, toolIds))) : Promise.resolve([]),
+    serverIds.length ? db().select({ id: mcpServers.id, name: mcpServers.name })
+      .from(mcpServers).where(and(eq(mcpServers.organizationId, organizationId), inArray(mcpServers.id, serverIds))) : Promise.resolve([]),
+    agentIds.length ? db().select({ id: agents.id, name: agents.name })
+      .from(agents).where(and(eq(agents.organizationId, organizationId), inArray(agents.id, agentIds))) : Promise.resolve([]),
   ]);
   const toolById = new Map(tools.map((row) => [row.id, row]));
   const serverById = new Map(servers.map((row) => [row.id, row]));
@@ -245,7 +233,8 @@ export async function decideToolApproval(input: {
     if (!current) throw new ApiError(404, "TOOL_APPROVAL_NOT_FOUND", "طلب الموافقة غير موجود.");
     if (current.status !== "pending") throw new ApiError(409, "TOOL_APPROVAL_ALREADY_DECIDED", "اتُخذ قرار لهذه الموافقة مسبقًا.");
     if (current.expiresAt <= now) {
-      await tx.update(toolApprovalsRuntime).set({ status: "expired", updatedAt: now }).where(eq(toolApprovalsRuntime.id, current.id));
+      await tx.update(toolApprovalsRuntime).set({ status: "expired", updatedAt: now })
+        .where(eq(toolApprovalsRuntime.id, current.id));
       await tx.insert(auditLogs).values({
         organizationId: input.organizationId,
         actorType: "user",
@@ -255,7 +244,7 @@ export async function decideToolApproval(input: {
         resourceId: current.id,
         metadata: { runId: current.runId, toolId: current.toolId },
       });
-      throw new ApiError(409, "TOOL_APPROVAL_EXPIRED", "انتهت صلاحية طلب الموافقة.");
+      return { kind: "expired" as const, approval: current };
     }
     const status = input.approved ? "approved" as const : "rejected" as const;
     const [updated] = await tx.update(toolApprovalsRuntime).set({
@@ -264,10 +253,7 @@ export async function decideToolApproval(input: {
       decidedAt: now,
       reason: input.reason?.trim() || current.reason,
       updatedAt: now,
-    }).where(and(
-      eq(toolApprovalsRuntime.id, current.id),
-      eq(toolApprovalsRuntime.status, "pending"),
-    )).returning();
+    }).where(and(eq(toolApprovalsRuntime.id, current.id), eq(toolApprovalsRuntime.status, "pending"))).returning();
     if (!updated) throw new ApiError(409, "TOOL_APPROVAL_ALREADY_DECIDED", "اتُخذ قرار لهذه الموافقة مسبقًا.");
     await tx.insert(auditLogs).values({
       organizationId: input.organizationId,
@@ -278,23 +264,24 @@ export async function decideToolApproval(input: {
       resourceId: updated.id,
       metadata: { runId: updated.runId, toolId: updated.toolId, toolCallId: updated.toolCallId },
     });
-    return updated;
+    return { kind: "decided" as const, approval: updated };
   });
-  if (result.runId) {
+  if (result.kind === "expired") {
+    throw new ApiError(409, "TOOL_APPROVAL_EXPIRED", "انتهت صلاحية طلب الموافقة.");
+  }
+  const approval = result.approval;
+  if (approval.runId) {
     await appendRunEvent({
       organizationId: input.organizationId,
-      runId: result.runId,
+      runId: approval.runId,
       type: "approval.resolved",
-      payload: { approvalId: result.approvalId, approved: input.approved, toolCallId: result.toolCallId },
+      payload: { approvalId: approval.approvalId, approved: input.approved, toolCallId: approval.toolCallId },
     });
   }
-  return result;
+  return approval;
 }
 
-export async function consumeToolApproval(input: {
-  organizationId: string;
-  approvalId: string;
-}) {
+export async function consumeToolApproval(input: { organizationId: string; approvalId: string }) {
   const now = new Date();
   const [updated] = await db().update(toolApprovalsRuntime).set({
     status: "consumed",
