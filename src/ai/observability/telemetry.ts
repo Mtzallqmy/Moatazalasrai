@@ -1,6 +1,6 @@
 import { SpanStatusCode, trace, type Attributes } from "@opentelemetry/api";
 
-const forbidden = /(^|[._-])(api[_-]?key|secret|password|authorization|cookie|access[_-]?token|refresh[_-]?token|prompt|message[_-]?content|tool[_-]?(arguments|output)|document[_-]?text|file[_-]?content)([._-]|$)/i;
+const forbidden = /(^|[._-])(api[_-]?key|secret|password|authorization|cookie|token|access[_-]?token|refresh[_-]?token|prompt|message[_-]?content|tool[_-]?(arguments|output)|document[_-]?text|file[_-]?content)([._-]|$)/i;
 const tracer = trace.getTracer("moataz-agent-platform");
 
 type SafePrimitive = string | number | boolean;
