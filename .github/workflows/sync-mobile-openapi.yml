@@ -18,7 +18,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 22.18.0
-      - name: Patch Flutter and OpenAPI contracts
+      - name: Patch Flutter, OpenAPI, and Drizzle contracts
         run: |
           node <<'NODE'
           const fs = require('node:fs');
@@ -108,12 +108,23 @@ jobs:
           if (!openapi.includes(additions.trim()) && !openapi.includes(marker)) throw new Error('OpenAPI insertion marker not found');
           if (!openapi.includes(additions.trim())) openapi = openapi.replace(marker, additions + marker);
           fs.writeFileSync(openapiPath, openapi);
+
+          const schemaPath = 'src/db/schema.ts';
+          let schema = fs.readFileSync(schemaPath, 'utf8');
+          const oldMessageIndexes = `}, (table) => [index("messages_conversation_created_idx").on(table.conversationId, table.createdAt)]);`;
+          const newMessageIndexes = `}, (table) => [
+  index("messages_conversation_created_idx").on(table.conversationId, table.createdAt),
+  uniqueIndex("messages_conversation_client_request_unique_idx").on(table.conversationId, table.clientRequestId),
+]);`;
+          if (!schema.includes(oldMessageIndexes) && !schema.includes(newMessageIndexes)) throw new Error('Message indexes block not found');
+          schema = schema.replace(oldMessageIndexes, newMessageIndexes);
+          fs.writeFileSync(schemaPath, schema);
           NODE
       - name: Commit synchronized contracts
         run: |
-          if git diff --quiet -- apps/mobile/lib/src/features/dashboard/dashboard_screen.dart src/app/api/v1/openapi/route.ts; then exit 0; fi
+          if git diff --quiet -- apps/mobile/lib/src/features/dashboard/dashboard_screen.dart src/app/api/v1/openapi/route.ts src/db/schema.ts; then exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add apps/mobile/lib/src/features/dashboard/dashboard_screen.dart src/app/api/v1/openapi/route.ts
+          git add apps/mobile/lib/src/features/dashboard/dashboard_screen.dart src/app/api/v1/openapi/route.ts src/db/schema.ts
           git commit -m "Synchronize Flutter approval status and OpenAPI"
           git push origin HEAD:feat/ai-sdk-graphile-worker-production
