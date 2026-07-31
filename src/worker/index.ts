@@ -3,6 +3,7 @@ import { run, type Runner, type TaskList } from "graphile-worker";
 import { db } from "@/db";
 import { workerHeartbeats } from "@/db/agent-runtime-schema";
 import { env } from "@/lib/config/env";
+import { startNodeTelemetry } from "@/ai/observability/node-otel";
 import { safeTelemetry } from "@/ai/observability/telemetry";
 import { agentRunResumeTask } from "@/worker/tasks/agent-run-resume";
 import { agentTeamRunTask } from "@/worker/tasks/agent-team-run";
@@ -24,6 +25,7 @@ const workerId = `moataz-${randomUUID()}`;
 let runner: Runner | undefined;
 let stopping = false;
 let heartbeatTimer: NodeJS.Timeout | undefined;
+let telemetryShutdown: (() => Promise<void>) | undefined;
 
 async function heartbeat(stoppingAt?: Date) {
   await db().insert(workerHeartbeats).values({
@@ -48,6 +50,7 @@ async function shutdown(signal: string) {
   console.info(JSON.stringify(safeTelemetry({ event: "worker.stopping", workerId, signal })));
   await heartbeat(new Date()).catch(() => undefined);
   await runner?.stop();
+  await telemetryShutdown?.().catch(() => undefined);
   console.info(JSON.stringify(safeTelemetry({ event: "worker.stopped", workerId, signal })));
 }
 
@@ -55,6 +58,7 @@ async function main() {
   if (process.env.AI_WORKER_ENABLED === "false") {
     throw new Error("AI_WORKER_ENABLED must not be false for the worker service.");
   }
+  telemetryShutdown = await startNodeTelemetry("moataz-worker");
   await heartbeat();
   heartbeatTimer = setInterval(() => {
     void heartbeat().catch((error) => {
