@@ -11,6 +11,17 @@ function documentErrorCode(error: unknown) {
   return "DOCUMENT_PARSE_FAILED";
 }
 
+async function markDocumentFailed(organizationId: string, documentId: string, error: unknown) {
+  await db().update(knowledgeDocuments).set({
+    status: "failed",
+    errorCode: documentErrorCode(error),
+    updatedAt: new Date(),
+  }).where(and(
+    eq(knowledgeDocuments.id, documentId),
+    eq(knowledgeDocuments.organizationId, organizationId),
+  ));
+}
+
 export async function parseKnowledgeDocument(input: {
   organizationId: string;
   documentId: string;
@@ -34,28 +45,28 @@ export async function parseKnowledgeDocument(input: {
       throw new ApiError(404, "DOCUMENT_NOT_FOUND", "الوثيقة غير موجودة أو محذوفة.");
     }
 
-    const [attachment] = await db().select({
-      text: attachments.extractedText,
-      processingStatus: attachments.processingStatus,
-    }).from(attachments).where(and(
-      eq(attachments.id, document.attachmentId),
-      eq(attachments.organizationId, input.organizationId),
-      isNull(attachments.deletedAt),
-    )).limit(1);
-    if (!attachment || attachment.processingStatus !== "ready" || !attachment.text?.trim()) {
-      throw new ApiError(422, "DOCUMENT_TEXT_UNAVAILABLE", "نص الوثيقة غير متاح للمعالجة.");
-    }
-
-    await db().update(knowledgeDocuments).set({
-      status: "processing",
-      errorCode: null,
-      updatedAt: new Date(),
-    }).where(and(
-      eq(knowledgeDocuments.id, document.id),
-      eq(knowledgeDocuments.organizationId, input.organizationId),
-    ));
-
     try {
+      const [attachment] = await db().select({
+        text: attachments.extractedText,
+        processingStatus: attachments.processingStatus,
+      }).from(attachments).where(and(
+        eq(attachments.id, document.attachmentId),
+        eq(attachments.organizationId, input.organizationId),
+        isNull(attachments.deletedAt),
+      )).limit(1);
+      if (!attachment || attachment.processingStatus !== "ready" || !attachment.text?.trim()) {
+        throw new ApiError(422, "DOCUMENT_TEXT_UNAVAILABLE", "نص الوثيقة غير متاح للمعالجة.");
+      }
+
+      await db().update(knowledgeDocuments).set({
+        status: "processing",
+        errorCode: null,
+        updatedAt: new Date(),
+      }).where(and(
+        eq(knowledgeDocuments.id, document.id),
+        eq(knowledgeDocuments.organizationId, input.organizationId),
+      ));
+
       const chunks = chunkText(attachment.text);
       if (input.abortSignal?.aborted) throw new ApiError(499, "JOB_CANCELLED", "تم إلغاء معالجة الوثيقة.");
       if (chunks.length === 0) throw new ApiError(422, "DOCUMENT_EMPTY", "لم ينتج عن الوثيقة أي مقطع قابل للفهرسة.");
@@ -84,14 +95,7 @@ export async function parseKnowledgeDocument(input: {
       });
       return { documentId: document.id, chunks: chunks.length };
     } catch (error) {
-      await db().update(knowledgeDocuments).set({
-        status: "failed",
-        errorCode: documentErrorCode(error),
-        updatedAt: new Date(),
-      }).where(and(
-        eq(knowledgeDocuments.id, document.id),
-        eq(knowledgeDocuments.organizationId, input.organizationId),
-      ));
+      await markDocumentFailed(input.organizationId, document.id, error);
       throw error;
     }
   });
