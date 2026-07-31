@@ -1,19 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { run, type Runner, type TaskList } from "graphile-worker";
+import { run, type Runner } from "graphile-worker";
 import { db } from "@/db";
 import { workerHeartbeats } from "@/db/agent-runtime-schema";
 import { env } from "@/lib/config/env";
 import { startNodeTelemetry } from "@/ai/observability/node-otel";
 import { safeTelemetry } from "@/ai/observability/telemetry";
-import { agentRunResumeTask } from "@/worker/tasks/agent-run-resume";
-import { agentTeamRunTask } from "@/worker/tasks/agent-team-run";
-import { documentParseTask } from "@/worker/tasks/document-parse";
-
-export const taskList = {
-  "agent-run-resume": agentRunResumeTask,
-  "agent-team-run": agentTeamRunTask,
-  "document-parse": documentParseTask,
-} satisfies TaskList;
+import { taskList } from "@/worker/task-list";
 
 function workerConcurrency() {
   const configured = Number(process.env.WORKER_CONCURRENCY ?? 4);
