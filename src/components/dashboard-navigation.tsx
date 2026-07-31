@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import {
   Activity, Bot, Boxes, Braces, CircleGauge, Database,
   FileText, Home, KeyRound, Menu, MessageSquare, Moon, Network,
-  PlayCircle, Search, Settings, ShieldCheck, Sun, Users, Workflow, X,
+  PlayCircle, Search, Settings, ShieldAlert, ShieldCheck, Sun, Users, Workflow, X,
 } from "lucide-react";
 import { LogoutButton } from "@/components/logout-button";
 
@@ -24,6 +24,7 @@ const navigation = [
   { label: "الوكلاء", href: "/dashboard/agents", icon: Bot },
   { label: "فرق الوكلاء", href: "/dashboard/teams", icon: Workflow, roles: ["owner", "admin", "developer", "operator"] },
   { label: "عمليات التشغيل", href: "/dashboard/runs", icon: PlayCircle, roles: ["owner", "admin", "developer", "operator"] },
+  { label: "موافقات الأدوات", href: "/dashboard/approvals", icon: ShieldAlert, roles: ["owner", "admin", "developer", "operator"] },
   { label: "الملفات والمعرفة", href: "/dashboard/files", icon: FileText, roles: ["owner", "admin", "developer", "operator", "member"] },
   { label: "المزودون والنماذج", href: "/dashboard/providers", icon: Database, roles: ["owner", "admin", "developer"] },
   { label: "بوابة MCP", href: "/dashboard/mcp", icon: Braces, roles: ["owner", "admin", "developer"] },
