@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { and, count, eq } from "drizzle-orm";
+import { and, count, eq, sql } from "drizzle-orm";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { db } from "@/db";
 import { mcpToolCallsRuntime } from "@/db/agent-runtime-schema";
-import { agentMcpTools, mcpServers, mcpTools } from "@/db/schema";
+import { agentMcpTools, mcpServers, mcpTools, runs } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
 import { decryptSecret } from "@/lib/security/encryption";
 import { maxTotalToolCallsPerRun } from "@/lib/ai-sdk/limits";
@@ -58,13 +58,73 @@ async function serverConnection(server: typeof mcpServers.$inferSelect) {
   };
 }
 
-async function existingCall(organizationId: string, runId: string, toolCallId: string) {
-  const [call] = await db().select().from(mcpToolCallsRuntime).where(and(
-    eq(mcpToolCallsRuntime.organizationId, organizationId),
-    eq(mcpToolCallsRuntime.runId, runId),
-    eq(mcpToolCallsRuntime.toolCallId, toolCallId),
-  )).limit(1);
-  return call;
+type Binding = {
+  maxCallsPerRun: number;
+  approvalMode: string;
+  tool: typeof mcpTools.$inferSelect;
+  server: typeof mcpServers.$inferSelect;
+};
+
+async function reserveCall(input: {
+  organizationId: string;
+  runId: string;
+  toolCallId: string;
+  toolId: string;
+  userId?: string | null;
+  inputDigest: string;
+  binding: Binding;
+}) {
+  return db().transaction(async (tx) => {
+    const locked = await tx.execute(sql`
+      SELECT "id" FROM "runs"
+      WHERE "id" = ${input.runId} AND "organization_id" = ${input.organizationId}
+      FOR UPDATE
+    `);
+    if (locked.length === 0) throw new ApiError(404, "RUN_NOT_FOUND", "عملية التشغيل غير موجودة.");
+
+    const [duplicate] = await tx.select().from(mcpToolCallsRuntime).where(and(
+      eq(mcpToolCallsRuntime.organizationId, input.organizationId),
+      eq(mcpToolCallsRuntime.runId, input.runId),
+      eq(mcpToolCallsRuntime.toolCallId, input.toolCallId),
+    )).limit(1);
+    if (duplicate) {
+      if (duplicate.inputDigest !== input.inputDigest) {
+        throw new ApiError(409, "TOOL_CALL_IDEMPOTENCY_CONFLICT", "وصل toolCallId نفسه بمعاملات مختلفة.");
+      }
+      return { kind: "duplicate" as const, call: duplicate };
+    }
+
+    const [[toolCount], [totalCount]] = await Promise.all([
+      tx.select({ value: count() }).from(mcpToolCallsRuntime).where(and(
+        eq(mcpToolCallsRuntime.organizationId, input.organizationId),
+        eq(mcpToolCallsRuntime.runId, input.runId),
+        eq(mcpToolCallsRuntime.toolId, input.toolId),
+      )),
+      tx.select({ value: count() }).from(mcpToolCallsRuntime).where(and(
+        eq(mcpToolCallsRuntime.organizationId, input.organizationId),
+        eq(mcpToolCallsRuntime.runId, input.runId),
+      )),
+    ]);
+    if ((toolCount?.value ?? 0) >= input.binding.maxCallsPerRun) {
+      throw new ApiError(429, "TOOL_CALL_LIMIT_EXCEEDED", "تجاوزت الأداة الحد المسموح لها في هذا التشغيل.");
+    }
+    if ((totalCount?.value ?? 0) >= maxTotalToolCallsPerRun()) {
+      throw new ApiError(429, "TOTAL_TOOL_CALL_LIMIT_EXCEEDED", "تجاوز التشغيل الحد الإجمالي لاستدعاءات الأدوات.");
+    }
+
+    const [created] = await tx.insert(mcpToolCallsRuntime).values({
+      organizationId: input.organizationId,
+      serverId: input.binding.server.id,
+      toolId: input.binding.tool.id,
+      runId: input.runId,
+      requestedByUserId: input.userId,
+      inputDigest: input.inputDigest,
+      status: "running",
+      toolCallId: input.toolCallId,
+    }).returning();
+    if (!created) throw new Error("MCP_CALL_CREATE_FAILED");
+    return { kind: "created" as const, call: created };
+  });
 }
 
 export async function executeMcpToolIdempotent(input: {
@@ -99,57 +159,22 @@ export async function executeMcpToolIdempotent(input: {
     )).limit(1);
   if (!binding) throw new ApiError(404, "MCP_TOOL_NOT_LINKED", "أداة MCP غير مرتبطة بهذا الوكيل أو خادمها غير متصل.");
 
-  const duplicate = await existingCall(input.organizationId, input.runId, input.toolCallId);
-  if (duplicate) {
-    if (duplicate.inputDigest !== inputDigest) {
-      throw new ApiError(409, "TOOL_CALL_IDEMPOTENCY_CONFLICT", "وصل toolCallId نفسه بمعاملات مختلفة.");
-    }
+  const reservation = await reserveCall({
+    organizationId: input.organizationId,
+    runId: input.runId,
+    toolCallId: input.toolCallId,
+    toolId: input.toolId,
+    userId: input.userId,
+    inputDigest,
+    binding,
+  });
+  if (reservation.kind === "duplicate") {
+    const duplicate = reservation.call;
     if (duplicate.status === "completed") return { call: duplicate, result: duplicate.result, duplicate: true };
     if (duplicate.status === "running") return { call: duplicate, status: "running" as const, duplicate: true };
     throw new ApiError(409, duplicate.errorCode ?? "MCP_TOOL_FAILED", "فشل الاستدعاء السابق ولا يمكن تكراره تلقائيًا بأمان.");
   }
-
-  const [[toolCount], [totalCount]] = await Promise.all([
-    db().select({ value: count() }).from(mcpToolCallsRuntime).where(and(
-      eq(mcpToolCallsRuntime.organizationId, input.organizationId),
-      eq(mcpToolCallsRuntime.runId, input.runId),
-      eq(mcpToolCallsRuntime.toolId, input.toolId),
-    )),
-    db().select({ value: count() }).from(mcpToolCallsRuntime).where(and(
-      eq(mcpToolCallsRuntime.organizationId, input.organizationId),
-      eq(mcpToolCallsRuntime.runId, input.runId),
-    )),
-  ]);
-  if ((toolCount?.value ?? 0) >= binding.maxCallsPerRun) {
-    throw new ApiError(429, "TOOL_CALL_LIMIT_EXCEEDED", "تجاوزت الأداة الحد المسموح لها في هذا التشغيل.");
-  }
-  if ((totalCount?.value ?? 0) >= maxTotalToolCallsPerRun()) {
-    throw new ApiError(429, "TOTAL_TOOL_CALL_LIMIT_EXCEEDED", "تجاوز التشغيل الحد الإجمالي لاستدعاءات الأدوات.");
-  }
-
-  let call;
-  try {
-    [call] = await db().insert(mcpToolCallsRuntime).values({
-      organizationId: input.organizationId,
-      serverId: binding.server.id,
-      toolId: binding.tool.id,
-      runId: input.runId,
-      requestedByUserId: input.userId,
-      inputDigest,
-      status: "running",
-      toolCallId: input.toolCallId,
-    }).returning();
-  } catch (error) {
-    const concurrent = await existingCall(input.organizationId, input.runId, input.toolCallId);
-    if (concurrent) {
-      if (concurrent.inputDigest !== inputDigest) {
-        throw new ApiError(409, "TOOL_CALL_IDEMPOTENCY_CONFLICT", "وصل toolCallId نفسه بمعاملات مختلفة.");
-      }
-      return { call: concurrent, result: concurrent.result, duplicate: true };
-    }
-    throw error;
-  }
-  if (!call) throw new Error("MCP_CALL_CREATE_FAILED");
+  const call = reservation.call;
 
   await appendRunEvent({
     organizationId: input.organizationId,
