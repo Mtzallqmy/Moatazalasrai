@@ -10,5 +10,8 @@ export const documentParseTask: Task = async (rawPayload, helpers) => {
     documentId: payload.documentId,
     abortSignal: helpers.abortSignal,
   });
-  helpers.logger.info(`document.parse completed with ${result.chunks} chunks`);
+  const chunks = result && typeof result === "object" && "chunks" in result
+    ? Number(result.chunks)
+    : 0;
+  helpers.logger.info(`document.parse completed with ${Number.isFinite(chunks) ? chunks : 0} chunks`);
 };
