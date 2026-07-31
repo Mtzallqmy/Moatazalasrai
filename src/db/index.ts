@@ -50,12 +50,19 @@ const requiredTables = [
   "knowledge_chunks",
   "background_jobs",
   "tool_approvals",
+  "mcp_tool_calls",
+  "agent_run_steps",
+  "agent_run_checkpoints",
+  "agent_team_runs",
+  "agent_team_run_steps",
+  "worker_heartbeats",
 ] as const;
 
 export async function checkDatabase(): Promise<{
   ok: true;
   latencyMs: number;
   schemaTables: number;
+  worker: { active: boolean; lastSeenAt: string | null };
 }> {
   const startedAt = performance.now();
   const sql = getClient();
@@ -74,28 +81,42 @@ export async function checkDatabase(): Promise<{
       to_regclass('public.run_events')::text AS run_events,
       to_regclass('public.platform_api_keys')::text AS platform_api_keys,
       to_regclass('public.audit_logs')::text AS audit_logs,
-      to_regclass('public.rate_limits')::text AS rate_limits
-      ,to_regclass('public.integrations')::text AS integrations
-      ,to_regclass('public.telegram_chats')::text AS telegram_chats
-      ,to_regclass('public.telegram_updates')::text AS telegram_updates
-      ,to_regclass('public.attachments')::text AS attachments
-      ,to_regclass('public.agent_memories')::text AS agent_memories
-      ,to_regclass('public.knowledge_bases')::text AS knowledge_bases
-      ,to_regclass('public.knowledge_documents')::text AS knowledge_documents
-      ,to_regclass('public.knowledge_chunks')::text AS knowledge_chunks
-      ,to_regclass('public.background_jobs')::text AS background_jobs
-      ,to_regclass('public.tool_approvals')::text AS tool_approvals
+      to_regclass('public.rate_limits')::text AS rate_limits,
+      to_regclass('public.integrations')::text AS integrations,
+      to_regclass('public.telegram_chats')::text AS telegram_chats,
+      to_regclass('public.telegram_updates')::text AS telegram_updates,
+      to_regclass('public.attachments')::text AS attachments,
+      to_regclass('public.agent_memories')::text AS agent_memories,
+      to_regclass('public.knowledge_bases')::text AS knowledge_bases,
+      to_regclass('public.knowledge_documents')::text AS knowledge_documents,
+      to_regclass('public.knowledge_chunks')::text AS knowledge_chunks,
+      to_regclass('public.background_jobs')::text AS background_jobs,
+      to_regclass('public.tool_approvals')::text AS tool_approvals,
+      to_regclass('public.mcp_tool_calls')::text AS mcp_tool_calls,
+      to_regclass('public.agent_run_steps')::text AS agent_run_steps,
+      to_regclass('public.agent_run_checkpoints')::text AS agent_run_checkpoints,
+      to_regclass('public.agent_team_runs')::text AS agent_team_runs,
+      to_regclass('public.agent_team_run_steps')::text AS agent_team_run_steps,
+      to_regclass('public.worker_heartbeats')::text AS worker_heartbeats
   `;
   const state = rows[0] as Record<string, string | null> | undefined;
   const missingTables = requiredTables.filter((table) => !state?.[table]);
-
   if (missingTables.length > 0) {
     throw new Error(`Database schema is incomplete: ${missingTables.join(", ")}`);
   }
+
+  const heartbeatRows = await sql<{ last_seen_at: Date | null }[]>`
+    SELECT max(last_seen_at) AS last_seen_at
+    FROM worker_heartbeats
+    WHERE stopping_at IS NULL
+  `;
+  const lastSeenAt = heartbeatRows[0]?.last_seen_at ?? null;
+  const active = Boolean(lastSeenAt && Date.now() - lastSeenAt.getTime() <= 90_000);
 
   return {
     ok: true,
     latencyMs: Math.round(performance.now() - startedAt),
     schemaTables: requiredTables.length,
+    worker: { active, lastSeenAt: lastSeenAt?.toISOString() ?? null },
   };
 }
