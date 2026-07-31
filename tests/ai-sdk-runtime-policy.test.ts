@@ -8,7 +8,7 @@ import {
   toolApprovalTtlSeconds,
 } from "@/lib/ai-sdk/limits";
 import { safeTelemetry } from "@/ai/observability/telemetry";
-import { taskList } from "@/worker/index";
+import { taskList } from "@/worker/task-list";
 
 const originalEnv = { ...process.env };
 
