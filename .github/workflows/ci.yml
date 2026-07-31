@@ -15,21 +15,69 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       NODE_ENV: test
       DATABASE_URL: postgresql://user:password@example.invalid/database?sslmode=require
       CREDENTIAL_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
       BOOTSTRAP_ADMIN_TOKEN: ci-only-bootstrap-token
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22.18.0
           cache: npm
+      - name: Verify package lock consistency
+        run: node scripts/verify-lockfile.mjs
       - run: npm ci --no-audit --no-fund
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
       - run: npm run test:e2e
       - run: npm run build
+
+  postgres-integration:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: moataz_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d moataz_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/moataz_test
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/moataz_test
+      CREDENTIAL_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      BOOTSTRAP_ADMIN_TOKEN: ci-only-bootstrap-token
+      AI_WORKER_ENABLED: "true"
+      AI_OTEL_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.18.0
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Apply platform and Graphile migrations
+        run: npm run db:migrate:all
+      - name: Run PostgreSQL integration tests
+        run: npm run test:integration -- --reporter=verbose 2>&1 | tee postgres-integration.log
+      - name: Upload PostgreSQL integration diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-integration-${{ github.run_id }}
+          path: postgres-integration.log
+          if-no-files-found: ignore
+          retention-days: 3

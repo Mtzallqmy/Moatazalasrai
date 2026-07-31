@@ -14,7 +14,7 @@ import {
 
 export const memberRole = pgEnum("member_role", ["owner", "admin", "developer", "operator", "viewer", "member"]);
 export const agentStatus = pgEnum("agent_status", ["draft", "published", "archived"]);
-export const runStatus = pgEnum("run_status", ["queued", "running", "completed", "failed", "cancelled"]);
+export const runStatus = pgEnum("run_status", ["queued", "running", "waiting_approval", "completed", "failed", "cancelled"]);
 export const providerKind = pgEnum("provider_kind", ["openai", "anthropic", "gemini", "openai_compatible"]);
 export const providerValidationStatus = pgEnum("provider_validation_status", ["pending", "verified", "failed"]);
 export const messageRole = pgEnum("message_role", ["user", "assistant"]);

@@ -8,22 +8,30 @@ type RailwayConfig = {
   };
   deploy?: {
     preDeployCommand?: string;
+    startCommand?: string;
     healthcheckPath?: string;
     healthcheckTimeout?: number;
   };
 };
 
-async function railwayConfig(): Promise<RailwayConfig> {
-  return JSON.parse(await readFile("railway.json", "utf8")) as RailwayConfig;
+async function railwayConfig(path = "railway.json"): Promise<RailwayConfig> {
+  return JSON.parse(await readFile(path, "utf8")) as RailwayConfig;
 }
 
 describe("Railway deployment configuration", () => {
-  it("runs database migrations before starting a new release", async () => {
+  it("runs platform and Graphile migrations once before the web release", async () => {
     const config = await railwayConfig();
-    expect(config.deploy?.preDeployCommand).toBe("npm run db:migrate");
+    expect(config.deploy?.preDeployCommand).toBe("npm run db:migrate:all");
+    expect(config.deploy?.startCommand).toBe("npm run start");
   });
 
-  it("gates traffic on database-backed readiness", async () => {
+  it("runs a dedicated Worker service without repeating pre-deploy migrations", async () => {
+    const worker = await railwayConfig("railway.worker.json");
+    expect(worker.deploy?.startCommand).toBe("npm run worker");
+    expect(worker.deploy?.preDeployCommand).toBeUndefined();
+  });
+
+  it("gates web traffic on database-backed readiness", async () => {
     const config = await railwayConfig();
     expect(config.deploy?.healthcheckPath).toBe("/api/ready");
     expect(config.deploy?.healthcheckTimeout).toBeGreaterThanOrEqual(120);
@@ -37,15 +45,18 @@ describe("Railway deployment configuration", () => {
     const migrationSource = await readFile("scripts/migrate.mjs", "utf8");
 
     expect(packageJson.dependencies?.postgres).toBeTruthy();
+    expect(packageJson.dependencies?.["graphile-worker"]).toBeTruthy();
     expect(databaseSource).toContain('from "drizzle-orm/postgres-js"');
     expect(migrationSource).toContain('from "postgres"');
   });
 
   it("creates and records the required schema before every Railway release", async () => {
     const migrationSource = await readFile("scripts/migrate.mjs", "utf8");
+    const workerMigrationSource = await readFile("scripts/migrate-worker.mjs", "utf8");
 
     expect(migrationSource).toContain('CREATE TABLE IF NOT EXISTS "_platform_migrations"');
     expect(migrationSource).toContain('INSERT INTO "_platform_migrations"');
     expect(migrationSource).toContain("sql.begin");
+    expect(workerMigrationSource).toContain("runMigrations");
   });
 });

@@ -2,15 +2,19 @@ import { and, asc, count, desc, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { providerCredentialHealthEvents } from "@/db/provider-health-schema";
 import {
+  agentMcpTools,
   agentVersions,
   agents,
   conversations,
+  mcpServers,
+  mcpTools,
   messages,
   modelCatalog,
   organizations,
   providerCredentials,
   runEvents,
   runs,
+  toolApprovals,
 } from "@/db/schema";
 import { rankModels, type InputKind } from "@/server/models/router";
 import { decryptSecret } from "@/lib/security/encryption";
@@ -21,25 +25,54 @@ import {
   providerCircuitOpenUntil,
   shouldFallbackProviderError,
 } from "@/lib/providers/failure-policy";
-import { generateWithProvider, streamWithProvider } from "@/lib/providers/registry";
 import { ProviderError, type ProviderContentPart, type ProviderMessage, type ProviderUsage } from "@/lib/providers/types";
 import { safeTelemetry } from "@/ai/observability/telemetry";
 import { inferModelCapabilities, isFreeTierModel } from "@/server/models/capabilities";
+import {
+  AiSdkCandidateError,
+  executeAiSdkCandidate,
+  streamAiSdkCandidate,
+  type AiSdkExecutionState,
+} from "@/lib/ai-sdk/runtime";
+import { appendRunEvent, appendRunEvents } from "@/lib/ai-sdk/run-events";
+import { createRunStepAllocator, persistRunStep } from "@/lib/ai-sdk/run-steps";
+import { deleteRunCheckpoints } from "@/lib/ai-sdk/checkpoints";
 
 const activeControllers = new Map<string, AbortController>();
 const MAX_CONTEXT_TOKENS_ESTIMATE = 24_000;
 const MAX_CONTEXT_MESSAGES = 80;
+
+type RunStatusFilter = "queued" | "running" | "waiting_approval" | "completed" | "failed" | "cancelled";
 
 function estimatedTokens(content: string) {
   return Math.ceil(content.length / 4) + 8;
 }
 
 function safeProviderError(error: unknown) {
+  if (error instanceof AiSdkCandidateError) return error.providerError;
   if (error instanceof ProviderError) return error;
   return new ProviderError("RUN_FAILED", "تعذر إكمال تشغيل الوكيل.", 502);
 }
 
-async function contextMessages(conversationId: string, instructions: string, maxOutputTokens: number, media: ProviderContentPart[] = []) {
+function executionState(error: unknown): AiSdkExecutionState | undefined {
+  return error instanceof AiSdkCandidateError ? error.executionState : undefined;
+}
+
+function mayFallback(error: ProviderError, state?: AiSdkExecutionState) {
+  return shouldFallbackProviderError(error)
+    && !state?.emittedText
+    && !state?.toolExecuted
+    && !state?.toolResultSaved
+    && !state?.sideEffectOccurred
+    && !state?.approvalPending;
+}
+
+async function contextMessages(
+  conversationId: string,
+  instructions: string,
+  maxOutputTokens: number,
+  media: ProviderContentPart[] = [],
+) {
   const rows = await db().select({
     role: messages.role,
     content: messages.content,
@@ -62,20 +95,42 @@ async function contextMessages(conversationId: string, instructions: string, max
   if (media.length) {
     let latestUser = -1;
     for (let index = history.length - 1; index >= 0; index -= 1) {
-      if (history[index]?.role === "user") { latestUser = index; break; }
+      if (history[index]?.role === "user") {
+        latestUser = index;
+        break;
+      }
     }
-    if (latestUser >= 0) history[latestUser] = {
-      ...history[latestUser]!,
-      content: [{ type: "text", text: String(history[latestUser]!.content) }, ...media],
-    };
+    if (latestUser >= 0) {
+      const current = history[latestUser]!;
+      const text = typeof current.content === "string"
+        ? current.content
+        : current.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+      history[latestUser] = {
+        role: "user",
+        content: [{ type: "text", text }, ...media],
+      };
+    }
   }
   return {
-    messages: [
-      { role: "system", content: instructions },
-      ...history,
-    ] satisfies ProviderMessage[],
+    messages: [{ role: "system", content: instructions }, ...history] satisfies ProviderMessage[],
     estimatedInputTokens: used,
   };
+}
+
+async function hasEnabledAgentTools(organizationId: string, agentId: string) {
+  const [row] = await db().select({ value: count() }).from(agentMcpTools)
+    .innerJoin(mcpTools, eq(mcpTools.id, agentMcpTools.toolId))
+    .innerJoin(mcpServers, eq(mcpServers.id, mcpTools.serverId))
+    .where(and(
+      eq(agentMcpTools.organizationId, organizationId),
+      eq(agentMcpTools.agentId, agentId),
+      eq(mcpTools.organizationId, organizationId),
+      eq(mcpTools.enabled, true),
+      eq(mcpServers.organizationId, organizationId),
+      eq(mcpServers.enabled, true),
+      eq(mcpServers.status, "connected"),
+    ));
+  return Number(row?.value ?? 0) > 0;
 }
 
 export async function prepareAgentRun(input: {
@@ -103,7 +158,7 @@ export async function prepareAgentRun(input: {
     .limit(1);
   if (!version) throw new ApiError(409, "AGENT_VERSION_MISSING", "الإصدار المنشور للوكيل غير متاح.");
 
-  const [organization, catalog, credentials] = await Promise.all([
+  const [organization, catalog, credentials, toolsEnabled] = await Promise.all([
     db().select({
       defaultProviderCredentialId: organizations.defaultProviderCredentialId,
       defaultModel: organizations.defaultModel,
@@ -117,6 +172,7 @@ export async function prepareAgentRun(input: {
       eq(providerCredentials.enabled, true),
       eq(providerCredentials.validationStatus, "verified"),
     )),
+    hasEnabledAgentTools(input.organizationId, input.agentId),
   ]);
   const now = new Date();
   const usableCredentials = credentials.filter((credential) =>
@@ -146,7 +202,8 @@ export async function prepareAgentRun(input: {
   }));
 
   const inputKind = input.inputKind ?? "text";
-  const ranked = rankModels(routable, inputKind);
+  const ranked = rankModels(routable, inputKind).filter((candidate) =>
+    !toolsEnabled || candidate.capabilities.tools === true || candidate.capabilities.toolCalling === true);
   const preferredCredentialId = input.providerCredentialId
     ?? agent.defaultProviderCredentialId
     ?? version.providerCredentialId;
@@ -161,6 +218,9 @@ export async function prepareAgentRun(input: {
   );
 
   if (prioritized.length === 0) {
+    if (toolsEnabled) {
+      throw new ApiError(422, "TOOL_CALLING_MODEL_REQUIRED", "الوكيل مرتبط بأدوات ولا يوجد نموذج متحقق يدعم Tool Calling.");
+    }
     if (inputKind === "image") {
       throw new ApiError(422, "VISION_MODEL_REQUIRED", "لا يوجد نموذج مفعّل يدعم تحليل الصور. اربط نموذج Vision ثم أعد المحاولة.");
     }
@@ -171,7 +231,7 @@ export async function prepareAgentRun(input: {
   }
   const candidates = prioritized.flatMap((candidate) => {
     const credential = credentialById.get(candidate.providerCredentialId);
-    return credential ? [{ credential, model: candidate.model }] : [];
+    return credential ? [{ credential, model: candidate.model, capabilities: candidate.capabilities }] : [];
   });
   const primary = candidates[0];
   if (!primary) throw new ApiError(422, "PROVIDER_UNAVAILABLE", "المزود معطل أو لم يجتز آخر فحص.");
@@ -213,6 +273,7 @@ export async function prepareAgentRun(input: {
         requestId: input.requestId,
         requestedProviderCredentialId: input.providerCredentialId ?? null,
         requestedModel: input.model ?? null,
+        toolsEnabled,
       },
     });
     return [created];
@@ -229,13 +290,18 @@ export async function prepareAgentRun(input: {
   };
 }
 
-async function beginProviderRequest(runId: string) {
-  await db().transaction(async (tx) => {
-    await tx.update(runs).set({ status: "running", startedAt: new Date() }).where(eq(runs.id, runId));
-    await tx.insert(runEvents).values([
-      { runId, sequence: 2, type: "run.running", payload: {} },
-      { runId, sequence: 3, type: "provider.request.started", payload: {} },
-    ]);
+async function beginProviderRequest(organizationId: string, runId: string) {
+  await db().update(runs).set({ status: "running", startedAt: new Date() }).where(and(
+    eq(runs.id, runId),
+    eq(runs.organizationId, organizationId),
+  ));
+  await appendRunEvents({
+    organizationId,
+    runId,
+    events: [
+      { type: "run.running" },
+      { type: "provider.request.started" },
+    ],
   });
 }
 
@@ -250,7 +316,6 @@ async function recordCredentialFailure(input: {
     await db().transaction(async (tx) => {
       const [credential] = await tx.select({
         failures: providerCredentials.consecutiveFailures,
-        validationStatus: providerCredentials.validationStatus,
       }).from(providerCredentials).where(and(
         eq(providerCredentials.id, input.providerCredentialId),
         eq(providerCredentials.organizationId, input.organizationId),
@@ -300,7 +365,7 @@ async function recordCredentialFailure(input: {
   }
 }
 
-async function completeRun(input: {
+export async function completeAgentRun(input: {
   organizationId: string;
   runId: string;
   conversationId: string;
@@ -324,7 +389,7 @@ async function completeRun(input: {
     model: input.model,
     status: "ok",
   })));
-  return db().transaction(async (tx) => {
+  const result = await db().transaction(async (tx) => {
     const routing = {
       attemptCount: input.attemptCount,
       fallbackUsed,
@@ -347,23 +412,14 @@ async function completeRun(input: {
       inputTokens: input.usage.inputTokens,
       outputTokens: input.usage.outputTokens,
       providerRequestId: input.providerRequestId,
+      error: null,
+      errorCode: null,
       completedAt,
-    }).where(eq(runs.id, input.runId)).returning();
-    await tx.insert(runEvents).values([
-      {
-        runId: input.runId,
-        sequence: 4,
-        type: "provider.request.completed",
-        payload: {
-          inputTokens: input.usage.inputTokens,
-          outputTokens: input.usage.outputTokens,
-          providerRequestId: input.providerRequestId,
-          routing,
-        },
-      },
-      { runId: input.runId, sequence: 5, type: "run.completed", payload: { fallbackUsed } },
-    ]);
-    await tx.update(conversations).set({ updatedAt: completedAt }).where(eq(conversations.id, input.conversationId));
+    }).where(and(eq(runs.id, input.runId), eq(runs.organizationId, input.organizationId))).returning();
+    await tx.update(conversations).set({ updatedAt: completedAt }).where(and(
+      eq(conversations.id, input.conversationId),
+      eq(conversations.organizationId, input.organizationId),
+    ));
     await tx.update(providerCredentials).set({
       validationStatus: "verified",
       consecutiveFailures: 0,
@@ -393,29 +449,65 @@ async function completeRun(input: {
     });
     return { run: completed, assistantMessage };
   });
+  await appendRunEvents({
+    organizationId: input.organizationId,
+    runId: input.runId,
+    events: [
+      {
+        type: "provider.request.completed",
+        payload: {
+          inputTokens: input.usage.inputTokens,
+          outputTokens: input.usage.outputTokens,
+          providerRequestId: input.providerRequestId,
+          fallbackUsed,
+        },
+      },
+      { type: "run.completed", payload: { fallbackUsed } },
+    ],
+  });
+  await deleteRunCheckpoints(input.organizationId, input.runId);
+  return result;
 }
 
-async function failRun(runId: string, error: ProviderError) {
-  console.error(JSON.stringify(safeTelemetry({ operation: "agent.run", runId, status: "error", errorCode: error.code })));
-  await db().transaction(async (tx) => {
-    await tx.update(runs).set({
-      status: error.code === "PROVIDER_CANCELLED" ? "cancelled" : "failed",
-      error: error.message,
-      errorCode: error.code,
-      completedAt: new Date(),
-    }).where(eq(runs.id, runId));
-    await tx.insert(runEvents).values([
+export async function failAgentRun(
+  organizationId: string,
+  runId: string,
+  error: ProviderError,
+  execution?: AiSdkExecutionState,
+) {
+  const errorCode = execution?.sideEffectOccurred || execution?.toolResultSaved
+    ? "PROVIDER_FAILURE_AFTER_SIDE_EFFECT"
+    : error.code;
+  const message = errorCode === "PROVIDER_FAILURE_AFTER_SIDE_EFFECT"
+    ? "فشل المزود بعد تنفيذ أداة أو تغيير حالة خارجية؛ أوقف التشغيل للمراجعة ولم تتم إعادة التنفيذ تلقائيًا."
+    : error.message;
+  console.error(JSON.stringify(safeTelemetry({ operation: "agent.run", runId, status: "error", errorCode })));
+  await db().update(runs).set({
+    status: error.code === "PROVIDER_CANCELLED" ? "cancelled" : "failed",
+    error: message,
+    errorCode,
+    completedAt: new Date(),
+  }).where(and(eq(runs.id, runId), eq(runs.organizationId, organizationId)));
+  await appendRunEvents({
+    organizationId,
+    runId,
+    events: [
       {
-        runId,
-        sequence: 4,
         type: error.code === "PROVIDER_CANCELLED" ? "run.cancelled" : "provider.request.failed",
-        payload: { code: error.code, providerStatus: error.providerStatus },
+        payload: { code: errorCode, providerStatus: error.providerStatus },
       },
-      ...(error.code === "PROVIDER_CANCELLED"
-        ? []
-        : [{ runId, sequence: 5, type: "run.failed", payload: { code: error.code } }]),
-    ]);
+      ...(error.code === "PROVIDER_CANCELLED" ? [] : [{ type: "run.failed", payload: { code: errorCode } }]),
+    ],
   });
+  await deleteRunCheckpoints(organizationId, runId);
+}
+
+async function waitingResult(organizationId: string, runId: string, approvalId?: string) {
+  const [run] = await db().select().from(runs).where(and(
+    eq(runs.id, runId),
+    eq(runs.organizationId, organizationId),
+  )).limit(1);
+  return { run, assistantMessage: null, approvalId };
 }
 
 export async function executeAgentRun(input: {
@@ -432,40 +524,75 @@ export async function executeAgentRun(input: {
 }) {
   const requestId = input.requestId ?? crypto.randomUUID();
   const prepared = await prepareAgentRun({ ...input, requestId });
-  await beginProviderRequest(prepared.run.id);
+  await beginProviderRequest(input.organizationId, prepared.run.id);
   const controller = new AbortController();
   activeControllers.set(prepared.run.id, controller);
+  const allocateStep = await createRunStepAllocator(input.organizationId, prepared.run.id);
   try {
     let lastError: ProviderError | undefined;
+    let lastState: AiSdkExecutionState | undefined;
     let attemptCount = 0;
     const blockedCredentialIds = new Set<string>();
-    for (const candidate of prepared.candidates) {
+    for (const [candidateIndex, candidate] of prepared.candidates.entries()) {
       if (blockedCredentialIds.has(candidate.credential.id)) continue;
       attemptCount += 1;
+      await appendRunEvent({
+        organizationId: input.organizationId,
+        runId: prepared.run.id,
+        type: "provider.attempt.started",
+        payload: { attempt: attemptCount, provider: candidate.credential.provider, model: candidate.model },
+      });
       if (attemptCount > 1) {
         await db().update(runs).set({
           provider: candidate.credential.provider,
           model: candidate.model,
-        }).where(eq(runs.id, prepared.run.id));
+        }).where(and(eq(runs.id, prepared.run.id), eq(runs.organizationId, input.organizationId)));
       }
       try {
-        const result = await generateWithProvider(candidate.credential.provider, {
-          apiKey: decryptSecret(candidate.credential.encryptedSecret),
-          baseUrl: candidate.credential.baseUrl,
-          model: candidate.model,
-          messages: prepared.context,
+        const result = await executeAiSdkCandidate({
+          organizationId: input.organizationId,
+          userId: input.userId,
+          agentId: input.agentId,
+          runId: prepared.run.id,
+          conversationId: input.conversationId,
+          requestId,
+          candidateIndex,
+          candidate: {
+            providerCredentialId: candidate.credential.id,
+            provider: candidate.credential.provider,
+            apiKey: decryptSecret(candidate.credential.encryptedSecret),
+            baseUrl: candidate.credential.baseUrl,
+            model: candidate.model,
+            capabilities: candidate.capabilities,
+          },
+          context: prepared.context,
           temperature: prepared.version.temperatureMilli / 1000,
           maxOutputTokens: prepared.version.maxOutputTokens,
-          signal: controller.signal,
-          requestId,
+          abortSignal: controller.signal,
+          allocateStep,
         });
-        return completeRun({
+        await appendRunEvent({
+          organizationId: input.organizationId,
+          runId: prepared.run.id,
+          type: "provider.attempt.completed",
+          payload: { attempt: attemptCount, status: result.status, model: candidate.model },
+        });
+        if (result.status === "waiting_approval") {
+          await db().update(runs).set({
+            inputTokens: result.usage.inputTokens,
+            outputTokens: result.usage.outputTokens,
+            providerRequestId: result.providerRequestId,
+          }).where(and(eq(runs.id, prepared.run.id), eq(runs.organizationId, input.organizationId)));
+          return waitingResult(input.organizationId, prepared.run.id, result.approvalId);
+        }
+        if (!result.text.trim()) throw new ProviderError("PROVIDER_EMPTY_OUTPUT", "لم يُرجع النموذج نصًا.", 502);
+        return completeAgentRun({
           organizationId: input.organizationId,
           runId: prepared.run.id,
           conversationId: input.conversationId,
           providerCredentialId: candidate.credential.id,
           text: result.text,
-          usage: result,
+          usage: result.usage,
           providerRequestId: result.providerRequestId,
           model: candidate.model,
           attemptCount,
@@ -474,7 +601,9 @@ export async function executeAgentRun(input: {
         });
       } catch (error) {
         const safe = safeProviderError(error);
+        const state = executionState(error);
         lastError = safe;
+        lastState = state;
         await recordCredentialFailure({
           organizationId: input.organizationId,
           runId: prepared.run.id,
@@ -483,11 +612,43 @@ export async function executeAgentRun(input: {
           error: safe,
         });
         if (isCredentialScopedProviderError(safe)) blockedCredentialIds.add(candidate.credential.id);
-        if (!shouldFallbackProviderError(safe)) break;
+        if (!mayFallback(safe, state)) {
+          await appendRunEvent({
+            organizationId: input.organizationId,
+            runId: prepared.run.id,
+            type: "provider.fallback.blocked",
+            payload: {
+              code: safe.code,
+              emittedText: state?.emittedText ?? false,
+              toolExecuted: state?.toolExecuted ?? false,
+              toolResultSaved: state?.toolResultSaved ?? false,
+              sideEffectOccurred: state?.sideEffectOccurred ?? false,
+              approvalPending: state?.approvalPending ?? false,
+            },
+          });
+          break;
+        }
+        await persistRunStep({
+          organizationId: input.organizationId,
+          runId: prepared.run.id,
+          stepNumber: allocateStep(),
+          stepType: "fallback",
+          status: "completed",
+          model: candidate.model,
+          providerCredentialId: candidate.credential.id,
+          errorCode: safe.code,
+          metadata: { attempt: attemptCount },
+        });
+        await appendRunEvent({
+          organizationId: input.organizationId,
+          runId: prepared.run.id,
+          type: "provider.fallback.started",
+          payload: { attempt: attemptCount + 1, previousErrorCode: safe.code },
+        });
       }
     }
     const safe = lastError ?? new ProviderError("RUN_FAILED", "تعذر إكمال تشغيل الوكيل.", 502);
-    await failRun(prepared.run.id, safe);
+    await failAgentRun(input.organizationId, prepared.run.id, safe, lastState);
     throw new ApiError(safe.httpStatus, safe.code, safe.message, {
       runId: prepared.run.id,
       providerStatus: safe.providerStatus,
@@ -511,22 +672,21 @@ export async function* streamAgentRun(input: {
   media?: ProviderContentPart[];
 }) {
   const prepared = await prepareAgentRun(input);
-  await beginProviderRequest(prepared.run.id);
+  await beginProviderRequest(input.organizationId, prepared.run.id);
   const controller = new AbortController();
   const abortFromRequest = () => controller.abort(input.requestSignal?.reason);
   input.requestSignal?.addEventListener("abort", abortFromRequest, { once: true });
   activeControllers.set(prepared.run.id, controller);
+  const allocateStep = await createRunStepAllocator(input.organizationId, prepared.run.id);
   yield { type: "run" as const, runId: prepared.run.id };
-  let text = "";
-  let usage: ProviderUsage = { inputTokens: null, outputTokens: null };
-  let providerRequestId: string | undefined;
+  let accumulatedText = "";
   let activeCandidate = prepared.candidates[0]!;
   let attemptCount = 0;
   let lastError: ProviderError | undefined;
+  let lastState: AiSdkExecutionState | undefined;
   const blockedCredentialIds = new Set<string>();
   try {
-    let providerCompleted = false;
-    for (const candidate of prepared.candidates) {
+    for (const [candidateIndex, candidate] of prepared.candidates.entries()) {
       if (blockedCredentialIds.has(candidate.credential.id)) continue;
       activeCandidate = candidate;
       attemptCount += 1;
@@ -534,34 +694,77 @@ export async function* streamAgentRun(input: {
         await db().update(runs).set({
           provider: candidate.credential.provider,
           model: candidate.model,
-        }).where(eq(runs.id, prepared.run.id));
+        }).where(and(eq(runs.id, prepared.run.id), eq(runs.organizationId, input.organizationId)));
       }
       try {
-        for await (const chunk of streamWithProvider(candidate.credential.provider, {
-          apiKey: decryptSecret(candidate.credential.encryptedSecret),
-          baseUrl: candidate.credential.baseUrl,
-          model: candidate.model,
-          messages: prepared.context,
+        let candidateResult: Awaited<ReturnType<typeof executeAiSdkCandidate>> | undefined;
+        for await (const event of streamAiSdkCandidate({
+          organizationId: input.organizationId,
+          userId: input.userId,
+          agentId: input.agentId,
+          runId: prepared.run.id,
+          conversationId: input.conversationId,
+          requestId: input.requestId,
+          candidateIndex,
+          candidate: {
+            providerCredentialId: candidate.credential.id,
+            provider: candidate.credential.provider,
+            apiKey: decryptSecret(candidate.credential.encryptedSecret),
+            baseUrl: candidate.credential.baseUrl,
+            model: candidate.model,
+            capabilities: candidate.capabilities,
+          },
+          context: prepared.context,
           temperature: prepared.version.temperatureMilli / 1000,
           maxOutputTokens: prepared.version.maxOutputTokens,
-          signal: controller.signal,
-          requestId: input.requestId,
+          abortSignal: controller.signal,
+          allocateStep,
         })) {
-          if (chunk.type === "delta") {
-            text += chunk.text;
-            yield chunk;
-          } else if (chunk.type === "usage") {
-            usage = chunk.usage;
-            providerRequestId = chunk.providerRequestId ?? providerRequestId;
+          if (event.type === "delta") {
+            accumulatedText += event.text;
+            yield { type: "delta" as const, text: event.text };
           } else {
-            providerRequestId = chunk.providerRequestId ?? providerRequestId;
+            candidateResult = event.result;
           }
         }
-        providerCompleted = true;
-        break;
+        if (!candidateResult) throw new ProviderError("PROVIDER_EMPTY_OUTPUT", "لم يُرجع النموذج نتيجة.", 502);
+        if (candidateResult.status === "waiting_approval") {
+          yield {
+            type: "approval" as const,
+            runId: prepared.run.id,
+            approvalId: candidateResult.approvalId,
+            status: "waiting_approval" as const,
+          };
+          return;
+        }
+        if (!candidateResult.text.trim()) throw new ProviderError("PROVIDER_EMPTY_OUTPUT", "لم يُرجع النموذج نصًا.", 502);
+        const completed = await completeAgentRun({
+          organizationId: input.organizationId,
+          runId: prepared.run.id,
+          conversationId: input.conversationId,
+          providerCredentialId: candidate.credential.id,
+          text: candidateResult.text,
+          usage: candidateResult.usage,
+          providerRequestId: candidateResult.providerRequestId,
+          model: candidate.model,
+          attemptCount,
+          requestedProviderCredentialId: prepared.requestedProviderCredentialId,
+          requestedModel: prepared.requestedModel,
+        });
+        yield {
+          type: "complete" as const,
+          runId: prepared.run.id,
+          messageId: completed.assistantMessage?.id,
+          usage: candidateResult.usage,
+          model: candidate.model,
+          fallbackUsed: attemptCount > 1,
+        };
+        return;
       } catch (error) {
         const safe = safeProviderError(error);
+        const state = executionState(error);
         lastError = safe;
+        lastState = state;
         await recordCredentialFailure({
           organizationId: input.organizationId,
           runId: prepared.run.id,
@@ -570,52 +773,21 @@ export async function* streamAgentRun(input: {
           error: safe,
         });
         if (isCredentialScopedProviderError(safe)) blockedCredentialIds.add(candidate.credential.id);
-        const mayFallback = text.length === 0 && shouldFallbackProviderError(safe);
-        if (!mayFallback) throw safe;
-        usage = { inputTokens: null, outputTokens: null };
-        providerRequestId = undefined;
-      }
-    }
-    if (!providerCompleted || !text.trim()) {
-      const safe = lastError ?? new ProviderError("PROVIDER_EMPTY_OUTPUT", "لم يُرجع النموذج نصًا.", 502);
-      if (!lastError) {
-        await recordCredentialFailure({
+        if (accumulatedText.length > 0 || !mayFallback(safe, state)) break;
+        await appendRunEvent({
           organizationId: input.organizationId,
           runId: prepared.run.id,
-          providerCredentialId: activeCandidate.credential.id,
-          model: activeCandidate.model,
-          error: safe,
+          type: "provider.fallback.started",
+          payload: { attempt: attemptCount + 1, previousErrorCode: safe.code },
         });
       }
-      throw safe;
     }
-    const completed = await completeRun({
-      organizationId: input.organizationId,
-      runId: prepared.run.id,
-      conversationId: input.conversationId,
-      providerCredentialId: activeCandidate.credential.id,
-      text,
-      usage,
-      providerRequestId,
-      model: activeCandidate.model,
-      attemptCount,
-      requestedProviderCredentialId: prepared.requestedProviderCredentialId,
-      requestedModel: prepared.requestedModel,
-    });
-    yield {
-      type: "complete" as const,
-      runId: prepared.run.id,
-      messageId: completed.assistantMessage.id,
-      usage,
-      model: activeCandidate.model,
-      fallbackUsed: attemptCount > 1,
-    };
-  } catch (error) {
-    const safe = safeProviderError(error);
-    await failRun(prepared.run.id, safe);
+    const safe = lastError ?? new ProviderError("RUN_FAILED", "تعذر إكمال تشغيل الوكيل.", 502);
+    await failAgentRun(input.organizationId, prepared.run.id, safe, lastState);
     throw new ApiError(safe.httpStatus, safe.code, safe.message, {
       runId: prepared.run.id,
       providerStatus: safe.providerStatus,
+      model: activeCandidate.model,
     });
   } finally {
     activeControllers.delete(prepared.run.id);
@@ -629,11 +801,23 @@ export async function cancelAgentRun(organizationId: string, runId: string) {
     .where(and(eq(runs.id, runId), eq(runs.organizationId, organizationId)))
     .limit(1);
   if (!run) throw new ApiError(404, "RUN_NOT_FOUND", "عملية التشغيل غير موجودة.");
-  if (!["queued", "running"].includes(run.status)) return { cancelled: false, status: run.status };
+  if (!["queued", "running", "waiting_approval"].includes(run.status)) {
+    return { cancelled: false, status: run.status };
+  }
   activeControllers.get(runId)?.abort();
-  await db().update(runs).set({ cancelRequestedAt: new Date() })
-    .where(and(eq(runs.id, runId), eq(runs.organizationId, organizationId)));
-  return { cancelled: true, status: "cancelling" };
+  const now = new Date();
+  await db().transaction(async (tx) => {
+    await tx.update(runs).set({
+      cancelRequestedAt: now,
+      ...(run.status === "waiting_approval" ? { status: "cancelled" as const, completedAt: now } : {}),
+    }).where(and(eq(runs.id, runId), eq(runs.organizationId, organizationId)));
+    if (run.status === "waiting_approval") {
+      await tx.update(toolApprovals).set({ status: "expired", decidedAt: now })
+        .where(and(eq(toolApprovals.organizationId, organizationId), eq(toolApprovals.runId, runId), eq(toolApprovals.status, "pending")));
+    }
+  });
+  if (run.status === "waiting_approval") await deleteRunCheckpoints(organizationId, runId);
+  return { cancelled: true, status: run.status === "waiting_approval" ? "cancelled" : "cancelling" };
 }
 
 export async function listOrganizationRuns(input: {
@@ -641,7 +825,7 @@ export async function listOrganizationRuns(input: {
   userId?: string;
   page: number;
   limit: number;
-  status?: "queued" | "running" | "completed" | "failed" | "cancelled";
+  status?: RunStatusFilter;
 }) {
   const where = and(
     eq(runs.organizationId, input.organizationId),
