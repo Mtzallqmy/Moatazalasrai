@@ -1,0 +1,119 @@
+name: Sync Mobile and OpenAPI
+
+on:
+  push:
+    branches: [feat/ai-sdk-graphile-worker-production]
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: ${{ !contains(github.event.head_commit.message, 'Synchronize Flutter approval status and OpenAPI') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feat/ai-sdk-graphile-worker-production
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.18.0
+      - name: Patch Flutter and OpenAPI contracts
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+
+          const mobilePath = 'apps/mobile/lib/src/features/dashboard/dashboard_screen.dart';
+          let mobile = fs.readFileSync(mobilePath, 'utf8');
+          const oldTile = `    final status = run['status'] as String? ?? 'queued';
+    return ListTile(
+      leading: Icon(status == 'completed' ? Icons.check_circle : status == 'failed' ? Icons.error_outline : Icons.pending_outlined,
+        color: status == 'completed' ? const Color(0xFF16835F) : status == 'failed' ? Colors.red : Colors.orange),
+      title: Text(run['model'] as String? ?? 'تشغيل وكيل', textDirection: TextDirection.ltr),
+      subtitle: Text('\${_status(status)} · \${_date(run['createdAt'])}'),
+    );`;
+          const newTile = `    final status = run['status'] as String? ?? 'queued';
+    final waitingApproval = status == 'waiting_approval';
+    return ListTile(
+      leading: Icon(
+        status == 'completed'
+            ? Icons.check_circle
+            : status == 'failed'
+                ? Icons.error_outline
+                : waitingApproval
+                    ? Icons.approval_outlined
+                    : Icons.pending_outlined,
+        color: status == 'completed'
+            ? const Color(0xFF16835F)
+            : status == 'failed'
+                ? Colors.red
+                : waitingApproval
+                    ? Colors.deepOrange
+                    : Colors.orange,
+      ),
+      title: Text(run['model'] as String? ?? 'تشغيل وكيل', textDirection: TextDirection.ltr),
+      subtitle: Text(waitingApproval
+          ? 'بانتظار موافقة بشرية · افتح لوحة الويب لاتخاذ القرار'
+          : '\${_status(status)} · \${_date(run['createdAt'])}'),
+    );`;
+          if (!mobile.includes(oldTile) && !mobile.includes(newTile)) throw new Error('Flutter run tile block not found');
+          mobile = mobile.replace(oldTile, newTile);
+          const oldStatus = `  'running': 'يعمل الآن',
+  'completed': 'مكتمل',`;
+          const newStatus = `  'running': 'يعمل الآن',
+  'waiting_approval': 'بانتظار الموافقة',
+  'completed': 'مكتمل',`;
+          if (!mobile.includes(oldStatus) && !mobile.includes(newStatus)) throw new Error('Flutter status map not found');
+          mobile = mobile.replace(oldStatus, newStatus);
+          fs.writeFileSync(mobilePath, mobile);
+
+          const openapiPath = 'src/app/api/v1/openapi/route.ts';
+          let openapi = fs.readFileSync(openapiPath, 'utf8');
+          openapi = openapi.replace('version: "2.0.0"', 'version: "2.1.0"');
+          openapi = openapi.replace(
+            '  created?: boolean;\n  parameters?: Array<Record<string, unknown>>;',
+            '  created?: boolean;\n  accepted?: boolean;\n  parameters?: Array<Record<string, unknown>>;',
+          );
+          openapi = openapi.replace(
+            '      ...(input.created ? { "201": { description: "تم الإنشاء" } } : success),',
+            '      ...(input.accepted ? { "202": { description: "تم قبول الطلب للتنفيذ غير المتزامن" } } : input.created ? { "201": { description: "تم الإنشاء" } } : success),',
+          );
+          openapi = openapi.replace(
+            '          ...operation({ operationId: "createTeamRun", summary: "تشغيل أعضاء الفريق بالتوازي ثم توليف المشرف", tag: "Agent Teams", created: true, body: { $ref: "#/components/schemas/TeamRun" } }),',
+            '          ...operation({ operationId: "createTeamRun", summary: "إضافة تشغيل الفريق إلى Graphile Worker", tag: "Agent Teams", accepted: true, body: { $ref: "#/components/schemas/TeamRun" } }),',
+          );
+          const marker = `      "/api/v1/files": {`;
+          const additions = `      "/api/v1/team-runs/{teamRunId}": {
+        get: operation({ operationId: "getTeamRun", summary: "قراءة تشغيل فريق وخطوات العمال والمشرف", tag: "Agent Teams", parameters: [{ name: "teamRunId", in: "path", required: true, schema: uuid }] }),
+      },
+      "/api/v1/team-runs/{teamRunId}/cancel": {
+        post: operation({ operationId: "cancelTeamRun", summary: "طلب إلغاء تشغيل فريق", tag: "Agent Teams", parameters: [{ name: "teamRunId", in: "path", required: true, schema: uuid }] }),
+      },
+      "/api/v1/team-runs/{teamRunId}/retry": {
+        post: operation({ operationId: "retryTeamRun", summary: "إعادة تشغيل فريق فاشل بأمان", tag: "Agent Teams", accepted: true, parameters: [{ name: "teamRunId", in: "path", required: true, schema: uuid }] }),
+      },
+      "/api/v1/tool-approvals": {
+        get: operation({ operationId: "listToolApprovals", summary: "عرض الموافقات المعلقة للمؤسسة", tag: "Tools" }),
+      },
+      "/api/v1/tool-approvals/{approvalId}": {
+        get: operation({ operationId: "getToolApproval", summary: "قراءة موافقة ومدخلاتها المنقحة", tag: "Tools", parameters: [{ name: "approvalId", in: "path", required: true, schema: { type: "string" } }] }),
+      },
+      "/api/v1/tool-approvals/{approvalId}/approve": {
+        post: operation({ operationId: "approveToolCall", summary: "الموافقة واستئناف نفس التشغيل", tag: "Tools", accepted: true, parameters: [{ name: "approvalId", in: "path", required: true, schema: { type: "string" } }], body: { ...object, properties: { reason: { type: "string", maxLength: 500 } } } }),
+      },
+      "/api/v1/tool-approvals/{approvalId}/reject": {
+        post: operation({ operationId: "rejectToolCall", summary: "رفض الأداة واستئناف التشغيل دون تنفيذها", tag: "Tools", accepted: true, parameters: [{ name: "approvalId", in: "path", required: true, schema: { type: "string" } }], body: { ...object, properties: { reason: { type: "string", maxLength: 500 } } } }),
+      },
+`;
+          if (!openapi.includes(additions.trim()) && !openapi.includes(marker)) throw new Error('OpenAPI insertion marker not found');
+          if (!openapi.includes(additions.trim())) openapi = openapi.replace(marker, additions + marker);
+          fs.writeFileSync(openapiPath, openapi);
+          NODE
+      - name: Commit synchronized contracts
+        run: |
+          if git diff --quiet -- apps/mobile/lib/src/features/dashboard/dashboard_screen.dart src/app/api/v1/openapi/route.ts; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/mobile/lib/src/features/dashboard/dashboard_screen.dart src/app/api/v1/openapi/route.ts
+          git commit -m "Synchronize Flutter approval status and OpenAPI"
+          git push origin HEAD:feat/ai-sdk-graphile-worker-production
