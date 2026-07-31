@@ -107,7 +107,7 @@ describe("runtime limits and observability safety", () => {
     process.env.MAX_TOTAL_TOOL_CALLS_PER_RUN = "0";
     process.env.TOOL_APPROVAL_TTL_SECONDS = "10";
     process.env.RUN_CHECKPOINT_TTL_SECONDS = "99999999";
-    expect(maxModelStepsPerRun()).toBe(20);
+    expect(maxModelStepsPerRun()).toBe(16);
     expect(maxTotalToolCallsPerRun()).toBe(1);
     expect(toolApprovalTtlSeconds()).toBe(60);
     expect(runCheckpointTtlSeconds()).toBe(7 * 24 * 3600);
