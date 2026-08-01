@@ -44,6 +44,19 @@ Railway/Docker هو runtime الأساسي. لا تُنقل PostgreSQL أو Grap
 
 عند استخدام التخزين المحلي داخل Docker اربط volume دائمًا إلى `/app/.data`; لا تستخدمه مع عدة replicas. للإنتاج اختر `OBJECT_STORAGE_DRIVER=r2`. يبقى pre-deploy هو `npm run db:migrate:all` مرة واحدة، ولا ينفذ Web أو Worker migrations عند البدء.
 
+### تفعيل AI Gateway تدريجيًا
+
+1. أضف `CLOUDFLARE_ACCOUNT_ID` و`CLOUDFLARE_AI_GATEWAY_ID` و`OPENAI_BASE_URL` إلى Web وWorker.
+2. اترك `CLOUDFLARE_AI_GATEWAY_ENABLED=false` وانشر الإصدار أولًا.
+3. تحقق من صفحة التشخيص ومن نجاح طلب OpenAI مباشر.
+4. فعّل البوابة على Web واحد، ثم اختبر Responses API وStreaming وTool Calling.
+5. فعّل Worker بعد ثبات مؤشرات 429/5xx ووقت أول token.
+6. للرجوع الفوري اضبط `CLOUDFLARE_AI_GATEWAY_ENABLED=false` وأعد التشغيل؛ لا توجد migration أو تغييرات بيانات للتراجع عنها.
+
+`CLOUDFLARE_API_TOKEN` اختياري ولا يُضبط إلا إذا فُعّل Authenticated Gateway.
+لا يُستخدم بوصفه مفتاح مزود، ولا يحل محل مفاتيح BYOK. راجع
+[دليل Cloudflare AI Gateway](cloudflare-ai-gateway.md).
+
 ## التهيئة
 
 التسجيل العام ينشئ أول owner ولا يحتاج تعديلات يدوية على قاعدة البيانات. مسارات bootstrap تحت `/api/v1` مخصصة لتكاملات platform API؛ إن استخدمتها فدوّر `BOOTSTRAP_ADMIN_TOKEN` بعد التهيئة.
