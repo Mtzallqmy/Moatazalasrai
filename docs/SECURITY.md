@@ -24,8 +24,9 @@
 
 ## الأسرار
 
-- AES-256-GCM مع nonce عشوائي 96-bit وauthentication tag وenvelope يبدأ بـ`v1`.
-- المفتاح الرئيسي يأتي من `CREDENTIAL_ENCRYPTION_KEY` فقط.
+- AES-256-GCM مع nonce عشوائي 96-bit وauthentication tag وenvelope `v2` يحوي key ID.
+- AAD يربط ciphertext بنوع المورد والمؤسسة، وتبقى قراءة `v1` للتوافق أثناء الانتقال فقط.
+- المفتاح الحالي يأتي من `CREDENTIAL_ENCRYPTION_KEY`، وتدعم نافذة التدوير مفاتيح قراءة قديمة عبر `CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS`.
 - المفتاح الأصلي لا يعود في API؛ الواجهة ترى hint محدودًا.
 - لا تحتوي سجلات التدقيق أو run events على provider keys أو Cookies أو system prompts.
 
@@ -42,7 +43,7 @@
 ## الويب
 
 - Origin/CSRF checks لطلبات Cookie التي تغير الحالة.
-- Cookies آمنة، CSP، `frame-ancestors 'none'`, `nosniff`, referrer policy وHSTS في الإنتاج.
+- Cookies آمنة، CSP nonce بلا `unsafe-inline` للسكريبت، `frame-ancestors 'none'`, `nosniff`, referrer policy وHSTS في الإنتاج.
 - لا يستخدم `dangerouslySetInnerHTML` لمحتوى المحادثات.
 - الصفحات الحساسة وAPI responses تستخدم `no-store`.
 - كل response خطأ يحمل request ID ولا يعرض stack trace.
@@ -59,5 +60,5 @@
 1. عطّل المزود المتأثر.
 2. دوّر مفتاح المزود عبر واجهة التعديل.
 3. افحص audit log وruns باستخدام request IDs.
-4. عند الاشتباه بمفتاح التشفير، أوقف الكتابة، أعد تشفير الأسرار بمفتاح جديد ثم دوّر متغير البيئة.
+4. عند الاشتباه بمفتاح التشفير، اتبع مسار التدوير المرحلي في `OPERATIONS_RUNBOOK.md` ولا تطبع أي plaintext.
 5. غيّر كلمة المرور لإبطال كل الجلسات.
