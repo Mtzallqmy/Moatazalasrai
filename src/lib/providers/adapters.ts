@@ -7,6 +7,7 @@ import {
   ProviderError,
 } from "@/lib/providers/types";
 import { validateProviderBaseUrl } from "@/lib/security/provider-network";
+import { llmGateway } from "@/lib/providers/llm-gateway";
 
 const capabilities = {
   streaming: true,
@@ -77,6 +78,19 @@ function abort() {
   return new AbortController();
 }
 
+function openAiTransport(input: {
+  baseUrl: string;
+  organizationId?: string;
+  requestId: string;
+}) {
+  return llmGateway.resolve({
+    provider: "openai",
+    directBaseUrl: input.baseUrl,
+    organizationId: input.organizationId,
+    requestId: input.requestId,
+  });
+}
+
 async function discovery(
   url: string,
   headers: HeadersInit,
@@ -110,29 +124,62 @@ const openai: ProviderAdapter = {
       outputTokens: typeof usage.output_tokens === "number" ? usage.output_tokens : null,
     };
   },
-  discoverModels(input) {
-    return discovery(
-      joinUrl(input.baseUrl, "models"),
-      { authorization: `Bearer ${input.apiKey}`, accept: "application/json", "x-client-request-id": input.requestId },
-      input,
-      (data) => modelIds(data),
-    );
+  async discoverModels(input) {
+    const startedAt = performance.now();
+    const safe = await validateProviderBaseUrl(input.baseUrl);
+    const transport = openAiTransport(input);
+    const { data } = await providerJson<unknown>(joinUrl(transport.baseUrl, "models"), {
+      headers: {
+        authorization: `Bearer ${input.apiKey}`,
+        accept: "application/json",
+        "x-client-request-id": input.requestId,
+        ...transport.headers,
+      },
+    }, {
+      signal: input.signal,
+      retries: transport.gateway ? 0 : 1,
+      fetch: transport.fetch,
+    });
+    const models = modelIds(data);
+    if (models.length === 0) {
+      throw new ProviderError(
+        "MODELS_ENDPOINT_UNSUPPORTED",
+        "تم الاتصال بالمزود لكن مسار النماذج لم يُرجع نماذج قابلة للاستخدام.",
+        422,
+      );
+    }
+    return {
+      normalizedBaseUrl: safe.normalizedUrl,
+      models,
+      latencyMs: Math.round(performance.now() - startedAt),
+    };
   },
   async generate(input) {
+    const transport = openAiTransport(input);
     const { data, headers } = await providerJson<{
       output_text?: string;
       output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
       usage?: unknown;
-    }>(joinUrl(input.baseUrl, "responses"), {
+    }>(joinUrl(transport.baseUrl, "responses"), {
       method: "POST",
-      headers: { authorization: `Bearer ${input.apiKey}`, "content-type": "application/json", "x-client-request-id": input.requestId },
+      headers: {
+        authorization: `Bearer ${input.apiKey}`,
+        "content-type": "application/json",
+        "x-client-request-id": input.requestId,
+        ...transport.headers,
+      },
       body: JSON.stringify({
         model: input.model,
         input: openAiResponsesMessages(input.messages),
         temperature: input.temperature,
         max_output_tokens: input.maxOutputTokens,
       }),
-    }, { signal: input.signal, timeoutMs: 90_000 });
+    }, {
+      signal: input.signal,
+      timeoutMs: 60_000,
+      retries: transport.gateway ? 0 : 1,
+      fetch: transport.fetch,
+    });
     const text = data.output_text ?? data.output?.flatMap((item) => item.content ?? []).find((item) => item.type === "output_text")?.text;
     if (!text) throw new ProviderError("PROVIDER_EMPTY_OUTPUT", "لم يُرجع النموذج نصًا.", 502);
     return { text, ...openai.normalizeUsage(data.usage), providerRequestId: headers.get("x-request-id") ?? undefined };
@@ -141,9 +188,15 @@ const openai: ProviderAdapter = {
     return openai.generate({ ...input, messages: [{ role: "user", content: "Reply with OK." }], maxOutputTokens: 16, temperature: 0 });
   },
   async *stream(input) {
-    const response = await providerStream(joinUrl(input.baseUrl, "responses"), {
+    const transport = openAiTransport(input);
+    const response = await providerStream(joinUrl(transport.baseUrl, "responses"), {
       method: "POST",
-      headers: { authorization: `Bearer ${input.apiKey}`, "content-type": "application/json", "x-client-request-id": input.requestId },
+      headers: {
+        authorization: `Bearer ${input.apiKey}`,
+        "content-type": "application/json",
+        "x-client-request-id": input.requestId,
+        ...transport.headers,
+      },
       body: JSON.stringify({
         model: input.model,
         input: openAiResponsesMessages(input.messages),
@@ -151,7 +204,7 @@ const openai: ProviderAdapter = {
         max_output_tokens: input.maxOutputTokens,
         stream: true,
       }),
-    }, { signal: input.signal, timeoutMs: 90_000 });
+    }, { signal: input.signal, timeoutMs: 60_000, fetch: transport.fetch });
     const providerRequestId = response.headers.get("x-request-id") ?? undefined;
     for await (const event of sseJson(response)) {
       if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
