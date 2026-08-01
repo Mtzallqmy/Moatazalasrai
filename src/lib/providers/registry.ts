@@ -56,6 +56,7 @@ export async function validateProvider(input: {
   testModel?: string;
   manualModel?: string;
   requestId: string;
+  organizationId?: string;
   signal?: AbortSignal;
 }) {
   const preset = resolveProviderPreset(input);
@@ -76,6 +77,7 @@ export async function validateProvider(input: {
       baseUrl,
       signal: input.signal,
       requestId: input.requestId,
+      organizationId: input.organizationId,
     });
     stages.push({ stage: "url_dns_tls_credentials_models", status: "passed", latencyMs: discovery.latencyMs });
   } catch (error) {
@@ -110,6 +112,7 @@ export async function validateProvider(input: {
       maxOutputTokens: 16,
       requestId: input.requestId,
       signal: input.signal,
+      organizationId: input.organizationId,
     });
     modelTest = { model: selectedModel, latencyMs: Math.round(performance.now() - testStartedAt) };
     stages.push({ stage: "model_generation", status: "passed", latencyMs: modelTest.latencyMs });
