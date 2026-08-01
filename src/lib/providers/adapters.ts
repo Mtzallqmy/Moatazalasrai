@@ -4,6 +4,7 @@ import {
   type ProviderAdapter,
   type ProviderMessage,
   type ProviderUsage,
+  type ProviderKind,
   ProviderError,
 } from "@/lib/providers/types";
 import { validateProviderBaseUrl } from "@/lib/security/provider-network";
@@ -82,9 +83,10 @@ function openAiTransport(input: {
   baseUrl: string;
   organizationId?: string;
   requestId: string;
+  providerKind?: ProviderKind;
 }) {
   return llmGateway.resolve({
-    provider: "openai",
+    provider: input.providerKind ?? "openai",
     directBaseUrl: input.baseUrl,
     organizationId: input.organizationId,
     requestId: input.requestId,
