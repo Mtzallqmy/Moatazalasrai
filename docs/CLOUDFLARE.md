@@ -49,18 +49,22 @@ R2_SIGNED_URL_TTL_SECONDS=300
 
 ## AI Gateway الاختياري
 
-الوضع الافتراضي اتصال مباشر ومفتاح المزود BYOK المشفر كما هو. عند قرار مدير المنصة:
+الوضع الافتراضي اتصال مباشر ومفاتيح BYOK المشفرة كما هي. عند قرار مدير المنصة:
 
 ```dotenv
 CLOUDFLARE_AI_GATEWAY_ENABLED=true
-CLOUDFLARE_ACCOUNT_ID=<account-id>
-CLOUDFLARE_AI_GATEWAY_ID=<gateway-id>
-CLOUDFLARE_API_TOKEN=<platform-cloudflare-token>
-CLOUDFLARE_AI_GATEWAY_BASE_URL=
-CLOUDFLARE_AI_GATEWAY_FALLBACK_DIRECT=false
+CLOUDFLARE_ACCOUNT_ID=3daab68819d22a2285e860c07837884f
+CLOUDFLARE_AI_GATEWAY_ID=moataz-ai
+OPENAI_BASE_URL=https://gateway.ai.cloudflare.com/v1/3daab68819d22a2285e860c07837884f/moataz-ai/compat
+CLOUDFLARE_API_TOKEN=
 ```
 
-يمر مفتاح مزود المؤسسة إلى endpoint المزود عبر Gateway، بينما `CLOUDFLARE_API_TOKEN` مستقل في `cf-aig-authorization`. يرسل التطبيق `cf-aig-skip-cache:true` و`cf-aig-collect-log-payload:false` وmetadata تحوي hash للمؤسسة فقط، ومحاولة Gateway واحدة. لا يوجد fallback بعد خطأ غامض كي لا يتكرر الطلب. المزودات OpenAI-compatible العشوائية تبقى مباشرة وتفشل مغلقًا إن حاول flag العام تمريرها. راجع [سياسة cache](https://developers.cloudflare.com/ai-gateway/features/caching/) و[منع payload logs](https://developers.cloudflare.com/ai-gateway/observability/logging/).
+يمر OpenAI BYOK في رأس Authorization المعتاد. `CLOUDFLARE_API_TOKEN` اختياري
+لـAuthenticated Gateway فقط ويرسل في `cf-aig-authorization`. تمر استدعاءات
+OpenAI عبر `LLMGateway`، بينما تبقى Anthropic وGemini والمزودات المتوافقة
+الأخرى مباشرة. يعطل التطبيق cache وتسجيل payload، ويضع مهلة 60 ثانية ومحاولة
+بديلة مباشرة واحدة فقط قبل بدء stream. راجع
+[الدليل التشغيلي المفصل](cloudflare-ai-gateway.md).
 
 ## WAF وRate Limiting
 
