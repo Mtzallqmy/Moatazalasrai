@@ -19,7 +19,19 @@ export function validateOptionalRuntimeEnvironment() {
     if (!process.env.R2_ACCOUNT_ID?.trim() && !process.env.R2_ENDPOINT?.trim()) throw new Error("R2 requires R2_ACCOUNT_ID or R2_ENDPOINT.");
   }
   if (enabled("CLOUDFLARE_AI_GATEWAY_ENABLED")) {
-    requireAll("Cloudflare AI Gateway", ["CLOUDFLARE_API_TOKEN"]);
-    if (!process.env.CLOUDFLARE_AI_GATEWAY_BASE_URL?.trim()) requireAll("Cloudflare AI Gateway", ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_AI_GATEWAY_ID"]);
+    requireAll("Cloudflare AI Gateway", [
+      "CLOUDFLARE_ACCOUNT_ID",
+      "CLOUDFLARE_AI_GATEWAY_ID",
+      "OPENAI_BASE_URL",
+    ]);
+    let gatewayUrl;
+    try {
+      gatewayUrl = new URL(process.env.OPENAI_BASE_URL);
+    } catch {
+      throw new Error("Cloudflare AI Gateway is enabled but OPENAI_BASE_URL is not a valid URL.");
+    }
+    if (gatewayUrl.protocol !== "https:" || gatewayUrl.hostname !== "gateway.ai.cloudflare.com") {
+      throw new Error("Cloudflare AI Gateway requires an HTTPS OPENAI_BASE_URL on gateway.ai.cloudflare.com.");
+    }
   }
 }
