@@ -220,6 +220,7 @@ export class LLMGateway {
       const body = await source.clone().arrayBuffer();
       const gatewayUrl = requestUrl(source);
       const directUrl = replaceBaseUrl(gatewayUrl, input.gatewayBaseUrl, input.directBaseUrl);
+      let usedFallback = false;
       const gatewayResponse = await this.attempt({
         url: gatewayUrl,
         source,
@@ -231,6 +232,7 @@ export class LLMGateway {
         gatewayHeaders: input.headers,
       }).catch(async (error: unknown) => {
         if (source.signal.aborted) throw error;
+        usedFallback = true;
         return this.attempt({
           url: directUrl,
           source,
@@ -242,7 +244,7 @@ export class LLMGateway {
         });
       });
 
-      if (!RETRYABLE_STATUS_CODES.has(gatewayResponse.status)) return gatewayResponse;
+      if (usedFallback || !RETRYABLE_STATUS_CODES.has(gatewayResponse.status)) return gatewayResponse;
       await gatewayResponse.body?.cancel().catch(() => undefined);
       if (source.signal.aborted) return gatewayResponse;
       return this.attempt({
