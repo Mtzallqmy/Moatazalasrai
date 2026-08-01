@@ -70,7 +70,18 @@ npm run dev
 | `TRUST_CLOUDFLARE_PROXY` | خلف Cloudflare فقط | يثق بـ`CF-Connecting-IP` بعد منع تجاوز الـproxy |
 | `OBJECT_STORAGE_DRIVER` | لا | `local` للتطوير أو `r2` للإنتاج؛ لا تُرسل بيانات اعتماد R2 للعميل |
 | `R2_*` | عند اختيار R2 | bucket خاص وبيانات S3 API محدودة على bucket واحد |
-| `CLOUDFLARE_AI_GATEWAY_*` | عند التفعيل | توجيه صريح؛ caching وpayload logging معطلان لكل طلب |
+| `CLOUDFLARE_AI_GATEWAY_ENABLED` / `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_AI_GATEWAY_ID` / `OPENAI_BASE_URL` | عند التفعيل | توجيه OpenAI فقط عبر Cloudflare مع بقاء BYOK؛ Anthropic وGemini مباشران |
+
+### Cloudflare AI Gateway
+
+يبقى `CLOUDFLARE_AI_GATEWAY_ENABLED=false` افتراضيًا. عند تفعيله تمر جميع طلبات
+OpenAI، بما فيها الفحص والتوليد والبث وResponses API، عبر بوابة `moataz-ai`.
+لا تُخزن Cloudflare مفاتيح المستخدمين؛ يبقى مفتاح OpenAI المفكوك لحظيًا هو
+`Authorization` الخاص بالمزود. تبقى Anthropic وGemini وOpenAI-compatible على
+مساراتها الحالية المباشرة. طبقة `LLMGateway` تضبط مهلة 60 ثانية، محاولة بديلة
+مباشرة واحدة فقط قبل بدء أي stream، وتعطل cache وتسجيل payload.
+
+راجع [دليل Cloudflare AI Gateway](docs/cloudflare-ai-gateway.md).
 
 توليد مفتاح التشفير:
 
@@ -166,6 +177,7 @@ npm run test:e2e
 - [الاستجابة للحوادث](docs/INCIDENT_RESPONSE.md)
 - [النسخ والاستعادة](docs/BACKUP_AND_RESTORE.md)
 - [نموذج التهديد](docs/THREAT_MODEL.md)
+- [Cloudflare AI Gateway](docs/cloudflare-ai-gateway.md)
 
 ## قيود حقيقية
 
