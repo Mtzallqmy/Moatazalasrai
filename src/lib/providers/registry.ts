@@ -78,6 +78,7 @@ export async function validateProvider(input: {
       signal: input.signal,
       requestId: input.requestId,
       organizationId: input.organizationId,
+      providerKind: input.provider,
     });
     stages.push({ stage: "url_dns_tls_credentials_models", status: "passed", latencyMs: discovery.latencyMs });
   } catch (error) {
@@ -113,6 +114,7 @@ export async function validateProvider(input: {
       requestId: input.requestId,
       signal: input.signal,
       organizationId: input.organizationId,
+      providerKind: input.provider,
     });
     modelTest = { model: selectedModel, latencyMs: Math.round(performance.now() - testStartedAt) };
     stages.push({ stage: "model_generation", status: "passed", latencyMs: modelTest.latencyMs });
@@ -134,7 +136,7 @@ export async function generateWithProvider(kind: ProviderKind, input: ProviderRe
   const slug = input.providerSlug ?? inferProviderSlug(kind, input.baseUrl);
   const adapter = getProviderAdapter(kind, slug);
   try {
-    return await adapter.generate({ ...input, providerSlug: slug });
+    return await adapter.generate({ ...input, providerSlug: slug, providerKind: kind });
   } catch (error) {
     if (input.signal?.aborted) {
       throw new ProviderError("PROVIDER_CANCELLED", "تم إلغاء طلب المزود.", 499);
@@ -147,7 +149,7 @@ export async function* streamWithProvider(kind: ProviderKind, input: ProviderReq
   const slug = input.providerSlug ?? inferProviderSlug(kind, input.baseUrl);
   const adapter = getProviderAdapter(kind, slug);
   try {
-    yield* adapter.stream({ ...input, providerSlug: slug });
+    yield* adapter.stream({ ...input, providerSlug: slug, providerKind: kind });
   } catch (error) {
     if (input.signal?.aborted) {
       throw new ProviderError("PROVIDER_CANCELLED", "تم إلغاء طلب المزود.", 499);
