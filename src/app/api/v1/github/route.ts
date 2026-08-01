@@ -32,7 +32,7 @@ export async function POST(request: Request) {
       eq(integrations.status, "verified"),
     )).limit(1);
     if (!github) throw new ApiError(409, "GITHUB_NOT_CONFIGURED", "فعّل تكامل GitHub أولًا.");
-    const token = decryptSecret(github.encryptedToken);
+    const token = decryptSecret(github.encryptedToken, `integration:${principal.organizationId}`);
     if (body.action === "list_repositories") {
       const repositories = await listGitHubRepositories(token, body.limit);
       return apiSuccess({ repositories }, requestId);

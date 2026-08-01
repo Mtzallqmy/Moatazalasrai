@@ -63,7 +63,7 @@ export async function requestToolApproval(input: {
       toolCallId: input.toolCallId,
       serverId: input.serverId,
       agentId: input.agentId,
-      encryptedArguments: encryptSecret(JSON.stringify(input.arguments)),
+      encryptedArguments: encryptSecret(JSON.stringify(input.arguments), `approval:${input.organizationId}:${input.runId}`),
       reason: input.reason,
       risk: input.risk,
       capability: input.capability,
@@ -148,7 +148,7 @@ function publicApproval(row: typeof toolApprovalsRuntime.$inferSelect) {
     ...row,
     encryptedArguments: undefined,
     argumentsSummary: row.encryptedArguments
-      ? redactedArgumentSummary(JSON.parse(decryptSecret(row.encryptedArguments)))
+      ? redactedArgumentSummary(JSON.parse(decryptSecret(row.encryptedArguments, `approval:${row.organizationId}:${row.runId}`)))
       : {},
   };
 }

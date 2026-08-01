@@ -295,4 +295,20 @@ describeDatabase("Graphile Worker and PostgreSQL runtime", () => {
     `;
     expect(new Set(indexRows.map((row) => row.indexname))).toEqual(new Set(expected));
   });
+
+  test("mobile refresh rotation allows only one concurrent consumer", async () => {
+    const organizationId = await createOrganization();
+    const userId = randomUUID();
+    await sql`INSERT INTO users (id, email) VALUES (${userId}, ${`mobile-${userId}@example.test`})`;
+    await sql`INSERT INTO organization_members (organization_id, user_id, role) VALUES (${organizationId}, ${userId}, 'member')`;
+    const { issueMobileSession, rotateMobileSession } = await import("@/lib/auth/mobile");
+    const initial = await issueMobileSession({ userId, organizationId, deviceId: `device-${userId}` });
+    const results = await Promise.allSettled([
+      rotateMobileSession(initial.refreshToken),
+      rotateMobileSession(initial.refreshToken),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((result) => result.status === "rejected");
+    expect(rejected).toMatchObject({ reason: expect.objectContaining({ code: "REFRESH_TOKEN_REUSED" }) });
+  });
 });

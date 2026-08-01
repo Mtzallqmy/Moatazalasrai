@@ -7,6 +7,7 @@ import { ApiError } from "@/lib/http/api";
 
 export const SESSION_COOKIE = "moataz_session";
 const SESSION_DAYS = 30;
+const SESSION_IDLE_DAYS = 7;
 const LAST_SEEN_WRITE_INTERVAL_MS = 15 * 60 * 1000;
 
 function hashToken(token: string): string {
@@ -74,10 +75,20 @@ export async function setActiveOrganization(userId: string, sessionId: string, o
     ))
     .limit(1);
   if (!membership) throw new ApiError(404, "MEMBERSHIP_NOT_FOUND", "المؤسسة غير متاحة لهذا الحساب.");
-  await db()
+  const nextToken = randomBytes(32).toString("base64url");
+  const [rotated] = await db()
     .update(sessions)
-    .set({ activeOrganizationId: organizationId })
-    .where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId), isNull(sessions.revokedAt)));
+    .set({ activeOrganizationId: organizationId, tokenHash: hashToken(nextToken), lastSeenAt: new Date() })
+    .where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId), isNull(sessions.revokedAt)))
+    .returning({ expiresAt: sessions.expiresAt });
+  if (!rotated) throw new ApiError(401, "SESSION_INVALID", "انتهت الجلسة أو أُبطلت.");
+  (await cookies()).set(SESSION_COOKIE, nextToken, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    expires: rotated.expiresAt,
+  });
 }
 
 export async function currentSession() {
@@ -95,7 +106,12 @@ export async function currentSession() {
     })
     .from(sessions)
     .innerJoin(users, eq(users.id, sessions.userId))
-    .where(and(eq(sessions.tokenHash, hashToken(token)), isNull(sessions.revokedAt), gt(sessions.expiresAt, new Date())))
+    .where(and(
+      eq(sessions.tokenHash, hashToken(token)),
+      isNull(sessions.revokedAt),
+      gt(sessions.expiresAt, new Date()),
+      gt(sessions.lastSeenAt, new Date(Date.now() - SESSION_IDLE_DAYS * 24 * 60 * 60 * 1000)),
+    ))
     .limit(1);
 
   if (!base) return null;

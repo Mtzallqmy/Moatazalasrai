@@ -84,7 +84,7 @@ export async function POST(request: Request) {
       organizationId: session.organizationId,
       kind: body.kind,
       name: body.name,
-      encryptedToken: encryptSecret(body.token),
+      encryptedToken: encryptSecret(body.token, `integration:${session.organizationId}`),
       tokenHint: maskSecret(body.token),
       config: {
         ...verifiedConfig,
@@ -140,7 +140,7 @@ export async function PATCH(request: Request) {
     )).limit(1);
     if (!current) throw new ApiError(404, "INTEGRATION_NOT_FOUND", "التكامل غير موجود.");
     await validateAgent(session.organizationId, body.agentId);
-    const token = body.token ?? decryptSecret(current.encryptedToken);
+    const token = body.token ?? decryptSecret(current.encryptedToken, `integration:${session.organizationId}`);
     const verifiedConfig = body.token ? await verifyIntegration(current.kind, token) : {};
     const previousAgentId = typeof current.config.agentId === "string" ? current.config.agentId : null;
     let config: Record<string, unknown> = {
@@ -165,7 +165,7 @@ export async function PATCH(request: Request) {
         ...(body.name === undefined ? {} : { name: body.name }),
         ...(body.enabled === undefined ? {} : { enabled: body.enabled }),
         ...(body.token === undefined ? {} : {
-          encryptedToken: encryptSecret(body.token),
+          encryptedToken: encryptSecret(body.token, `integration:${session.organizationId}`),
           tokenHint: maskSecret(body.token),
         }),
         config,

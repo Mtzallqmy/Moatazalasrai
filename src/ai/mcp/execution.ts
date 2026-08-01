@@ -3,7 +3,7 @@ import { and, count, eq, sql } from "drizzle-orm";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { db } from "@/db";
 import { mcpToolCallsRuntime } from "@/db/agent-runtime-schema";
-import { agentMcpTools, mcpServers, mcpTools, runs } from "@/db/schema";
+import { agentMcpTools, mcpServers, mcpTools } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
 import { decryptSecret } from "@/lib/security/encryption";
 import { maxTotalToolCallsPerRun } from "@/lib/ai-sdk/limits";
@@ -54,7 +54,7 @@ async function serverConnection(server: typeof mcpServers.$inferSelect) {
   }
   return {
     endpoint: server.endpoint,
-    bearerToken: server.encryptedBearerToken ? decryptSecret(server.encryptedBearerToken) : undefined,
+    bearerToken: server.encryptedBearerToken ? decryptSecret(server.encryptedBearerToken, `mcp:${server.organizationId}`) : undefined,
   };
 }
 

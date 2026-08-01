@@ -1,4 +1,5 @@
 import { ApiError } from "@/lib/http/api";
+import { validateProviderBaseUrl } from "@/lib/security/provider-network";
 
 export async function integrationFetch(
   url: string,
@@ -8,7 +9,8 @@ export async function integrationFetch(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, {
+    const safe = await validateProviderBaseUrl(url);
+    return await fetch(safe.normalizedUrl, {
       ...init,
       redirect: "error",
       cache: "no-store",
@@ -20,6 +22,7 @@ export async function integrationFetch(
       },
     });
   } catch (error) {
+    if (error instanceof ApiError) throw error;
     if (error instanceof Error && error.name === "AbortError") {
       throw new ApiError(504, "INTEGRATION_TIMEOUT", "انتهت مهلة الاتصال بخدمة التكامل.");
     }

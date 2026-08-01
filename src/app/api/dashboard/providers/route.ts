@@ -168,7 +168,7 @@ export async function POST(request: Request) {
       mapProviderError(error);
     }
 
-    const encryptedSecret = encryptSecret(body.apiKey);
+    const encryptedSecret = encryptSecret(body.apiKey, `provider:${session.organizationId}`);
     const created = await db().transaction(async (tx) => {
       const [credential] = await tx.insert(providerCredentials).values({
         organizationId: session.organizationId,
@@ -258,7 +258,7 @@ export async function PATCH(request: Request) {
         limit: 16,
         windowMs: 10 * 60_000,
       });
-      apiKey = body.apiKey ?? decryptSecret(current.encryptedSecret);
+      apiKey = body.apiKey ?? decryptSecret(current.encryptedSecret, `provider:${session.organizationId}`);
       const testModel = body.testModel ?? body.manualModel ?? current.discoveredModels[0];
       if (!testModel) throw new ApiError(400, "MODEL_TEST_REQUIRED", "اختر نموذج اختبار قبل إعادة فحص المزود.");
       try {
@@ -295,7 +295,7 @@ export async function PATCH(request: Request) {
           enabled: body.enabled ?? true,
         } : {}),
         ...(body.apiKey && apiKey ? {
-          encryptedSecret: encryptSecret(apiKey),
+          encryptedSecret: encryptSecret(apiKey, `provider:${session.organizationId}`),
           secretHint: maskSecret(apiKey),
         } : {}),
         updatedAt: now,

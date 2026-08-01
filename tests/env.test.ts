@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { env, resetEnvForTests } from "../src/lib/config/env";
 
 const originalValues = new Map<string, string | undefined>();
-const managedKeys = ["NODE_ENV", "DATABASE_URL", "CREDENTIAL_ENCRYPTION_KEY", "LOG_LEVEL", "APP_URL"] as const;
+const managedKeys = ["NODE_ENV", "DATABASE_URL", "CREDENTIAL_ENCRYPTION_KEY", "CREDENTIAL_ENCRYPTION_KEY_ID", "CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS", "LOG_LEVEL", "APP_URL"] as const;
 
 type ManagedKey = (typeof managedKeys)[number];
 
@@ -24,6 +24,8 @@ beforeEach(() => {
   setEnv("NODE_ENV", "test");
   setEnv("DATABASE_URL", "postgresql://user:pass@example.test/db?sslmode=require");
   setEnv("CREDENTIAL_ENCRYPTION_KEY", Buffer.alloc(32, 1).toString("base64"));
+  setEnv("CREDENTIAL_ENCRYPTION_KEY_ID", "current");
+  deleteEnv("CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS");
   setEnv("LOG_LEVEL", "info");
   deleteEnv("APP_URL");
   resetEnvForTests();
@@ -53,6 +55,11 @@ describe("runtime environment validation", () => {
 
   it("rejects an invalid encryption key", () => {
     setEnv("CREDENTIAL_ENCRYPTION_KEY", "not-a-32-byte-key");
+    expect(() => env()).toThrow("32-byte");
+  });
+
+  it("validates previous encryption keys used during rotation", () => {
+    setEnv("CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS", JSON.stringify({ old: "invalid" }));
     expect(() => env()).toThrow("32-byte");
   });
 
