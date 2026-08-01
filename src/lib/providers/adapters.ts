@@ -221,6 +221,14 @@ const openaiCompatible: ProviderAdapter = {
   ...openai,
   kind: "openai_compatible",
   defaultBaseUrl: "",
+  discoverModels(input) {
+    return discovery(
+      joinUrl(input.baseUrl, "models"),
+      { authorization: `Bearer ${input.apiKey}`, accept: "application/json", "x-client-request-id": input.requestId },
+      input,
+      (data) => modelIds(data),
+    );
+  },
   async generate(input) {
     const { data, headers } = await providerJson<{
       choices?: Array<{ message?: { content?: string } }>;
