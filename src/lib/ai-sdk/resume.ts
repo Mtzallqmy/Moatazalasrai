@@ -140,7 +140,7 @@ export async function resumeAgentRunAfterApproval(input: {
       candidate: {
         providerCredentialId: credential.id,
         provider: credential.provider,
-        apiKey: decryptSecret(credential.encryptedSecret),
+        apiKey: decryptSecret(credential.encryptedSecret, `provider:${input.organizationId}`),
         baseUrl: credential.baseUrl,
         model: state.model,
         capabilities: {

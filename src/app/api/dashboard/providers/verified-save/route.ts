@@ -78,7 +78,7 @@ export async function POST(request: Request) {
         provider: body.provider,
         name: body.name,
         baseUrl: validation.normalizedBaseUrl,
-        encryptedSecret: encryptSecret(body.apiKey),
+        encryptedSecret: encryptSecret(body.apiKey, `provider:${session.organizationId}`),
         secretHint: maskSecret(body.apiKey),
         discoveredModels: validation.models,
         validationStatus: "verified",

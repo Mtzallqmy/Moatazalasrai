@@ -78,8 +78,9 @@ export async function GET(request: Request) {
     }),
     runCheck("encryption", () => {
       const sample = `diagnostic-${crypto.randomUUID()}`;
-      const envelope = encryptSecret(sample);
-      if (decryptSecret(envelope) !== sample) throw new Error("فشل تحقق التشفير");
+      const context = `diagnostics:${session.organizationId}`;
+      const envelope = encryptSecret(sample, context);
+      if (decryptSecret(envelope, context) !== sample) throw new Error("فشل تحقق التشفير");
       return "AES-256-GCM يعمل بصورة صحيحة";
     }),
     runCheck("session", () => `جلسة صالحة للمستخدم ${session.email}`),

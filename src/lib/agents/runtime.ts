@@ -560,7 +560,7 @@ export async function executeAgentRun(input: {
           candidate: {
             providerCredentialId: candidate.credential.id,
             provider: candidate.credential.provider,
-            apiKey: decryptSecret(candidate.credential.encryptedSecret),
+            apiKey: decryptSecret(candidate.credential.encryptedSecret, `provider:${input.organizationId}`),
             baseUrl: candidate.credential.baseUrl,
             model: candidate.model,
             capabilities: candidate.capabilities,
@@ -709,7 +709,7 @@ export async function* streamAgentRun(input: {
           candidate: {
             providerCredentialId: candidate.credential.id,
             provider: candidate.credential.provider,
-            apiKey: decryptSecret(candidate.credential.encryptedSecret),
+            apiKey: decryptSecret(candidate.credential.encryptedSecret, `provider:${input.organizationId}`),
             baseUrl: candidate.credential.baseUrl,
             model: candidate.model,
             capabilities: candidate.capabilities,

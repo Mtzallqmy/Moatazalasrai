@@ -5,6 +5,8 @@ type RuntimeEnvironment = {
   nodeEnv: NodeEnvironment;
   databaseUrl: string;
   credentialEncryptionKey: string;
+  credentialEncryptionKeyId: string;
+  credentialEncryptionPreviousKeys: Readonly<Record<string, string>>;
   bootstrapAdminToken?: string;
   appUrl?: string;
   logLevel: LogLevel;
@@ -36,6 +38,29 @@ function validateEncryptionKey(value: string): string {
   return value;
 }
 
+function encryptionKeyId(value: string | undefined): string {
+  const id = value?.trim() || "primary";
+  if (!/^[A-Za-z0-9_-]{1,40}$/.test(id)) throw new Error("CREDENTIAL_ENCRYPTION_KEY_ID is invalid.");
+  return id;
+}
+
+function previousEncryptionKeys(value: string | undefined): Readonly<Record<string, string>> {
+  if (!value?.trim()) return {};
+  let parsed: unknown;
+  try { parsed = JSON.parse(value); } catch { throw new Error("CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS must be valid JSON."); }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS must be a key/value object.");
+  }
+  const keys: Record<string, string> = {};
+  for (const [id, key] of Object.entries(parsed)) {
+    if (!/^[A-Za-z0-9_-]{1,40}$/.test(id) || typeof key !== "string") {
+      throw new Error("CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS contains an invalid entry.");
+    }
+    keys[id] = validateEncryptionKey(key);
+  }
+  return keys;
+}
+
 export function env(): RuntimeEnvironment {
   if (cached) return cached;
 
@@ -52,6 +77,8 @@ export function env(): RuntimeEnvironment {
     nodeEnv,
     databaseUrl: required("DATABASE_URL"),
     credentialEncryptionKey: validateEncryptionKey(required("CREDENTIAL_ENCRYPTION_KEY")),
+    credentialEncryptionKeyId: encryptionKeyId(process.env.CREDENTIAL_ENCRYPTION_KEY_ID),
+    credentialEncryptionPreviousKeys: previousEncryptionKeys(process.env.CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS),
     logLevel: parseLogLevel(process.env.LOG_LEVEL),
   };
 

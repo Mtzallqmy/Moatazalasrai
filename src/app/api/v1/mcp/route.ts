@@ -140,7 +140,7 @@ export async function POST(request: Request) {
         organizationId: principal.organizationId,
         name: body.name,
         endpoint,
-        encryptedBearerToken: body.bearerToken ? encryptSecret(body.bearerToken) : null,
+        encryptedBearerToken: body.bearerToken ? encryptSecret(body.bearerToken, `mcp:${principal.organizationId}`) : null,
         tokenHint: body.bearerToken ? maskSecret(body.bearerToken) : null,
       }).returning({ id: mcpServers.id });
       if (!created) throw new Error("MCP_SERVER_CREATE_FAILED");

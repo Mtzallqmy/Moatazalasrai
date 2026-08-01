@@ -74,14 +74,21 @@ export async function rotateMobileSession(refreshToken: string) {
   const nextRefreshToken = token("mrt");
   const accessExpiresAt = expiresIn(ACCESS_MINUTES * 60_000);
   const refreshExpiresAt = expiresIn(REFRESH_DAYS * 24 * 60 * 60_000);
-  await db().update(mobileSessions).set({
+  const [rotated] = await db().update(mobileSessions).set({
     accessTokenHash: hashApiKey(accessToken),
     accessExpiresAt,
     refreshTokenHash: hashApiKey(nextRefreshToken),
     refreshExpiresAt,
     lastUsedAt: new Date(),
     updatedAt: new Date(),
-  }).where(and(eq(mobileSessions.id, current.id), eq(mobileSessions.refreshTokenHash, hashApiKey(refreshToken))));
+  }).where(and(
+    eq(mobileSessions.id, current.id),
+    eq(mobileSessions.refreshTokenHash, hashApiKey(refreshToken)),
+    isNull(mobileSessions.revokedAt),
+  )).returning({ id: mobileSessions.id });
+  if (!rotated) {
+    throw new ApiError(401, "REFRESH_TOKEN_REUSED", "استُخدم رمز تحديث مستبدل. سجّل الدخول مجددًا لحماية الجهاز.");
+  }
   return {
     sessionId: current.id,
     accessToken,

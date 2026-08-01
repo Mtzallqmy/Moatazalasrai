@@ -33,12 +33,12 @@
 
 ## المتطلبات
 
-- Node.js 20.11 أو أحدث.
+- Node.js `22.18.0` بالضبط (راجع `.nvmrc`).
 - خدمة PostgreSQL داخل مشروع Railway نفسه.
 - مفتاح تشفير 32 بايت بصيغة Base64.
 
 ```bash
-npm install
+npm ci
 cp .env.example .env
 npm run db:migrate
 npm run dev
@@ -52,6 +52,8 @@ npm run dev
 |---|---:|---|
 | `DATABASE_URL` | نعم | مرجع اتصال PostgreSQL الذي يحقنه Railway وقت التشغيل، ولا يُستخدم أثناء build |
 | `CREDENTIAL_ENCRYPTION_KEY` | نعم | مفتاح Base64 بطول 32 بايت لتشفير مفاتيح المزودات |
+| `CREDENTIAL_ENCRYPTION_KEY_ID` | نعم | معرّف ثابت لنسخة المفتاح الحالية داخل envelope |
+| `CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS` | أثناء التدوير | JSON لمفاتيح القراءة القديمة خلال نافذة الانتقال |
 | `APP_URL` | في الإنتاج | أصل HTTPS الموثوق لحماية CSRF |
 | `BOOTSTRAP_ADMIN_TOKEN` | اختياري | تهيئة API للمنصة مرة واحدة؛ التسجيل العادي لا يحتاجه |
 | `LOG_LEVEL` | لا | `debug` أو `info` أو `warn` أو `error` |
@@ -70,7 +72,7 @@ npm run dev
 openssl rand -base64 32
 ```
 
-لا تغيّر `CREDENTIAL_ENCRYPTION_KEY` بعد حفظ مزودات دون خطة لإعادة تشفير الأسرار.
+لا تغيّر `CREDENTIAL_ENCRYPTION_KEY` مباشرة. اتبع [دليل التشغيل](docs/OPERATIONS_RUNBOOK.md) واستخدم `npm run secrets:reencrypt`.
 
 ## قاعدة البيانات
 
@@ -152,6 +154,11 @@ npm run test:e2e
 - [خريطة الواجهة إلى الباكند](docs/UI_BACKEND_MAP.md)
 - [التدقيق والقيود](docs/CURRENT_STATE_AUDIT.md)
 - [تقرير التسليم والتحقق](docs/DELIVERY_REPORT.md)
+- [سجل التدقيق الشامل](docs/FULL_PLATFORM_AUDIT.md)
+- [دليل التشغيل](docs/OPERATIONS_RUNBOOK.md)
+- [الاستجابة للحوادث](docs/INCIDENT_RESPONSE.md)
+- [النسخ والاستعادة](docs/BACKUP_AND_RESTORE.md)
+- [نموذج التهديد](docs/THREAT_MODEL.md)
 
 ## قيود حقيقية
 

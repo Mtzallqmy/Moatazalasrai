@@ -45,7 +45,7 @@ function maxMcpPayloadBytes() {
 }
 
 async function serverSecret(server: typeof mcpServers.$inferSelect) {
-  return server.encryptedBearerToken ? decryptSecret(server.encryptedBearerToken) : undefined;
+  return server.encryptedBearerToken ? decryptSecret(server.encryptedBearerToken, `mcp:${server.organizationId}`) : undefined;
 }
 
 function oauthCallbackUrl(serverId: string, origin?: string) {

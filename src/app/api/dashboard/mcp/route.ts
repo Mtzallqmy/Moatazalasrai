@@ -96,7 +96,7 @@ export async function POST(request: Request) {
       const endpoint = (await validateProviderBaseUrl(body.endpoint)).normalizedUrl;
       const [created] = await db().insert(mcpServers).values({
         organizationId: session.organizationId, name: body.name, endpoint,
-        encryptedBearerToken: body.bearerToken ? encryptSecret(body.bearerToken) : null,
+        encryptedBearerToken: body.bearerToken ? encryptSecret(body.bearerToken, `mcp:${session.organizationId}`) : null,
         tokenHint: body.bearerToken ? maskSecret(body.bearerToken) : null,
       }).returning({ id: mcpServers.id });
       if (!created) throw new Error("MCP_SERVER_CREATE_FAILED");

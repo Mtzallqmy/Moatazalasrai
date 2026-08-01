@@ -2,9 +2,9 @@
 
 ## Worker مستقل على Railway
 
-أنشئ خدمة ثانية من المستودع نفسه، دون pre-deploy migration، واجعل Start Command هو `npm run worker`. اضبط `AI_WORKER_ENABLED=true` فيها فقط. تبقي خدمة Web الأمر `npm run db:migrate` في pre-deploy و`npm start` للتشغيل.
+أنشئ خدمة ثانية من المستودع نفسه، دون pre-deploy migration، واجعل Start Command هو `npm run worker`. اضبط `AI_WORKER_ENABLED=true` فيها فقط. تبقي خدمة Web الأمر `npm run db:migrate:all` في pre-deploy و`npm start` للتشغيل.
 
-ابدأ بـWorker replica واحدة. تشترك الخدمتان في `DATABASE_URL` و`CREDENTIAL_ENCRYPTION_KEY` الثابت. انشر أولًا والميزات معطلة، تحقق من `/api/health` و`/api/ready`، ثم فعّل RAG والأدوات والذاكرة تدريجيًا.
+ابدأ بـWorker replica واحدة. تشترك الخدمتان في `DATABASE_URL` وجميع متغيرات keyring نفسها. انشر أولًا والميزات معطلة، تحقق من `/api/health` و`/api/ready`، ثم فعّل RAG والأدوات والذاكرة تدريجيًا.
 
 للرجوع: عطّل Feature Flags، أوقف Worker، وأعد نشر Web commit السابق. لا تحذف الجداول أثناء الاستجابة للحادث.
 
@@ -33,7 +33,7 @@ docker run --rm -p 3000:3000 --env-file .env moataz-agent-platform
 - في خدمة التطبيق، اجعل `DATABASE_URL` مرجعًا إلى متغير خدمة PostgreSQL (عادةً `${{Postgres.DATABASE_URL}}`) بدل نسخ بيانات الاتصال يدويًا.
 - اضبط `APP_URL`, `CREDENTIAL_ENCRYPTION_KEY` و`NODE_ENV=production`.
 - يستخدم التطبيق مشغّل PostgreSQL TCP مباشرًا ومتوافقًا مع عنوان Railway الداخلي.
-- يشغّل `railway.json` الأمر `npm run db:migrate` كـPre-deploy Command مرة واحدة قبل بدء النسخة الجديدة.
+- يشغّل `railway.json` الأمر `npm run db:migrate:all` كـPre-deploy Command مرة واحدة قبل بدء النسخة الجديدة.
 - بعد نجاح الـmigration يبدأ التطبيق، ثم يستخدم Railway `/api/ready` قبل تحويل المرور.
 - إذا فشلت خطوة Pre-deploy فتحقق من `DATABASE_URL` وسجل migration؛ لا تستبدل readiness بفحص سطحي لإخفاء قاعدة غير مهيأة.
 - يمكن زيادة مهلة جملة migration عبر `MIGRATION_TIMEOUT_MS` عند وجود قاعدة بعيدة بطيئة.

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Hardened web/mobile sessions with organization-switch rotation, idle expiry, and atomic refresh-token reuse rejection.
+- Added AES-256-GCM v2 envelopes with contextual AAD, key IDs, previous-key reads, and an auditable resumable re-encryption command.
+- Fail-closed empty API-key scopes after an additive compatibility backfill.
+- Applied the outbound SSRF policy to integration adapters and nonce-based CSP to Next.js responses.
+- Pinned Node 22.18.0 and GitHub Actions, blocked debug-signed Android releases, and added a high-severity production dependency audit.
+- Added the full platform audit, threat model, operations, incident, backup/restore, ADR, and contribution runbooks.
+
 - Added an original eight-template agent library for task execution, app architecture, research, software engineering, GitHub review, data, documents, and operations.
 - Added the `member` role for public users while preserving all existing owner/admin memberships; public registration now joins the designated platform organization without granting administrative access.
 - Added per-user conversation ownership and member-scoped file access to prevent cross-member IDOR inside a shared organization.

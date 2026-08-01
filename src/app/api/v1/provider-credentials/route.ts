@@ -115,7 +115,7 @@ export async function POST(request: Request) {
       requestId,
       signal: request.signal,
     });
-    const encryptedSecret = encryptSecret(body.apiKey);
+    const encryptedSecret = encryptSecret(body.apiKey, `provider:${principal.organizationId}`);
     const [created] = await db().insert(providerCredentials).values({
       organizationId: principal.organizationId,
       provider: body.provider,
@@ -189,7 +189,7 @@ export async function PATCH(request: Request) {
     let discovery: Awaited<ReturnType<typeof validateProvider>> | undefined;
     let apiKey: string | undefined;
     if (connectionChanged) {
-      apiKey = body.apiKey ?? decryptSecret(current.encryptedSecret);
+      apiKey = body.apiKey ?? decryptSecret(current.encryptedSecret, `provider:${principal.organizationId}`);
       const testModel = body.testModel ?? body.manualModel ?? current.discoveredModels[0];
       if (!testModel) throw new ApiError(400, "MODEL_TEST_REQUIRED", "يلزم نموذج اختبار.");
       discovery = await validateProvider({
@@ -222,7 +222,7 @@ export async function PATCH(request: Request) {
         enabled: body.enabled ?? true,
       } : {}),
       ...(body.apiKey && apiKey ? {
-        encryptedSecret: encryptSecret(apiKey),
+        encryptedSecret: encryptSecret(apiKey, `provider:${principal.organizationId}`),
         secretHint: maskSecret(apiKey),
       } : {}),
       updatedAt: new Date(),

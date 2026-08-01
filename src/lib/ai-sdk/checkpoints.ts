@@ -58,7 +58,7 @@ export async function saveRunCheckpoint(input: {
       organizationId: input.organizationId,
       runId: input.runId,
       version,
-      encryptedState: encryptSecret(JSON.stringify(parsed)),
+      encryptedState: encryptSecret(JSON.stringify(parsed), `checkpoint:${input.organizationId}:${input.runId}`),
       expiresAt,
     }).returning();
     if (!checkpoint) throw new Error("RUN_CHECKPOINT_CREATE_FAILED");
@@ -83,7 +83,7 @@ export async function loadRunCheckpoint(organizationId: string, runId: string) {
   try {
     return {
       checkpoint,
-      state: checkpointSchema.parse(JSON.parse(decryptSecret(checkpoint.encryptedState))),
+      state: checkpointSchema.parse(JSON.parse(decryptSecret(checkpoint.encryptedState, `checkpoint:${organizationId}:${runId}`))),
     };
   } catch {
     throw new ApiError(409, "RUN_CHECKPOINT_INVALID", "تعذر قراءة نقطة استئناف التشغيل بأمان.");

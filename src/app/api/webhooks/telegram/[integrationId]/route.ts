@@ -114,7 +114,7 @@ async function githubCommand(organizationId: string, command: string) {
     eq(integrations.status, "verified"),
   )).limit(1);
   if (!github) return "لم يُفعّل تكامل GitHub لهذه المؤسسة.";
-  const token = decryptSecret(github.encryptedToken);
+  const token = decryptSecret(github.encryptedToken, `integration:${organizationId}`);
   const readMatch = command.match(/^\/github\s+read\s+([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\s+(\S+)(?:\s+(\S+))?$/);
   if (readMatch) {
     const [, owner, repo, path, ref] = readMatch;
@@ -137,7 +137,7 @@ async function processUpdate(input: {
   update: TelegramUpdate;
   updateRowId: string;
 }) {
-  const token = decryptSecret(input.integration.encryptedToken);
+  const token = decryptSecret(input.integration.encryptedToken, `integration:${input.integration.organizationId}`);
   const message = input.update.message;
   const chatIdValue = message?.chat?.id;
   if (!message || chatIdValue === undefined) {

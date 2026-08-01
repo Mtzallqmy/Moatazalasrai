@@ -8,7 +8,7 @@ import type {
   OAuthClientMetadata,
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { mcpServers } from "@/db/schema";
 import { decryptSecret, encryptSecret } from "@/lib/security/encryption";
@@ -28,12 +28,12 @@ type StoredOAuthData = {
 
 type OAuthServerRow = Pick<
   typeof mcpServers.$inferSelect,
-  "id" | "endpoint" | "encryptedOauthData"
+  "id" | "organizationId" | "endpoint" | "encryptedOauthData"
 >;
 
 function parseStoredData(server: OAuthServerRow, redirectUri: string): StoredOAuthData {
   if (!server.encryptedOauthData) return { redirectUri };
-  const parsed = JSON.parse(decryptSecret(server.encryptedOauthData)) as StoredOAuthData;
+  const parsed = JSON.parse(decryptSecret(server.encryptedOauthData, `mcp-oauth:${server.organizationId}`)) as StoredOAuthData;
   return { ...parsed, redirectUri: parsed.redirectUri || redirectUri };
 }
 
@@ -173,7 +173,7 @@ export class DatabaseMcpOAuthProvider implements OAuthClientProvider {
       ? new Date(Date.now() + Math.max(0, expiresIn - 30) * 1_000)
       : null;
     await db().update(mcpServers).set({
-      encryptedOauthData: encryptSecret(JSON.stringify(this.data)),
+      encryptedOauthData: encryptSecret(JSON.stringify(this.data), `mcp-oauth:${this.server.organizationId}`),
       oauthScopes: this.data.tokens?.scope ?? HIGGSFIELD_OAUTH_SCOPES,
       oauthExpiresAt,
       ...(connected ? {
@@ -182,6 +182,9 @@ export class DatabaseMcpOAuthProvider implements OAuthClientProvider {
         status: "connected",
       } : {}),
       updatedAt: new Date(),
-    }).where(eq(mcpServers.id, this.server.id));
+    }).where(and(
+      eq(mcpServers.id, this.server.id),
+      eq(mcpServers.organizationId, this.server.organizationId),
+    ));
   }
 }

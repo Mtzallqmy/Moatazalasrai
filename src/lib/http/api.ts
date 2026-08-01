@@ -116,10 +116,17 @@ export function assertSameOrigin(request: Request) {
     throw new ApiError(403, "CSRF_REJECTED", "تعذر التحقق من مصدر الطلب.");
   }
 
-  const requestUrl = new URL(request.url);
-  const configured = process.env.APP_URL?.trim();
-  const expected = configured ? new URL(configured).origin : requestUrl.origin;
-  if (new URL(origin).origin !== expected) {
+  let suppliedOrigin: string;
+  let expected: string;
+  try {
+    const requestUrl = new URL(request.url);
+    const configured = process.env.APP_URL?.trim();
+    expected = configured ? new URL(configured).origin : requestUrl.origin;
+    suppliedOrigin = new URL(origin).origin;
+  } catch {
+    throw new ApiError(403, "CSRF_REJECTED", "تعذر التحقق من مصدر الطلب.");
+  }
+  if (suppliedOrigin !== expected) {
     throw new ApiError(403, "CSRF_REJECTED", "تم رفض الطلب لأن مصدره غير موثوق.");
   }
 }

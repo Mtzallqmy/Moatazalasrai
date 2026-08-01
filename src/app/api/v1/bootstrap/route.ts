@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { db } from "@/db";
 import { auditLogs, organizations, platformApiKeys } from "@/db/schema";
-import { bootstrapAuthorized } from "@/lib/auth/api-key";
+import { ALL_API_SCOPES, bootstrapAuthorized } from "@/lib/auth/api-key";
 import { ApiError, apiFailure, apiSuccess, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { platformBootstrapSchema } from "@/lib/http/contracts";
 import { hashApiKey } from "@/lib/security/encryption";
@@ -21,6 +21,7 @@ export async function POST(request: Request) {
         name: "Initial administrator key",
         keyHash: hashApiKey(rawKey),
         keyPrefix: rawKey.slice(0, 12),
+        scopes: [...ALL_API_SCOPES],
       }).returning();
       if (!apiKey) throw new Error("API_KEY_CREATE_FAILED");
       await tx.insert(auditLogs).values({

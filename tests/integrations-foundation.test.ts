@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { ALLOWED_ATTACHMENT_TYPES, MAX_ATTACHMENT_BYTES } from "@/lib/storage/attachments";
+import { integrationFetch } from "@/lib/integrations/http";
 
 describe("integration and native API foundation", () => {
   it("uses an additive migration with tenant isolation and Telegram idempotency", async () => {
@@ -10,6 +11,14 @@ describe("integration and native API foundation", () => {
     expect(migration).toContain('"telegram_updates_integration_update_unique_idx"');
     expect(migration).toContain('"attachments_size_check"');
     expect(migration).not.toMatch(/DROP TABLE|TRUNCATE/i);
+  });
+
+  it("migrates legacy API keys to explicit scopes before fail-closing empty scopes", async () => {
+    const migration = await readFile("drizzle/0020_explicit_api_key_scopes.sql", "utf8");
+    const auth = await readFile("src/lib/auth/api-key.ts", "utf8");
+    expect(migration).toContain("UPDATE \"platform_api_keys\"");
+    expect(migration).not.toMatch(/DROP TABLE|DROP COLUMN|TRUNCATE/i);
+    expect(auth).not.toContain("key.scopes.length ? key.scopes");
   });
 
   it("enforces bounded attachment storage", () => {
@@ -33,5 +42,11 @@ describe("integration and native API foundation", () => {
     expect(telegram).toContain("https://api.telegram.org/");
     expect(github).toContain('const GITHUB_API = "https://api.github.com"');
     expect(github).toContain('path.includes("..")');
+  });
+
+  it("blocks private integration targets before making a network request", async () => {
+    await expect(integrationFetch("https://127.0.0.1/internal", {})).rejects.toMatchObject({
+      code: "PRIVATE_ADDRESS_FORBIDDEN",
+    });
   });
 });

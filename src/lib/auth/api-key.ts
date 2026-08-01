@@ -16,6 +16,19 @@ export type ApiScope =
   | "mcp:read" | "mcp:write"
   | "teams:read" | "teams:write";
 
+export const ALL_API_SCOPES = [
+  "agents:read", "agents:write", "chat:write", "conversations:read", "conversations:write",
+  "files:read", "files:write", "runs:read", "runs:write", "integrations:read",
+  "integrations:write", "providers:read", "providers:write", "github:read",
+  "mcp:read", "mcp:write", "teams:read", "teams:write",
+] as const satisfies readonly ApiScope[];
+
+const apiScopeSet = new Set<string>(ALL_API_SCOPES);
+
+export function normalizeApiScopes(scopes: readonly string[]): ApiScope[] {
+  return [...new Set(scopes.filter((scope): scope is ApiScope => apiScopeSet.has(scope)))];
+}
+
 export type ApiPrincipal = {
   organizationId: string;
   apiKeyId: string;
@@ -51,12 +64,7 @@ export async function authenticateApiKey(request: Request): Promise<ApiPrincipal
       kind: "api_key",
       userId: key.createdByUserId,
       role: null,
-      scopes: (key.scopes.length ? key.scopes : [
-        "agents:read", "agents:write", "chat:write", "conversations:read", "conversations:write",
-        "files:read", "files:write", "runs:read", "runs:write", "integrations:read",
-        "integrations:write", "providers:read", "providers:write", "github:read",
-        "mcp:read", "mcp:write", "teams:read", "teams:write",
-      ]) as ApiScope[],
+      scopes: normalizeApiScopes(key.scopes),
     };
   }
 
