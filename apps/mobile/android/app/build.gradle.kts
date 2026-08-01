@@ -10,6 +10,7 @@ plugins {
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("key.properties")
 val hasReleaseKeystore = keystorePropertiesFile.exists()
+val allowDebugReleaseSigning = System.getenv("ALLOW_DEBUG_RELEASE_SIGNING") == "true"
 if (hasReleaseKeystore) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
@@ -48,9 +49,11 @@ android {
         release {
             signingConfig = if (hasReleaseKeystore) {
                 signingConfigs.getByName("release")
-            } else {
-                // يبقي البناء اليدوي قابلًا للتثبيت؛ إصدارات GitHub الموثوقة تستخدم أسرار التوقيع.
+            } else if (allowDebugReleaseSigning) {
+                // CI compilation check only. The production release workflow never enables this flag.
                 signingConfigs.getByName("debug")
+            } else {
+                throw GradleException("Release keystore is required. Set ALLOW_DEBUG_RELEASE_SIGNING=true only for a non-published CI compilation check.")
             }
         }
     }

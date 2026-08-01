@@ -29,13 +29,13 @@ jobs:
       run:
         working-directory: apps/mobile
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: "17"
           cache: gradle
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           flutter-version: "3.44.7"
           channel: stable
@@ -47,6 +47,8 @@ jobs:
       - name: Test
         run: flutter test
       - name: Verify arm64 release build
+        env:
+          ALLOW_DEBUG_RELEASE_SIGNING: "true"
         run: >-
           flutter build apk
           --release

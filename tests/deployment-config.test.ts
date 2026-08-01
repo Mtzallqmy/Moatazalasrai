@@ -59,4 +59,35 @@ describe("Railway deployment configuration", () => {
     expect(migrationSource).toContain("sql.begin");
     expect(workerMigrationSource).toContain("runMigrations");
   });
+
+  it("pins the same Node runtime across local, package, CI, and Docker", async () => {
+    const packageJson = JSON.parse(await readFile("package.json", "utf8")) as { engines?: { node?: string } };
+    const [nvmrc, docker, ci] = await Promise.all([
+      readFile(".nvmrc", "utf8"),
+      readFile("Dockerfile", "utf8"),
+      readFile(".github/workflows/ci.yml", "utf8"),
+    ]);
+    expect(packageJson.engines?.node).toBe("22.18.0");
+    expect(nvmrc.trim()).toBe("22.18.0");
+    expect(docker).toContain("ARG NODE_VERSION=22.18.0");
+    expect(ci).toContain("node-version: 22.18.0");
+  });
+
+  it("pins actions and refuses an unsigned production Android release", async () => {
+    const workflows = await Promise.all([
+      "ci.yml", "android-ci.yml", "android-release.yml", "sync-mobile-openapi.yml",
+    ].map((name) => readFile(`.github/workflows/${name}`, "utf8")));
+    expect(workflows.join("\n")).not.toMatch(/uses:\s+[^\s]+@v\d/);
+    const release = workflows[2];
+    const gradle = await readFile("apps/mobile/android/app/build.gradle.kts", "utf8");
+    expect(release).toContain("Production release signing secrets are required");
+    expect(gradle).toContain("ALLOW_DEBUG_RELEASE_SIGNING");
+    expect(gradle).toContain("Release keystore is required");
+  });
+
+  it("rotates the web session at the organization trust boundary", async () => {
+    const session = await readFile("src/lib/auth/session.ts", "utf8");
+    expect(session).toContain("tokenHash: hashToken(nextToken)");
+    expect(session).toContain("SESSION_IDLE_DAYS = 7");
+  });
 });
