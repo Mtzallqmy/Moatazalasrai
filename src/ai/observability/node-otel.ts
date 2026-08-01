@@ -43,6 +43,9 @@ export async function startNodeTelemetry(serviceName: string) {
     await sdk.shutdown();
   };
   state.__moatazOtelServices.set(serviceName, shutdown);
+  const stop = () => { void shutdown().catch(() => undefined); };
+  process.once("SIGTERM", stop);
+  process.once("SIGINT", stop);
   console.info(JSON.stringify({ level: "info", event: "otel.started", serviceName }));
   return shutdown;
 }

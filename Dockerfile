@@ -1,11 +1,12 @@
 # ---- deps ----
-FROM node:22-alpine AS deps
+ARG NODE_VERSION=22.18.0
+FROM node:${NODE_VERSION}-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
 # ---- build ----
-FROM node:22-alpine AS builder
+FROM node:${NODE_VERSION}-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -13,7 +14,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN mkdir -p public && npm run build
 
 # ---- run ----
-FROM node:22-alpine AS runner
+FROM node:${NODE_VERSION}-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
