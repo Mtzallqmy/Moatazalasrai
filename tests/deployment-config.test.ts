@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 type RailwayConfig = {
@@ -75,14 +75,22 @@ describe("Railway deployment configuration", () => {
 
   it("pins actions and refuses an unsigned production Android release", async () => {
     const workflows = await Promise.all([
-      "ci.yml", "android-ci.yml", "android-release.yml", "sync-mobile-openapi.yml",
+      "ci.yml", "android-ci.yml", "android-release.yml",
     ].map((name) => readFile(`.github/workflows/${name}`, "utf8")));
     expect(workflows.join("\n")).not.toMatch(/uses:\s+[^\s]+@v\d/);
     const release = workflows[2];
     const gradle = await readFile("apps/mobile/android/app/build.gradle.kts", "utf8");
+    expect(release).toContain("Validate release prerequisites");
     expect(release).toContain("Production release signing secrets are required");
+    expect(release).toContain('--retry 4 --retry-delay 5 --retry-all-errors');
+    expect(release).toMatch(/push:\s+tags:\s+- "android-v\*"/);
+    expect(release).not.toMatch(/push:\s+branches:\s+- main/);
     expect(gradle).toContain("ALLOW_DEBUG_RELEASE_SIGNING");
     expect(gradle).toContain("Release keystore is required");
+  });
+
+  it("does not retain the obsolete self-modifying contract workflow", async () => {
+    await expect(access(".github/workflows/sync-mobile-openapi.yml")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("rotates the web session at the organization trust boundary", async () => {

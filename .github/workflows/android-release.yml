@@ -14,17 +14,8 @@ on:
         default: "https://moatazbot.duckdns.org"
         type: string
   push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/android-release.yml"
-      - "apps/mobile/**"
-      - "src/app/api/mobile/**"
-      - "src/app/api/v1/**"
-      - "src/ai/mcp/**"
-      - "src/db/mcp-catalog-schema.ts"
-      - "drizzle/0012_mcp_full_catalog.sql"
-      - "src/lib/http/contracts.ts"
+    tags:
+      - "android-v*"
 
 permissions:
   contents: write
@@ -47,6 +38,23 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Validate release prerequisites
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+        run: |
+          missing=()
+          for name in KEYSTORE_BASE64 KEY_ALIAS KEY_PASSWORD STORE_PASSWORD; do
+            if [[ -z "${!name}" ]]; then missing+=("${name}"); fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            echo "Missing required Android release signing secrets: ${missing[*]}" >&2
+            exit 1
+          fi
 
       - name: Set up Java
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
@@ -92,7 +100,8 @@ jobs:
         shell: bash
         run: |
           curl --fail --silent --show-error \
-            --connect-timeout 15 --max-time 30 \
+            --retry 4 --retry-delay 5 --retry-all-errors \
+            --connect-timeout 10 --max-time 30 \
             "${{ steps.release.outputs.api_base_url }}/api/health" >/dev/null
 
       - name: Install dependencies
