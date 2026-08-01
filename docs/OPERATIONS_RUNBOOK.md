@@ -44,4 +44,3 @@ Rollback للكود آمن ما دامت migrations additive. لا تحذف `002
 4. ضع المفتاح الجديد في `CREDENTIAL_ENCRYPTION_KEY` وID جديدًا، وضع القديم في JSON `CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS` على web وworker معًا.
 5. شغّل الأداة ثانية، ثم smoke tests للمزودات وMCP والتكاملات.
 6. أبقِ القديم خلال نافذة rollback. لا تحذفه قبل فحص عدم وجود envelope بالـID القديم ونجاح backup جديد.
-

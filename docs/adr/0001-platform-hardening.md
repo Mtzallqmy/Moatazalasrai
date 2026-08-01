@@ -9,4 +9,3 @@
 - CI: Node 22.18.0 موحد، Actions مثبتة SHA، وإصدار Android يفشل دون keystore إنتاجي.
 
 البدائل المرفوضة: RLS الفوري قبل اختبار Worker/admin، migration مدمرة، fallback مزود صامت يغير الخصوصية/التكلفة، أو توقيع debug لإصدار منشور.
-

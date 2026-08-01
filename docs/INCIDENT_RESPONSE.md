@@ -22,4 +22,3 @@
 ## فشل migration أو ارتفاع أخطاء
 
 - أوقف rollout، قارن request IDs وerror codes، تحقق من readiness/pool/queue، ثم rollback للكود مع إبقاء migrations additive. الاستعادة من backup قرار قائد الحادثة بعد إثبات فساد البيانات.
-
