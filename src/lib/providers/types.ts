@@ -15,6 +15,7 @@ export type ProviderRequest = {
   signal?: AbortSignal;
   requestId: string;
   organizationId?: string;
+  providerKind?: ProviderKind;
 };
 
 export type ProviderUsage = {
@@ -49,7 +50,7 @@ export type ProviderAdapter = {
   kind: ProviderKind;
   defaultBaseUrl: string;
   capabilities: ProviderCapabilities;
-  discoverModels(input: { apiKey: string; baseUrl: string; signal?: AbortSignal; requestId: string; organizationId?: string }): Promise<DiscoveryResult>;
+  discoverModels(input: { apiKey: string; baseUrl: string; signal?: AbortSignal; requestId: string; organizationId?: string; providerKind?: ProviderKind }): Promise<DiscoveryResult>;
   testModel(input: ProviderRequest): Promise<ProviderResult>;
   generate(input: ProviderRequest): Promise<ProviderResult>;
   stream(input: ProviderRequest): AsyncGenerator<ProviderStreamChunk>;
