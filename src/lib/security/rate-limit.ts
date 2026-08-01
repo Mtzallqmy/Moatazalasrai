@@ -3,14 +3,14 @@ import { rateLimits } from "@/db/schema";
 import { db } from "@/db";
 import { ApiError } from "@/lib/http/api";
 import { sql } from "drizzle-orm";
+import { clientIp } from "@/lib/security/client-ip";
 
 function hashKey(value: string) {
   return createHash("sha256").update(value).digest("hex");
 }
 
 export function requestClientKey(request: Request, fallback = "anonymous") {
-  const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return forwarded || request.headers.get("cf-connecting-ip") || fallback;
+  return clientIp(request).address ?? fallback;
 }
 
 export async function enforceRateLimit(input: {

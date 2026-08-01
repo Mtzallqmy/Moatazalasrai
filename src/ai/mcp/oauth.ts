@@ -15,7 +15,7 @@ import { decryptSecret, encryptSecret } from "@/lib/security/encryption";
 
 export const HIGGSFIELD_MCP_ENDPOINT = "https://mcp.higgsfield.ai/mcp";
 export const HIGGSFIELD_OAUTH_SCOPES = "openid email offline_access";
-export const DEFAULT_APP_URL = "https://moatazbot.duckdns.org";
+export const DEFAULT_APP_URL = "https://moatazalalqami.online";
 
 type StoredOAuthData = {
   redirectUri: string;

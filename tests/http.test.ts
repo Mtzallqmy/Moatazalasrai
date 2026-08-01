@@ -40,6 +40,13 @@ describe("HTTP safety helpers", () => {
     const policy = response.headers.get("content-security-policy") ?? "";
     expect(policy).toMatch(/script-src 'self' 'nonce-[^']+' 'strict-dynamic'/);
     expect(policy).not.toMatch(/script-src[^;]*'unsafe-inline'/);
+    expect(policy).toContain("frame-src https://challenges.cloudflare.com");
     expect(response.headers.get("cache-control")).toContain("no-store");
+  });
+
+  it("prevents Cloudflare caching for private API responses", () => {
+    const response = proxy(new NextRequest("https://app.example.com/api/dashboard/chat"));
+    expect(response.headers.get("cache-control")).toContain("private");
+    expect(response.headers.get("cloudflare-cdn-cache-control")).toBe("no-store");
   });
 });

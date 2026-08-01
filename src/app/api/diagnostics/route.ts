@@ -5,6 +5,8 @@ import { integrations, providerCredentials, runs } from "@/db/schema";
 import { currentSession } from "@/lib/auth/session";
 import { env } from "@/lib/config/env";
 import { decryptSecret, encryptSecret } from "@/lib/security/encryption";
+import { llmGateway } from "@/lib/providers/llm-gateway";
+import { isTurnstileEnabled } from "@/lib/security/turnstile";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -75,6 +77,22 @@ export async function GET(request: Request) {
     runCheck("database", async () => {
       await db().execute(sql`select 1`);
       return "PostgreSQL متاح ويستجيب";
+    }),
+    runCheck("cloudflare-features", async () => {
+      const gateway = await llmGateway.reachability();
+      const storage = process.env.OBJECT_STORAGE_DRIVER?.trim().toLowerCase() || "database (legacy)";
+      if (gateway.enabled && !gateway.reachable) {
+        throw new Error(
+          `AI Gateway Enabled=true; AI Gateway Reachable=false; Gateway URL=${gateway.gatewayUrl ?? "not configured"}`,
+        );
+      }
+      return [
+        `Turnstile=${isTurnstileEnabled() ? "enabled" : "disabled"}`,
+        `storage=${storage}`,
+        `AI Gateway Enabled=${gateway.enabled}`,
+        `AI Gateway Reachable=${gateway.enabled ? gateway.reachable : "not checked"}`,
+        `Gateway URL=${gateway.gatewayUrl ?? "not configured"}`,
+      ].join("; ");
     }),
     runCheck("encryption", () => {
       const sample = `diagnostic-${crypto.randomUUID()}`;

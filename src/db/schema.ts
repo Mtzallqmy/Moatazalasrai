@@ -11,6 +11,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 export const memberRole = pgEnum("member_role", ["owner", "admin", "developer", "operator", "viewer", "member"]);
 export const agentStatus = pgEnum("agent_status", ["draft", "published", "archived"]);
@@ -347,7 +348,9 @@ export const attachments = pgTable("attachments", {
   mimeType: text("mime_type").notNull(),
   sizeBytes: integer("size_bytes").notNull(),
   sha256: text("sha256").notNull(),
-  content: bytea("content").notNull(),
+  content: bytea("content"),
+  storageDriver: text("storage_driver").notNull().default("database"),
+  objectKey: text("object_key"),
   telegramFileId: text("telegram_file_id"),
   detectedType: text("detected_type"),
   processingStatus: fileProcessingStatus("processing_status").notNull().default("pending"),
@@ -363,7 +366,15 @@ export const attachments = pgTable("attachments", {
   index("attachments_conversation_idx").on(table.conversationId, table.createdAt),
   index("attachments_message_idx").on(table.messageId),
   index("attachments_sha256_idx").on(table.organizationId, table.sha256),
+  uniqueIndex("attachments_storage_object_idx").on(table.storageDriver, table.objectKey).where(sql`${table.objectKey} IS NOT NULL`),
 ]);
+
+export const turnstileVerifications = pgTable("turnstile_verifications", {
+  tokenHash: text("token_hash").primaryKey(),
+  action: text("action").notNull(),
+  verifiedAt: timestamp("verified_at", { withTimezone: true }).defaultNow().notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+}, (table) => [index("turnstile_verifications_expires_idx").on(table.expiresAt)]);
 
 export const modelCatalog = pgTable("model_catalog", {
   id: uuid("id").defaultRandom().primaryKey(),

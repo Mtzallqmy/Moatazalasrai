@@ -4,8 +4,12 @@ import { db } from "@/db";
 import { attachments, conversations } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
 import { processFile } from "@/server/files/processor";
+import { objectStorage } from "@/lib/storage/object-storage";
 
-export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const configuredMaxBytes = Number(process.env.MAX_ATTACHMENT_BYTES ?? 10 * 1024 * 1024);
+export const MAX_ATTACHMENT_BYTES = Number.isFinite(configuredMaxBytes)
+  ? Math.min(Math.max(Math.floor(configuredMaxBytes), 1024), 25 * 1024 * 1024)
+  : 10 * 1024 * 1024;
 export const ALLOWED_ATTACHMENT_TYPES = new Set([
   "image/jpeg",
   "image/png",
@@ -105,34 +109,68 @@ export async function storeAttachment(input: {
     if (!conversation) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة.");
   }
   const sha256 = createHash("sha256").update(input.content).digest("hex");
-  const [created] = await db().insert(attachments).values({
-    organizationId: input.organizationId,
-    conversationId: input.conversationId,
-    uploadedByUserId: input.uploadedByUserId,
-    source: input.source,
-    filename: cleanFilename(input.filename),
-    mimeType: declaredMime,
-    sizeBytes: input.content.byteLength,
-    sha256,
-    content: input.content,
-    telegramFileId: input.telegramFileId,
-    detectedType: processed.detectedType,
-    processingStatus: "ready",
-    extractedText: processed.extractedText,
-    archiveEntryCount: processed.archiveEntryCount,
-  }).returning({
-    id: attachments.id,
-    filename: attachments.filename,
-    mimeType: attachments.mimeType,
-    sizeBytes: attachments.sizeBytes,
-    sha256: attachments.sha256,
-    source: attachments.source,
-    detectedType: attachments.detectedType,
-    processingStatus: attachments.processingStatus,
-    createdAt: attachments.createdAt,
-  });
-  if (!created) throw new Error("ATTACHMENT_CREATE_FAILED");
-  return created;
+  const id = crypto.randomUUID();
+  const configuredDriver = process.env.OBJECT_STORAGE_DRIVER?.trim().toLowerCase();
+  // Unset means the legacy database driver so an existing Railway deployment
+  // remains backward compatible until R2/local is enabled deliberately.
+  const legacyDatabase = !configuredDriver || configuredDriver === "database";
+  const storage = legacyDatabase ? null : objectStorage();
+  const objectKey = storage ? `${input.organizationId}/${id}` : null;
+  if (storage && objectKey) await storage.put({ key: objectKey, body: input.content, contentType: declaredMime, sha256 });
+  try {
+    const [created] = await db().insert(attachments).values({
+      id,
+      organizationId: input.organizationId,
+      conversationId: input.conversationId,
+      uploadedByUserId: input.uploadedByUserId,
+      source: input.source,
+      filename: cleanFilename(input.filename),
+      mimeType: declaredMime,
+      sizeBytes: input.content.byteLength,
+      sha256,
+      content: legacyDatabase ? input.content : null,
+      storageDriver: storage?.driver ?? "database",
+      objectKey,
+      telegramFileId: input.telegramFileId,
+      detectedType: processed.detectedType,
+      processingStatus: "ready",
+      extractedText: processed.extractedText,
+      archiveEntryCount: processed.archiveEntryCount,
+    }).returning({
+      id: attachments.id,
+      filename: attachments.filename,
+      mimeType: attachments.mimeType,
+      sizeBytes: attachments.sizeBytes,
+      sha256: attachments.sha256,
+      source: attachments.source,
+      detectedType: attachments.detectedType,
+      processingStatus: attachments.processingStatus,
+      createdAt: attachments.createdAt,
+    });
+    if (!created) throw new Error("ATTACHMENT_CREATE_FAILED");
+    return created;
+  } catch (error) {
+    if (storage && objectKey) await storage.delete(objectKey).catch(() => undefined);
+    throw error;
+  }
+}
+
+export async function readAttachmentContent(file: { content: Buffer | null; storageDriver: string; objectKey: string | null }) {
+  if (file.storageDriver === "database") {
+    if (!file.content) throw new ApiError(500, "ATTACHMENT_CONTENT_MISSING", "محتوى الملف غير متاح.");
+    return new Uint8Array(file.content);
+  }
+  if (!file.objectKey) throw new ApiError(500, "ATTACHMENT_OBJECT_MISSING", "مرجع تخزين الملف غير متاح.");
+  if (file.storageDriver !== "local" && file.storageDriver !== "r2") throw new ApiError(500, "ATTACHMENT_STORAGE_INVALID", "مرجع تخزين الملف غير صالح.");
+  const storage = objectStorage(file.storageDriver);
+  return storage.get(file.objectKey);
+}
+
+export async function deleteAttachmentContent(file: { content: Buffer | null; storageDriver: string; objectKey: string | null }) {
+  if (file.storageDriver === "database" || !file.objectKey) return;
+  if (file.storageDriver !== "local" && file.storageDriver !== "r2") throw new ApiError(500, "ATTACHMENT_STORAGE_INVALID", "مرجع تخزين الملف غير صالح.");
+  const storage = objectStorage(file.storageDriver);
+  await storage.delete(file.objectKey);
 }
 
 export async function attachmentContext(organizationId: string, conversationId: string, ids: string[]) {
@@ -143,6 +181,8 @@ export async function attachmentContext(organizationId: string, conversationId: 
     mimeType: attachments.mimeType,
     sizeBytes: attachments.sizeBytes,
     content: attachments.content,
+    storageDriver: attachments.storageDriver,
+    objectKey: attachments.objectKey,
     extractedText: attachments.extractedText,
     processingStatus: attachments.processingStatus,
   }).from(attachments).where(and(
@@ -152,7 +192,13 @@ export async function attachmentContext(organizationId: string, conversationId: 
   ));
   const selected = rows.filter((row) => ids.includes(row.id));
   if (selected.length !== ids.length) throw new ApiError(404, "ATTACHMENT_NOT_FOUND", "أحد الملفات غير موجود.");
-  const parts = selected.map((row) => {
+  const hydrated = await Promise.all(selected.map(async (row) => ({
+    ...row,
+    content: ["image/jpeg", "image/png", "image/webp", "image/gif"].includes(row.mimeType)
+      ? Buffer.from(await readAttachmentContent(row))
+      : Buffer.alloc(0),
+  })));
+  const parts = hydrated.map((row) => {
     if (row.processingStatus !== "ready") {
       throw new ApiError(409, "FILE_NOT_READY", `الملف ${row.filename} لم يجهز للتحليل بعد.`);
     }
@@ -161,5 +207,5 @@ export async function attachmentContext(organizationId: string, conversationId: 
     }
     return `\n\n[مرفق: ${row.filename}، النوع ${row.mimeType}، الحجم ${row.sizeBytes} بايت]`;
   });
-  return { text: parts.join(""), rows: selected };
+  return { text: parts.join(""), rows: hydrated };
 }

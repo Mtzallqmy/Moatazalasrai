@@ -103,7 +103,7 @@ function linkedSignal(source: AbortSignal | undefined, timeoutMs: number) {
 async function request(
   url: string,
   init: RequestInit,
-  options: { timeoutMs?: number; signal?: AbortSignal; retries?: number } = {},
+  options: { timeoutMs?: number; signal?: AbortSignal; retries?: number; fetch?: typeof globalThis.fetch } = {},
 ) {
   const attempts = Math.max(1, (options.retries ?? 1) + 1);
   let lastError: unknown;
@@ -111,7 +111,7 @@ async function request(
     const signal = linkedSignal(options.signal, options.timeoutMs ?? 20_000);
     try {
       await validateProviderBaseUrl(url);
-      const response = await fetch(url, {
+      const response = await (options.fetch ?? globalThis.fetch)(url, {
         ...init,
         cache: "no-store",
         redirect: "error",
@@ -148,7 +148,7 @@ async function request(
 export async function providerJson<T>(
   url: string,
   init: RequestInit,
-  options?: { timeoutMs?: number; signal?: AbortSignal; retries?: number },
+  options?: { timeoutMs?: number; signal?: AbortSignal; retries?: number; fetch?: typeof globalThis.fetch },
 ): Promise<{ data: T; headers: Headers }> {
   const response = await request(url, init, options);
   const text = await readLimitedText(response);
@@ -164,7 +164,7 @@ export async function providerJson<T>(
 export async function providerStream(
   url: string,
   init: RequestInit,
-  options?: { timeoutMs?: number; signal?: AbortSignal },
+  options?: { timeoutMs?: number; signal?: AbortSignal; fetch?: typeof globalThis.fetch },
 ) {
   const response = await request(url, init, { ...options, retries: 0 });
   if (!response.body) throw new ProviderError("PROVIDER_EMPTY_STREAM", "لم يُرجع المزود بثًا صالحًا.", 502);

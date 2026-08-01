@@ -2,10 +2,11 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
+import { TurnstileWidget } from "@/components/turnstile-widget";
 
 type Mode = "login" | "register";
 
-export function AuthForm({ mode }: { mode: Mode }) {
+export function AuthForm({ mode, turnstileSiteKey }: { mode: Mode; turnstileSiteKey?: string }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,6 +42,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
       )}
       <Field name="email" label="البريد الإلكتروني" type="email" autoComplete="email" />
       <Field name="password" label="كلمة المرور" type="password" minLength={mode === "login" ? 1 : 12} autoComplete={mode === "login" ? "current-password" : "new-password"} />
+      {turnstileSiteKey ? <TurnstileWidget siteKey={turnstileSiteKey} action={mode} /> : null}
 
       {error && <p role="alert" className="rounded-2xl border border-rose-200/20 bg-rose-200/10 px-4 py-3 text-sm text-rose-100">{error}</p>}
 

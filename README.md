@@ -25,7 +25,8 @@
 - Health وreadiness منفصلان، Security headers، CSRF/Origin checks، rate limits مخزنة، ورسائل API موحدة.
 - تكامل Telegram عبر Webhook موثّق، ربط كل محادثة بالوكيل، أوامر `/new` و`/status` و`/github repos`، ومعالجة خلفية تمنع تعطيل استقبال التحديثات.
 - تكامل GitHub بتوكن مشفّر للتحقق وعرض المستودعات وقراءة الملفات عبر API مضبوط المسارات.
-- رفع ملفات حقيقي داخل الدردشة وAPI حتى 10MB مع metadata وSHA-256 وعزل كامل بين المؤسسات.
+- رفع ملفات حقيقي داخل الدردشة وAPI حتى 10MB مع metadata وSHA-256 وعزل كامل بين المؤسسات، وتخزين R2 خاص اختياري مع توافق قراءة الملفات القديمة.
+- تكامل Cloudflare اختياري أمام Railway: Turnstile خادمي، IP موثوق، منع Cache للمسارات الحساسة، وAI Gateway مغلق افتراضيًا دون تغيير مفاتيح BYOK.
 - ظهور المرفقات داخل سجل الرسالة بعد إعادة التحميل، وتمرير النص المفهرس للنموذج، وإرسال الصور كمدخلات multimodal حقيقية للمزودات الداعمة ولـTelegram وAPI v1.
 - API إصدار `v1` للدردشة والمحادثات والملفات والتكاملات وGitHub، مع عقد OpenAPI تمهيدًا لتطبيق Android أصلي.
 - توسعة اختيارية خلف Feature Flags للذاكرة المعزولة، وقواعد المعرفة والاستشهادات، والأدوات بموافقات بشرية، وWorker مستقل بصف ذري.
@@ -65,6 +66,22 @@ npm run dev
 | `JOB_*` | لا | polling وlock timeout والمحاولات وحجم الدفعة |
 | `YOUTUBE_TRANSCRIPT_API_URL` | لميزة YouTube | موصل HTTPS يعيد `transcript` من طلب JSON يحوي `url` |
 | `YOUTUBE_TRANSCRIPT_API_KEY` | حسب الموصل | Bearer token لا يرسل إلى التطبيق ولا يُحفظ في المصدر |
+| `TURNSTILE_*` | عند التفعيل | مفتاح الموقع العام، السر الخادمي، واسم النطاق المتوقع |
+| `TRUST_CLOUDFLARE_PROXY` | خلف Cloudflare فقط | يثق بـ`CF-Connecting-IP` بعد منع تجاوز الـproxy |
+| `OBJECT_STORAGE_DRIVER` | لا | `local` للتطوير أو `r2` للإنتاج؛ لا تُرسل بيانات اعتماد R2 للعميل |
+| `R2_*` | عند اختيار R2 | bucket خاص وبيانات S3 API محدودة على bucket واحد |
+| `CLOUDFLARE_AI_GATEWAY_ENABLED` / `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_AI_GATEWAY_ID` / `OPENAI_BASE_URL` | عند التفعيل | توجيه OpenAI فقط عبر Cloudflare مع بقاء BYOK؛ Anthropic وGemini مباشران |
+
+### Cloudflare AI Gateway
+
+يبقى `CLOUDFLARE_AI_GATEWAY_ENABLED=false` افتراضيًا. عند تفعيله تمر جميع طلبات
+OpenAI، بما فيها الفحص والتوليد والبث وResponses API، عبر بوابة `moataz-ai`.
+لا تُخزن Cloudflare مفاتيح المستخدمين؛ يبقى مفتاح OpenAI المفكوك لحظيًا هو
+`Authorization` الخاص بالمزود. تبقى Anthropic وGemini وOpenAI-compatible على
+مساراتها الحالية المباشرة. طبقة `LLMGateway` تضبط مهلة 60 ثانية، محاولة بديلة
+مباشرة واحدة فقط قبل بدء أي stream، وتعطل cache وتسجيل payload.
+
+راجع [دليل Cloudflare AI Gateway](docs/cloudflare-ai-gateway.md).
 
 توليد مفتاح التشفير:
 
@@ -86,7 +103,7 @@ npm run db:studio
 
 الجداول الأساسية: `users`, `sessions`, `mobile_sessions`, `organizations`, `organization_members`, `provider_credentials`, `agents`, `agent_versions`, `conversations`, `messages`, `runs`, `run_events`, `platform_api_keys`, `audit_logs`, `rate_limits`.
 
-جداول التكامل والتخزين: `integrations`, `telegram_chats`, `telegram_updates`, `attachments`.
+جداول التكامل والتخزين: `integrations`, `telegram_chats`, `telegram_updates`, `attachments`. يحتفظ PostgreSQL بالـmetadata فقط للملفات الجديدة عند استخدام `local` أو R2؛ عمود البيانات القديم باقٍ للقراءة التوافقية فقط.
 
 جداول MCP والفرق: `mcp_servers`, `mcp_tools`, `agent_mcp_tools`, `mcp_tool_calls`, `agent_teams`, `agent_team_members`, `agent_team_runs`, `agent_team_run_steps`.
 
@@ -119,7 +136,7 @@ Authorization: Bearer mat_<SHORT_LIVED_ACCESS_TOKEN>
 ```bash
 cd apps/mobile
 flutter pub get
-flutter run --dart-define=API_BASE_URL=https://your-domain.example
+flutter run --dart-define=API_BASE_URL=https://moatazalalqami.online
 ```
 
 راجع [دليل تطبيق Android](apps/mobile/README.md) و[دليل API](docs/API.md).
@@ -144,6 +161,7 @@ npm run test:e2e
 - `/api/ready`: جاهزية قاعدة البيانات والمخطط.
 
 راجع [دليل النشر](docs/DEPLOYMENT.md).
+إعداد Cloudflare دون نقل التطبيق أو قاعدة البيانات موضح في [دليل Cloudflare](docs/CLOUDFLARE.md).
 
 ## وثائق المشروع
 
@@ -159,6 +177,7 @@ npm run test:e2e
 - [الاستجابة للحوادث](docs/INCIDENT_RESPONSE.md)
 - [النسخ والاستعادة](docs/BACKUP_AND_RESTORE.md)
 - [نموذج التهديد](docs/THREAT_MODEL.md)
+- [Cloudflare AI Gateway](docs/cloudflare-ai-gateway.md)
 
 ## قيود حقيقية
 

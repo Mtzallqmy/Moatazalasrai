@@ -65,7 +65,7 @@
 cd apps/mobile
 flutter pub get
 flutter build apk --release \
-  --dart-define=API_BASE_URL=https://your-domain.example
+  --dart-define=API_BASE_URL=https://moatazalalqami.online
 ```
 
 قبل متجر Google Play أنشئ مفتاح توقيع Release واستبدل إعداد توقيع Debug

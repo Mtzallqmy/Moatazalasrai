@@ -26,6 +26,18 @@ const nextConfig = {
           { key: "Cache-Control", value: "private, no-store, max-age=0" },
         ],
       },
+      {
+        source: "/api/:path*",
+        headers: [
+          { key: "Cache-Control", value: "private, no-store, max-age=0" },
+          { key: "CDN-Cache-Control", value: "no-store" },
+          { key: "Cloudflare-CDN-Cache-Control", value: "no-store" },
+        ],
+      },
+      {
+        source: "/(login|register|select-organization)",
+        headers: [{ key: "Cache-Control", value: "private, no-store, max-age=0" }],
+      },
     ];
   },
 };

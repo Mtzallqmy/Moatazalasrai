@@ -276,6 +276,8 @@ export async function executeAiSdkCandidate(input: {
       apiKey: input.candidate.apiKey,
       baseUrl: input.candidate.baseUrl,
       model: input.candidate.model,
+      organizationId: input.organizationId,
+      requestId: input.requestId,
     });
     const result = await generateText({
       model,
@@ -375,6 +377,8 @@ export async function* streamAiSdkCandidate(input: {
       apiKey: input.candidate.apiKey,
       baseUrl: input.candidate.baseUrl,
       model: input.candidate.model,
+      organizationId: input.organizationId,
+      requestId: input.requestId,
     });
     const result = streamText({
       model,

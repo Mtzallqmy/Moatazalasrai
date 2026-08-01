@@ -38,15 +38,24 @@ docker run --rm -p 3000:3000 --env-file .env moataz-agent-platform
 - إذا فشلت خطوة Pre-deploy فتحقق من `DATABASE_URL` وسجل migration؛ لا تستبدل readiness بفحص سطحي لإخفاء قاعدة غير مهيأة.
 - يمكن زيادة مهلة جملة migration عبر `MIGRATION_TIMEOUT_MS` عند وجود قاعدة بعيدة بطيئة.
 
-## Cloudflare/OpenNext
+## Cloudflare أمام Railway
 
-المشروع يحتوي إعداد OpenNext و`nodejs_compat`. نجح `npm run cf:build` في بيئة التسليم وأنشأ Worker، لكن مسارات المصادقة والمزودات تحتاج أيضًا اختبارًا حيًا بعد النشر مع PostgreSQL ومزود حقيقي:
+Railway/Docker هو runtime الأساسي. لا تُنقل PostgreSQL أو Graphile Worker أو Next.js إلى Cloudflare Workers في هذه المرحلة. يُستخدم Cloudflare DNS/Proxy وTurnstile وR2 وAI Gateway الاختياري فقط. راجع [دليل Cloudflare](CLOUDFLARE.md).
 
-```bash
-npm run cf:build
-```
+عند استخدام التخزين المحلي داخل Docker اربط volume دائمًا إلى `/app/.data`; لا تستخدمه مع عدة replicas. للإنتاج اختر `OBJECT_STORAGE_DRIVER=r2`. يبقى pre-deploy هو `npm run db:migrate:all` مرة واحدة، ولا ينفذ Web أو Worker migrations عند البدء.
 
-تعذر تشغيل `cf:preview` محليًا لأن أداة المعاينة مررت خيارات Vite إلى أمر `next dev` القياسي. لذلك يبقى Docker/Railway هو مسار النشر الأساسي الموصى به، ولا يُعد نجاح الحزمة وحده إثباتًا لنشر Cloudflare إنتاجي.
+### تفعيل AI Gateway تدريجيًا
+
+1. أضف `CLOUDFLARE_ACCOUNT_ID` و`CLOUDFLARE_AI_GATEWAY_ID` و`OPENAI_BASE_URL` إلى Web وWorker.
+2. اترك `CLOUDFLARE_AI_GATEWAY_ENABLED=false` وانشر الإصدار أولًا.
+3. تحقق من صفحة التشخيص ومن نجاح طلب OpenAI مباشر.
+4. فعّل البوابة على Web واحد، ثم اختبر Responses API وStreaming وTool Calling.
+5. فعّل Worker بعد ثبات مؤشرات 429/5xx ووقت أول token.
+6. للرجوع الفوري اضبط `CLOUDFLARE_AI_GATEWAY_ENABLED=false` وأعد التشغيل؛ لا توجد migration أو تغييرات بيانات للتراجع عنها.
+
+`CLOUDFLARE_API_TOKEN` اختياري ولا يُضبط إلا إذا فُعّل Authenticated Gateway.
+لا يُستخدم بوصفه مفتاح مزود، ولا يحل محل مفاتيح BYOK. راجع
+[دليل Cloudflare AI Gateway](cloudflare-ai-gateway.md).
 
 ## التهيئة
 

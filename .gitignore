@@ -17,6 +17,7 @@ out/
 coverage/
 test-results/
 playwright-report/
+.data/
 
 # misc
 .DS_Store
