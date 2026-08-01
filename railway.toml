@@ -8,4 +8,3 @@ healthcheckPath = "/api/ready"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5
-drainingSeconds = 30
