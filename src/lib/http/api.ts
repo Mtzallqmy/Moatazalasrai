@@ -15,9 +15,37 @@ export class ApiError extends Error {
   }
 }
 
+const requestTimings = new Map<string, { startedAt: number; route: string; cfRay?: string }>();
+
+function rememberRequest(request: Request, requestId: string) {
+  if (requestTimings.size >= 10_000) requestTimings.delete(requestTimings.keys().next().value ?? "");
+  const cfRay = request.headers.get("cf-ray")?.trim() || request.headers.get("x-cf-ray")?.trim();
+  requestTimings.set(requestId, {
+    startedAt: performance.now(),
+    route: new URL(request.url).pathname,
+    ...(cfRay && /^[a-zA-Z0-9-]{1,100}$/.test(cfRay) ? { cfRay } : {}),
+  });
+}
+
+function logCompletion(requestId: string, status: number) {
+  const timing = requestTimings.get(requestId);
+  requestTimings.delete(requestId);
+  console.log(JSON.stringify({
+    level: status >= 500 ? "error" : status >= 400 ? "warn" : "info",
+    event: "http.request.completed",
+    requestId,
+    route: timing?.route ?? "unknown",
+    status,
+    durationMs: timing ? Math.max(0, Math.round(performance.now() - timing.startedAt)) : null,
+    ...(timing?.cfRay ? { cfRay: timing.cfRay } : {}),
+  }));
+}
+
 export function getRequestId(request: Request): string {
   const supplied = request.headers.get("x-request-id")?.trim();
-  return supplied && /^[a-zA-Z0-9._:-]{1,100}$/.test(supplied) ? supplied : crypto.randomUUID();
+  const requestId = supplied && /^[a-zA-Z0-9._:-]{1,100}$/.test(supplied) ? supplied : crypto.randomUUID();
+  rememberRequest(request, requestId);
+  return requestId;
 }
 
 function responseHeaders(requestId: string) {
@@ -28,6 +56,7 @@ function responseHeaders(requestId: string) {
 }
 
 export function apiSuccess<T>(data: T, requestId: string, status = 200, meta?: Record<string, unknown>) {
+  logCompletion(requestId, status);
   return NextResponse.json(
     { success: true as const, data, meta: { requestId, ...meta } },
     { status, headers: responseHeaders(requestId) },
@@ -41,6 +70,7 @@ export function apiFailure(
   requestId: string,
   details?: unknown,
 ) {
+  logCompletion(requestId, status);
   const descriptor = errorDescriptor(code);
   return NextResponse.json(
     {

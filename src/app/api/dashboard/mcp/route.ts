@@ -1,7 +1,7 @@
 import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { mcpServers, mcpTools } from "@/db/schema";
+import { auditLogs, mcpServers, mcpTools } from "@/db/schema";
 import { mcpPrompts, mcpResources, mcpResourceTemplates } from "@/db/mcp-catalog-schema";
 import {
   createHiggsfieldServer,
@@ -34,6 +34,29 @@ const actionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("get_prompt"), serverId: z.string().uuid(), name: z.string().trim().min(1).max(200), arguments: stringArguments.default({}) }).strict(),
 ]);
 
+const updateSchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("update_server"),
+    serverId: z.string().uuid(),
+    name: z.string().trim().min(2).max(100).optional(),
+    enabled: z.boolean().optional(),
+    bearerToken: z.union([z.string().trim().min(8).max(4000), z.null()]).optional(),
+  }).strict().refine((value) => value.name !== undefined || value.enabled !== undefined || value.bearerToken !== undefined, {
+    message: "No server changes supplied.",
+  }),
+  z.object({
+    action: z.literal("set_catalog_enabled"),
+    kind: z.enum(["tool", "resource", "resource_template", "prompt"]),
+    id: z.string().uuid(),
+    enabled: z.boolean(),
+  }).strict(),
+  z.object({
+    action: z.literal("set_tool_policy"),
+    id: z.string().uuid(),
+    risk: z.enum(["low", "medium", "high"]),
+  }).strict(),
+]);
+
 export async function GET(request: Request) {
   const requestId = getRequestId(request);
   try {
@@ -48,12 +71,91 @@ export async function GET(request: Request) {
         oauthExpiresAt: mcpServers.oauthExpiresAt, oauthConnectedAt: mcpServers.oauthConnectedAt,
         enabled: mcpServers.enabled,
       }).from(mcpServers).where(eq(mcpServers.organizationId, session.organizationId)).orderBy(desc(mcpServers.updatedAt)),
-      db().select().from(mcpTools).where(and(eq(mcpTools.organizationId, session.organizationId), eq(mcpTools.enabled, true))).orderBy(asc(mcpTools.name)),
-      db().select().from(mcpResources).where(and(eq(mcpResources.organizationId, session.organizationId), eq(mcpResources.enabled, true))).orderBy(asc(mcpResources.name)),
-      db().select().from(mcpResourceTemplates).where(and(eq(mcpResourceTemplates.organizationId, session.organizationId), eq(mcpResourceTemplates.enabled, true))).orderBy(asc(mcpResourceTemplates.name)),
-      db().select().from(mcpPrompts).where(and(eq(mcpPrompts.organizationId, session.organizationId), eq(mcpPrompts.enabled, true))).orderBy(asc(mcpPrompts.name)),
+      db().select().from(mcpTools).where(eq(mcpTools.organizationId, session.organizationId)).orderBy(asc(mcpTools.name)),
+      db().select().from(mcpResources).where(eq(mcpResources.organizationId, session.organizationId)).orderBy(asc(mcpResources.name)),
+      db().select().from(mcpResourceTemplates).where(eq(mcpResourceTemplates.organizationId, session.organizationId)).orderBy(asc(mcpResourceTemplates.name)),
+      db().select().from(mcpPrompts).where(eq(mcpPrompts.organizationId, session.organizationId)).orderBy(asc(mcpPrompts.name)),
     ]);
     return apiSuccess({ servers, tools, resources, resourceTemplates, prompts }, requestId);
+  } catch (error) {
+    return handleApiError(error, requestId, "/api/dashboard/mcp");
+  }
+}
+
+export async function PATCH(request: Request) {
+  const requestId = getRequestId(request);
+  try {
+    assertSameOrigin(request);
+    const session = await requireSession("integrations:manage");
+    const body = await parseJson(request, updateSchema, 16 * 1024);
+
+    if (body.action === "update_server") {
+      const [current] = await db().select({ id: mcpServers.id, authMode: mcpServers.authMode })
+        .from(mcpServers).where(and(
+          eq(mcpServers.id, body.serverId),
+          eq(mcpServers.organizationId, session.organizationId),
+        )).limit(1);
+      if (!current) throw new ApiError(404, "MCP_SERVER_NOT_FOUND", "خادم MCP غير موجود.");
+      if (body.bearerToken !== undefined && current.authMode === "oauth") {
+        throw new ApiError(409, "MCP_AUTH_MODE_CONFLICT", "لا يمكن تعيين رمز Bearer لاتصال OAuth.");
+      }
+      const [updated] = await db().transaction(async (tx) => {
+        const [row] = await tx.update(mcpServers).set({
+          name: body.name,
+          enabled: body.enabled,
+          encryptedBearerToken: body.bearerToken === undefined
+            ? undefined
+            : body.bearerToken === null ? null : encryptSecret(body.bearerToken, `mcp:${session.organizationId}`),
+          tokenHint: body.bearerToken === undefined
+            ? undefined
+            : body.bearerToken === null ? null : maskSecret(body.bearerToken),
+          status: body.bearerToken === undefined ? undefined : "pending",
+          updatedAt: new Date(),
+        }).where(and(
+          eq(mcpServers.id, body.serverId),
+          eq(mcpServers.organizationId, session.organizationId),
+        )).returning({ id: mcpServers.id, name: mcpServers.name, enabled: mcpServers.enabled, tokenHint: mcpServers.tokenHint });
+        if (!row) throw new ApiError(404, "MCP_SERVER_NOT_FOUND", "خادم MCP غير موجود.");
+        await tx.insert(auditLogs).values({
+          organizationId: session.organizationId,
+          actorType: "user",
+          actorId: session.userId,
+          action: "mcp.server.update",
+          resourceType: "mcp_server",
+          resourceId: row.id,
+          metadata: { requestId, changed: Object.keys(body).filter((key) => !["action", "bearerToken"].includes(key)), tokenRotated: body.bearerToken !== undefined },
+        });
+        return [row];
+      });
+      return apiSuccess(updated, requestId);
+    }
+
+    if (body.action === "set_tool_policy") {
+      const [updated] = await db().transaction(async (tx) => {
+        const [row] = await tx.update(mcpTools).set({ risk: body.risk, updatedAt: new Date() }).where(and(
+          eq(mcpTools.id, body.id),
+          eq(mcpTools.organizationId, session.organizationId),
+        )).returning({ id: mcpTools.id, risk: mcpTools.risk });
+        if (!row) throw new ApiError(404, "MCP_CATALOG_ITEM_NOT_FOUND", "عنصر MCP غير موجود.");
+        await tx.insert(auditLogs).values({ organizationId: session.organizationId, actorType: "user", actorId: session.userId, action: "mcp.tool.policy.update", resourceType: "mcp_tool", resourceId: row.id, metadata: { requestId, risk: row.risk } });
+        return [row];
+      });
+      return apiSuccess(updated, requestId);
+    }
+
+    const table = body.kind === "tool" ? mcpTools
+      : body.kind === "resource" ? mcpResources
+        : body.kind === "resource_template" ? mcpResourceTemplates : mcpPrompts;
+    const [updated] = await db().transaction(async (tx) => {
+      const [row] = await tx.update(table).set({ enabled: body.enabled, updatedAt: new Date() }).where(and(
+        eq(table.id, body.id),
+        eq(table.organizationId, session.organizationId),
+      )).returning({ id: table.id, enabled: table.enabled });
+      if (!row) throw new ApiError(404, "MCP_CATALOG_ITEM_NOT_FOUND", "عنصر MCP غير موجود.");
+      await tx.insert(auditLogs).values({ organizationId: session.organizationId, actorType: "user", actorId: session.userId, action: "mcp.catalog.visibility.update", resourceType: `mcp_${body.kind}`, resourceId: row.id, metadata: { requestId, enabled: row.enabled } });
+      return [row];
+    });
+    return apiSuccess(updated, requestId);
   } catch (error) {
     return handleApiError(error, requestId, "/api/dashboard/mcp");
   }

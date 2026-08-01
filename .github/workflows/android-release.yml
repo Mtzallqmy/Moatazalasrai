@@ -11,7 +11,7 @@ on:
       api_base_url:
         description: Production API base URL
         required: true
-        default: "https://moatazbot.duckdns.org"
+        default: "https://moatazalalqami.online"
         type: string
   push:
     tags:
@@ -31,7 +31,7 @@ jobs:
     timeout-minutes: 40
     env:
       HAS_RELEASE_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
-      DEFAULT_API_BASE_URL: https://moatazbot.duckdns.org
+      DEFAULT_API_BASE_URL: https://moatazalalqami.online
     defaults:
       run:
         working-directory: apps/mobile

@@ -12,7 +12,13 @@ export async function GET() {
         success: true,
         data: {
           status: "ready",
+          version: process.env.APP_VERSION?.trim() || process.env.npm_package_version || "unknown",
           checks: { database },
+          features: {
+            objectStorage: process.env.OBJECT_STORAGE_DRIVER?.trim().toLowerCase() || "database",
+            turnstile: process.env.TURNSTILE_ENABLED === "true",
+            aiGateway: process.env.CLOUDFLARE_AI_GATEWAY_ENABLED === "true",
+          },
           timestamp: new Date().toISOString(),
         },
         meta: { requestId },

@@ -20,14 +20,14 @@
 
 ```bash
 flutter pub get
-flutter run --dart-define=API_BASE_URL=https://your-domain.example
+flutter run --dart-define=API_BASE_URL=https://moatazalalqami.online
 ```
 
 ## بناء APK
 
 ```bash
 flutter build apk --release \
-  --dart-define=API_BASE_URL=https://your-domain.example
+  --dart-define=API_BASE_URL=https://moatazalalqami.online
 ```
 
 قبل النشر في المتجر، أضف أسرار التوقيع الموضحة في دليل الإصدار. يقرأ البناء

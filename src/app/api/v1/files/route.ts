@@ -1,9 +1,9 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { attachments } from "@/db/schema";
 import { authenticateApiKey, requireApiScope } from "@/lib/auth/api-key";
 import { ApiError, apiFailure, apiSuccess, getRequestId, handleApiError } from "@/lib/http/api";
-import { storeAttachment } from "@/lib/storage/attachments";
+import { readAttachmentContent, storeAttachment, MAX_ATTACHMENT_BYTES } from "@/lib/storage/attachments";
 
 export const runtime = "nodejs";
 
@@ -19,9 +19,11 @@ export async function GET(request: Request) {
         eq(attachments.id, id),
         eq(attachments.organizationId, principal.organizationId),
         principal.userId ? eq(attachments.uploadedByUserId, principal.userId) : undefined,
+        isNull(attachments.deletedAt),
       )).limit(1);
       if (!file) throw new ApiError(404, "ATTACHMENT_NOT_FOUND", "الملف غير موجود.");
-      return new Response(new Uint8Array(file.content), {
+      const content = await readAttachmentContent(file);
+      return new Response(new Uint8Array(Buffer.from(content)), {
         headers: {
           "content-type": file.mimeType,
           "content-length": String(file.sizeBytes),
@@ -44,6 +46,7 @@ export async function GET(request: Request) {
     }).from(attachments).where(and(
       eq(attachments.organizationId, principal.organizationId),
       principal.userId ? eq(attachments.uploadedByUserId, principal.userId) : undefined,
+      isNull(attachments.deletedAt),
     ))
       .orderBy(desc(attachments.createdAt)).limit(100);
     return apiSuccess({ files: rows }, requestId);
@@ -58,6 +61,8 @@ export async function POST(request: Request) {
     const principal = await authenticateApiKey(request);
     if (!principal) return apiFailure(401, "UNAUTHORIZED", "مفتاح المنصة غير صالح.", requestId);
     requireApiScope(principal, "files:write");
+    const contentLength = Number(request.headers.get("content-length") ?? 0);
+    if (contentLength > MAX_ATTACHMENT_BYTES + 1024 * 1024) throw new ApiError(413, "PAYLOAD_TOO_LARGE", "حجم الطلب أكبر من الحد.");
     const form = await request.formData();
     const file = form.get("file");
     const conversationId = String(form.get("conversationId") ?? "").trim();

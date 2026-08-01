@@ -3,7 +3,7 @@ import { db } from "@/db";
 import { attachments, auditLogs } from "@/db/schema";
 import { can, requireSession } from "@/lib/auth/authorization";
 import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError } from "@/lib/http/api";
-import { storeAttachment } from "@/lib/storage/attachments";
+import { deleteAttachmentContent, readAttachmentContent, storeAttachment, MAX_ATTACHMENT_BYTES } from "@/lib/storage/attachments";
 
 export const runtime = "nodejs";
 
@@ -22,7 +22,8 @@ export async function GET(request: Request) {
         isNull(attachments.deletedAt),
       )).limit(1);
       if (!file) throw new ApiError(404, "ATTACHMENT_NOT_FOUND", "الملف غير موجود.");
-      return new Response(new Uint8Array(file.content), {
+      const content = await readAttachmentContent(file);
+      return new Response(new Uint8Array(Buffer.from(content)), {
         headers: {
           "content-type": file.mimeType,
           "content-length": String(file.sizeBytes),
@@ -98,6 +99,14 @@ export async function DELETE(request: Request) {
     const body = await request.json() as { id?: string };
     if (!body.id) throw new ApiError(400, "FILE_ID_REQUIRED", "معرف الملف مطلوب.");
     const fileId = body.id;
+    const [target] = await db().select().from(attachments).where(and(
+      eq(attachments.id, fileId),
+      eq(attachments.organizationId, session.organizationId),
+      can(session.role, "files:manage") ? undefined : eq(attachments.uploadedByUserId, session.userId),
+      isNull(attachments.deletedAt),
+    )).limit(1);
+    if (!target) throw new ApiError(404, "ATTACHMENT_NOT_FOUND", "الملف غير موجود.");
+    await deleteAttachmentContent(target);
     const [deleted] = await db().transaction(async (tx) => {
       const [file] = await tx.update(attachments).set({ deletedAt: new Date(), updatedAt: new Date() })
         .where(and(
@@ -131,7 +140,7 @@ export async function POST(request: Request) {
     assertSameOrigin(request);
     const session = await requireSession("files:upload");
     const contentLength = Number(request.headers.get("content-length") ?? 0);
-    if (contentLength > 11 * 1024 * 1024) throw new ApiError(413, "PAYLOAD_TOO_LARGE", "حجم الطلب أكبر من الحد.");
+    if (contentLength > MAX_ATTACHMENT_BYTES + 1024 * 1024) throw new ApiError(413, "PAYLOAD_TOO_LARGE", "حجم الطلب أكبر من الحد.");
     const form = await request.formData();
     const file = form.get("file");
     const conversationId = String(form.get("conversationId") ?? "").trim();

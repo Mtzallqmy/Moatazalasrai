@@ -16,11 +16,13 @@ export const registerSchema = z.object({
   email: z.string().trim().max(320).pipe(z.email()).transform((value) => value.toLowerCase()),
   password: z.string().min(12).max(128),
   organizationName: z.string().trim().min(2).max(120).optional(),
+  turnstileToken: z.string().trim().min(1).max(2048).optional(),
 }).strict();
 
 export const loginSchema = z.object({
   email: z.string().trim().max(320).pipe(z.email()).transform((value) => value.toLowerCase()),
   password: z.string().min(1).max(128),
+  turnstileToken: z.string().trim().min(1).max(2048).optional(),
 }).strict();
 
 export const switchOrganizationSchema = z.object({ organizationId: uuidSchema }).strict();

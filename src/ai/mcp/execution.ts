@@ -11,6 +11,7 @@ import { appendRunEvent } from "@/lib/ai-sdk/run-events";
 import { persistRunStep } from "@/lib/ai-sdk/run-steps";
 import { callRemoteMcpTool } from "@/ai/mcp/client";
 import { DatabaseMcpOAuthProvider, isOfficialHiggsfieldEndpoint } from "@/ai/mcp/oauth";
+import { assertMcpJsonLimits, validateMcpToolInput, validateMcpToolOutput } from "@/ai/mcp/validation";
 
 function digest(value: unknown) {
   return createHash("sha256").update(JSON.stringify(value ?? null)).digest("hex");
@@ -158,6 +159,7 @@ export async function executeMcpToolIdempotent(input: {
       eq(mcpServers.status, "connected"),
     )).limit(1);
   if (!binding) throw new ApiError(404, "MCP_TOOL_NOT_LINKED", "أداة MCP غير مرتبطة بهذا الوكيل أو خادمها غير متصل.");
+  validateMcpToolInput(binding.tool.inputSchema, binding.tool.schemaHash, args);
 
   const reservation = await reserveCall({
     organizationId: input.organizationId,
@@ -190,6 +192,10 @@ export async function executeMcpToolIdempotent(input: {
       arguments: args,
       timeoutMs: toolTimeoutMs(binding.tool.capability),
     });
+    assertMcpJsonLimits(result);
+    if (binding.tool.outputSchema) {
+      validateMcpToolOutput(binding.tool.outputSchema, binding.tool.schemaHash, result.structuredContent);
+    }
     const completedAt = new Date();
     const status = result.isError ? "failed" : "completed";
     const [updated] = await db().update(mcpToolCallsRuntime).set({

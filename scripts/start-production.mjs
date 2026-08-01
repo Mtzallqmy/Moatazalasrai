@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import { validateOptionalRuntimeEnvironment } from "./validate-runtime-env.mjs";
+
+validateOptionalRuntimeEnvironment();
 
 const host = process.env.APP_HOST?.trim() || "0.0.0.0";
 const port = process.env.PORT?.trim() || "3000";

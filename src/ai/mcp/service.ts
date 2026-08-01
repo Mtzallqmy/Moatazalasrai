@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
-import { and, eq } from "drizzle-orm";
+import { and, eq, notInArray } from "drizzle-orm";
 import { db } from "@/db";
 import { mcpServers, mcpToolCalls, mcpTools } from "@/db/schema";
 import {
@@ -24,14 +24,15 @@ import {
   isOfficialHiggsfieldEndpoint,
 } from "./oauth";
 import { classifyMcpTool } from "./tools";
+import {
+  assertMcpJsonLimits,
+  safeMcpResultRecord,
+  validateMcpToolInput,
+  validateMcpToolOutput,
+} from "./validation";
 
 function digest(value: unknown) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
-}
-
-function publicResult(value: unknown): Record<string, unknown> {
-  if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
-  return { value };
 }
 
 function payloadBytes(value: unknown) {
@@ -233,11 +234,6 @@ export async function syncMcpServer(organizationId: string, serverId: string, or
         updatedAt: new Date(),
       }).where(eq(mcpServers.id, server.id));
 
-      await tx.update(mcpTools).set({ enabled: false, updatedAt: new Date() }).where(eq(mcpTools.serverId, server.id));
-      await tx.update(mcpResources).set({ enabled: false, updatedAt: new Date() }).where(eq(mcpResources.serverId, server.id));
-      await tx.update(mcpResourceTemplates).set({ enabled: false, updatedAt: new Date() }).where(eq(mcpResourceTemplates.serverId, server.id));
-      await tx.update(mcpPrompts).set({ enabled: false, updatedAt: new Date() }).where(eq(mcpPrompts.serverId, server.id));
-
       for (const tool of discovered.tools) {
         const inputSchema = tool.inputSchema as Record<string, unknown>;
         const outputSchema = tool.outputSchema as Record<string, unknown> | undefined;
@@ -272,7 +268,6 @@ export async function syncMcpServer(organizationId: string, serverId: string, or
             schemaHash: digest({ inputSchema, outputSchema }),
             capability: classification.capability,
             mediaType: classification.mediaType,
-            enabled: true,
             updatedAt: new Date(),
           },
         });
@@ -303,7 +298,6 @@ export async function syncMcpServer(organizationId: string, serverId: string, or
             annotations: resource.annotations ?? {},
             icons: resource.icons ?? [],
             metadata: resource._meta ?? {},
-            enabled: true,
             updatedAt: new Date(),
           },
         });
@@ -332,7 +326,6 @@ export async function syncMcpServer(organizationId: string, serverId: string, or
             annotations: template.annotations ?? {},
             icons: template.icons ?? [],
             metadata: template._meta ?? {},
-            enabled: true,
             updatedAt: new Date(),
           },
         });
@@ -357,10 +350,45 @@ export async function syncMcpServer(organizationId: string, serverId: string, or
             arguments: prompt.arguments ?? [],
             icons: prompt.icons ?? [],
             metadata: prompt._meta ?? {},
-            enabled: true,
             updatedAt: new Date(),
           },
         });
+      }
+
+      // Reconciliation must not overwrite an operator's explicit show/hide choice.
+      // Only entries absent from a successfully discovered catalog are disabled.
+      // A partial discovery failure is fail-safe: retain the last known catalog.
+      if (!discovered.discoveryErrors.includes("MCP_TOOLS_DISCOVERY_FAILED")) {
+        const names = discovered.tools.map((tool) => tool.name);
+        await tx.update(mcpTools).set({ enabled: false, updatedAt: new Date() }).where(and(
+          eq(mcpTools.organizationId, organizationId),
+          eq(mcpTools.serverId, server.id),
+          names.length ? notInArray(mcpTools.name, names) : undefined,
+        ));
+      }
+      if (!discovered.discoveryErrors.includes("MCP_RESOURCES_DISCOVERY_FAILED")) {
+        const uris = discovered.resources.map((resource) => resource.uri);
+        await tx.update(mcpResources).set({ enabled: false, updatedAt: new Date() }).where(and(
+          eq(mcpResources.organizationId, organizationId),
+          eq(mcpResources.serverId, server.id),
+          uris.length ? notInArray(mcpResources.uri, uris) : undefined,
+        ));
+      }
+      if (!discovered.discoveryErrors.includes("MCP_RESOURCE_TEMPLATES_DISCOVERY_FAILED")) {
+        const templates = discovered.resourceTemplates.map((template) => template.uriTemplate);
+        await tx.update(mcpResourceTemplates).set({ enabled: false, updatedAt: new Date() }).where(and(
+          eq(mcpResourceTemplates.organizationId, organizationId),
+          eq(mcpResourceTemplates.serverId, server.id),
+          templates.length ? notInArray(mcpResourceTemplates.uriTemplate, templates) : undefined,
+        ));
+      }
+      if (!discovered.discoveryErrors.includes("MCP_PROMPTS_DISCOVERY_FAILED")) {
+        const names = discovered.prompts.map((prompt) => prompt.name);
+        await tx.update(mcpPrompts).set({ enabled: false, updatedAt: new Date() }).where(and(
+          eq(mcpPrompts.organizationId, organizationId),
+          eq(mcpPrompts.serverId, server.id),
+          names.length ? notInArray(mcpPrompts.name, names) : undefined,
+        ));
       }
     });
     return discovered;
@@ -454,6 +482,14 @@ export async function executeMcpTool(input: {
     ))
     .limit(1);
   if (!row) throw new ApiError(404, "MCP_TOOL_NOT_FOUND", "أداة MCP غير متاحة.");
+  validateMcpToolInput(row.tool.inputSchema, row.tool.schemaHash, input.arguments);
+  if (!input.runId && row.tool.risk !== "low") {
+    throw new ApiError(
+      409,
+      "MCP_TOOL_APPROVAL_REQUIRED",
+      "هذه الأداة تتطلب تشغيلها من داخل وكيل مع موافقة صريحة قبل التنفيذ.",
+    );
+  }
   const [call] = await db().insert(mcpToolCalls).values({
     organizationId: input.organizationId,
     serverId: row.server.id,
@@ -471,10 +507,14 @@ export async function executeMcpTool(input: {
       arguments: input.arguments,
       timeoutMs: toolTimeoutMs(row.tool.capability),
     });
+    assertMcpJsonLimits(result);
+    if (row.tool.outputSchema) {
+      validateMcpToolOutput(row.tool.outputSchema, row.tool.schemaHash, result.structuredContent);
+    }
     const completedAt = new Date();
     await db().update(mcpToolCalls).set({
       status: result.isError ? "failed" : "completed",
-      result: publicResult(result),
+      result: safeMcpResultRecord(result),
       errorCode: result.isError ? "MCP_TOOL_ERROR" : null,
       durationMs: completedAt.getTime() - call.createdAt.getTime(),
       completedAt,

@@ -6,6 +6,8 @@ import { createSession } from "@/lib/auth/session";
 import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { registerSchema } from "@/lib/http/contracts";
 import { enforceRateLimit, requestClientKey } from "@/lib/security/rate-limit";
+import { anonymizeIp, clientIp } from "@/lib/security/client-ip";
+import { verifyTurnstile } from "@/lib/security/turnstile";
 
 export const runtime = "nodejs";
 
@@ -17,6 +19,7 @@ export async function POST(request: Request) {
     const clientKey = requestClientKey(request);
     await enforceRateLimit({ scope: "auth.register.ip", key: clientKey, limit: 5, windowMs: 60 * 60_000 });
     await enforceRateLimit({ scope: "auth.register.email", key: body.email, limit: 3, windowMs: 60 * 60_000 });
+    await verifyTurnstile({ request, token: body.turnstileToken, expectedAction: "register" });
 
     const existing = await db().select({ id: users.id }).from(users).where(eq(users.email, body.email)).limit(1);
     if (existing[0]) {
@@ -60,7 +63,7 @@ export async function POST(request: Request) {
     await createSession({
       userId: created.userId,
       activeOrganizationId: created.organizationId,
-      ipAddress: clientKey,
+      ipAddress: anonymizeIp(clientIp(request).address),
       userAgent: request.headers.get("user-agent") ?? undefined,
     });
     return apiSuccess(created, requestId, 201);

@@ -54,6 +54,6 @@ jobs:
           --release
           --target-platform android-arm64
           --split-per-abi
-          --dart-define=API_BASE_URL=https://moatazbot.duckdns.org
+          --dart-define=API_BASE_URL=https://moatazalalqami.online
       - name: Verify APK exists
         run: test -f build/app/outputs/flutter-apk/app-arm64-v8a-release.apk

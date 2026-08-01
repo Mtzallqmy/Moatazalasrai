@@ -45,7 +45,7 @@ describe("full MCP catalog and mobile release", () => {
     const config = await readFile("apps/mobile/lib/src/core/api_config.dart", "utf8");
     expect(workflow).toContain("android-arm64");
     expect(workflow).toContain("HAS_RELEASE_KEYSTORE");
-    expect(workflow).toContain("https://moatazbot.duckdns.org");
-    expect(config).toContain("https://moatazbot.duckdns.org");
+    expect(workflow).toContain("https://moatazalalqami.online");
+    expect(config).toContain("https://moatazalalqami.online");
   });
 });
