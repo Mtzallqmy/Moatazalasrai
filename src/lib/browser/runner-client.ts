@@ -40,7 +40,20 @@ const taskStatusResponseSchema = z.object({
   currentStep: z.number().int().nonnegative(),
   errorCode: z.string().nullable().optional(),
   events: z.array(runnerTaskEventSchema).max(500),
-  storageState: storageStateSchema.optional(),
+}).strict();
+
+const stepResponseSchema = z.object({
+  completed: z.literal(true),
+  stepIndex: z.number().int().nonnegative(),
+  result: z.unknown(),
+  durationMs: z.number().int().nonnegative().optional(),
+  currentUrl: z.string().url().optional(),
+  title: z.string().optional(),
+}).passthrough();
+
+const taskStateResponseSchema = z.object({
+  storageState: storageStateSchema,
+  currentUrl: z.string().url(),
 }).strict();
 
 function browserConfig() {
@@ -91,10 +104,14 @@ async function browserRunnerRequest<T>(input: {
     let payload: unknown;
     try { payload = text ? JSON.parse(text) : {}; } catch { payload = null; }
     if (!response.ok) {
-      const message = payload && typeof payload === "object" && "error" in payload
-        ? (payload as { error?: { message?: string } }).error?.message
+      const error = payload && typeof payload === "object" && "error" in payload
+        ? (payload as { error?: { code?: string; message?: string } }).error
         : undefined;
-      throw new ApiError(response.status >= 500 ? 502 : response.status, "BROWSER_RUNNER_ERROR", message ?? "رفضت خدمة المتصفح الطلب.");
+      throw new ApiError(
+        response.status >= 500 ? 502 : response.status,
+        error?.code ?? "BROWSER_RUNNER_ERROR",
+        error?.message ?? "رفضت خدمة المتصفح الطلب.",
+      );
     }
     return input.schema.parse(payload);
   } catch (error) {
@@ -149,11 +166,25 @@ export function startBrowserRunnerTask(input: {
   maxPages: number;
   timeoutMs: number;
   maxDownloadBytes: number;
+  artifacts?: Record<string, { filename: string; mimeType: string; contentBase64: string }>;
 }) {
   return browserRunnerRequest({
     pathname: "/v1/tasks",
     body: input,
     schema: taskStartResponseSchema,
+  });
+}
+
+export function executeBrowserRunnerStep(input: {
+  tenantId: string;
+  taskId: string;
+  stepIndex: number;
+}) {
+  return browserRunnerRequest({
+    pathname: `/v1/tasks/${encodeURIComponent(input.taskId)}/step`,
+    body: { tenantId: input.tenantId, stepIndex: input.stepIndex },
+    schema: stepResponseSchema,
+    timeoutMs: 45_000,
   });
 }
 
@@ -163,6 +194,15 @@ export function getBrowserRunnerTask(input: { tenantId: string; taskId: string; 
     method: "GET",
     pathname: `/v1/tasks/${encodeURIComponent(input.taskId)}?${query}`,
     schema: taskStatusResponseSchema,
+  });
+}
+
+export function getBrowserRunnerState(input: { tenantId: string; taskId: string }) {
+  const query = new URLSearchParams({ tenantId: input.tenantId });
+  return browserRunnerRequest({
+    method: "GET",
+    pathname: `/v1/tasks/${encodeURIComponent(input.taskId)}/state?${query}`,
+    schema: taskStateResponseSchema,
   });
 }
 
