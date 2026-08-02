@@ -10,6 +10,7 @@
 - RBAC من الباكند للأدوار: `owner` و`admin` و`developer` و`operator` و`viewer`.
 - إدارة أعضاء المؤسسة للمستخدمين المسجلين، دون دعوات بريد وهمية.
 - اتصالات OpenAI وAnthropic وGemini وOpenAI-compatible عبر Adapters موحدة.
+- تكامل Puter اختياري من المتصفح خلف Feature Flag، منفصل عن BYOK والخادم، للدردشة النصية واكتشاف النماذج دون تخزين Puter token.
 - فحص DNS/TLS والاعتماد ومسار النماذج، ثم اختبار توليد حقيقي لنموذج قبل حفظ المزود كـ`verified`.
 - حماية SSRF للمزود المخصص، مهلات، منع redirects، حدود للاستجابة، أخطاء منقحة، ومحاولات محدودة للأعطال المؤقتة.
 - تشفير مفاتيح المزودات باستخدام AES-256-GCM داخل envelope بإصدار وnonce عشوائي وauthentication tag.
@@ -71,6 +72,7 @@ npm run dev
 | `OBJECT_STORAGE_DRIVER` | لا | `local` للتطوير أو `r2` للإنتاج؛ لا تُرسل بيانات اعتماد R2 للعميل |
 | `R2_*` | عند اختيار R2 | bucket خاص وبيانات S3 API محدودة على bucket واحد |
 | `CLOUDFLARE_AI_GATEWAY_ENABLED` / `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_AI_GATEWAY_ID` / `OPENAI_BASE_URL` | عند التفعيل | توجيه OpenAI فقط عبر Cloudflare مع بقاء BYOK؛ Anthropic وGemini مباشران |
+| `NEXT_PUBLIC_PUTER_ENABLED` | لا | يفعّل بطاقة ودردشة Puter من المتصفح؛ افتراضيًا `false` ولا يغيّر المزوّدات الخادمية |
 
 ### Cloudflare AI Gateway
 
@@ -178,6 +180,7 @@ npm run test:e2e
 - [النسخ والاستعادة](docs/BACKUP_AND_RESTORE.md)
 - [نموذج التهديد](docs/THREAT_MODEL.md)
 - [Cloudflare AI Gateway](docs/cloudflare-ai-gateway.md)
+- [مزوّد Puter الاختياري](docs/PUTER_PROVIDER.md)
 
 ## قيود حقيقية
 
