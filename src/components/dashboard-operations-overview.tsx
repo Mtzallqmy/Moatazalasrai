@@ -64,7 +64,11 @@ export function DashboardOperationsOverview() {
     finally { setLoading(false); }
   }
 
-  useEffect(() => { if (pathname === "/dashboard") void load(); }, [pathname, days]);
+  useEffect(() => {
+    if (pathname !== "/dashboard") return;
+    const timer = window.setTimeout(() => { void load(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [pathname, days]);
   if (pathname !== "/dashboard") return null;
 
   const maxRuns = Math.max(1, data?.runs.total ?? 1);
