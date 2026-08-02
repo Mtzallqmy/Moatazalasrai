@@ -1,9 +1,11 @@
 import { ApiError } from "@/lib/http/api";
 import { githubSiteConnector } from "@/server/site-connectors/github";
+import { googleSiteConnector } from "@/server/site-connectors/google";
 import type { SiteConnector } from "@/server/site-connectors/types";
 
 const connectors = new Map<string, SiteConnector>([
   [githubSiteConnector.id, githubSiteConnector],
+  [googleSiteConnector.id, googleSiteConnector],
 ]);
 
 export function siteConnector(connectorKey: string): SiteConnector {
