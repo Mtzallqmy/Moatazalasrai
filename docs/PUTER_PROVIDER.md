@@ -33,6 +33,10 @@ NEXT_PUBLIC_PUTER_ENABLED=true
 
 يظهر تنبيه قبل أول استخدام. لا يرسل الخادم طلب AI إلى Puter، ولا يستقبل أو يخزن Puter auth token. ناتج العميل يُحفظ على أنه محتوى غير موثوق (`untrustedClientOutput: true`) ولا يُستخدم كإثبات مالي أو أمني.
 
+## تبعيات الأمان
+
+الحزمة الرسمية `@heyputer/puter.js@2.6.0` تعتمد بصورة غير مباشرة على `ws`. يثبت المشروع override محددًا إلى `ws@8.21.1` لمعالجة التنبيهات عالية الخطورة مع إبقاء إصدار Puter الرسمي المثبت دون تخفيض أو تجاوز لفحص `npm audit`.
+
 ## CSP
 
 عند التفعيل، يضاف فقط `https://api.puter.com` و`wss://api.puter.com` إلى `connect-src`. تسجيل الدخول يفتح نافذة رسمية على `https://puter.com` ولا يحتاج إلى `unsafe-inline` أو `unsafe-eval` أو wildcard.
