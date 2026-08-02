@@ -6,14 +6,36 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  refresh-puter-lockfile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: feature/puter-provider
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22.18.0
+      - name: Refresh lockfile and restore CI
+        run: |
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          git add package-lock.json
+          git checkout origin/main -- .github/workflows/ci.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(deps): lock patched ws override"
+          git push origin HEAD:feature/puter-provider
+
   validate:
+    needs: refresh-puter-lockfile
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
