@@ -35,6 +35,12 @@ test.describe("Puter browser provider", () => {
         LIMIT 1
       `;
       if (!account) throw new Error("Puter E2E account was not persisted.");
+      await sql`
+        UPDATE organization_members
+        SET role = 'developer'
+        WHERE organization_id = ${account.organization_id} AND user_id = ${account.user_id}
+      `;
+
       const credentialId = randomUUID();
       const agentId = randomUUID();
       await sql`
