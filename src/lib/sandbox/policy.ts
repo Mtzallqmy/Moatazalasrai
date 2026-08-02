@@ -70,7 +70,10 @@ const LONG_RUNNING_COMMANDS = new Set([
   "watch", "tail", "top", "htop", "serve", "http-server", "nodemon", "next", "vite",
 ]);
 const SECRET_PATH = /(^|\/)(\.env(?:\.|$)|\.ssh|\.aws|\.config\/gcloud|credentials?|secrets?|id_rsa|id_ed25519)(\/|$)/i;
-const SECRET_TOKEN = /(authorization\s*:|bearer\s+[a-z0-9._-]+|api[_-]?key|access[_-]?token|refresh[_-]?token|password\s*=|cookie\s*:)/ig;
+const AUTHORIZATION_VALUE = /\bauthorization\s*:\s*[^\r\n]+/gi;
+const COOKIE_VALUE = /\bcookie\s*:\s*[^\r\n]+/gi;
+const BEARER_VALUE = /\bbearer\s+[a-z0-9._~+/=-]+/gi;
+const SECRET_ASSIGNMENT = /\b(api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|token)\b\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s;]+)/gi;
 
 function tokenizeShell(command: string) {
   const tokens: string[] = [];
@@ -119,7 +122,12 @@ function maxRisk(left: SandboxRiskLevel, right: SandboxRiskLevel): SandboxRiskLe
 }
 
 export function redactSandboxText(value: string, maximum = 1_000) {
-  return value.replace(SECRET_TOKEN, "[redacted]").slice(0, maximum);
+  return value
+    .replace(AUTHORIZATION_VALUE, "authorization: [redacted]")
+    .replace(COOKIE_VALUE, "cookie: [redacted]")
+    .replace(BEARER_VALUE, "Bearer [redacted]")
+    .replace(SECRET_ASSIGNMENT, "$1=[redacted]")
+    .slice(0, maximum);
 }
 
 export function summarizeSandboxCommand(command: string) {
@@ -252,17 +260,63 @@ export function evaluateSandboxPolicy(input: {
     ? analyzeSandboxCommand(input.command, input.timeoutMs ?? 300_000)
     : { risk: "low" as const, reasons: [], capabilities: [input.action], requiresNetwork: false, destructive: false, secretAccess: false, longRunning: false };
 
-  if (analysis.secretAccess || analysis.capabilities.includes("environment_admin")) {
-    return { outcome: "deny", action: input.action, policy: "deny", risk: "critical", reasons: analysis.reasons, capabilities: analysis.capabilities };
+  if (
+    analysis.secretAccess
+    || analysis.capabilities.includes("environment_admin")
+    || analysis.reasons.includes("broad_delete")
+    || analysis.reasons.includes("permission_change_outside_workspace")
+  ) {
+    return {
+      outcome: "deny",
+      action: input.action,
+      policy: "deny",
+      risk: "critical",
+      reasons: analysis.reasons,
+      capabilities: analysis.capabilities,
+    };
   }
   if (analysis.requiresNetwork && input.networkMode !== "allowlist") {
-    return { outcome: "deny", action: input.action, policy: "deny", risk: analysis.risk, reasons: [...analysis.reasons, "network_disabled"], capabilities: analysis.capabilities };
+    return {
+      outcome: "deny",
+      action: input.action,
+      policy: "deny",
+      risk: analysis.risk,
+      reasons: [...analysis.reasons, "network_disabled"],
+      capabilities: analysis.capabilities,
+    };
   }
   if (policy === "deny") {
-    return { outcome: "deny", action: input.action, policy, risk: analysis.risk, reasons: ["configured_policy_denied", ...analysis.reasons], capabilities: analysis.capabilities };
+    return {
+      outcome: "deny",
+      action: input.action,
+      policy,
+      risk: analysis.risk,
+      reasons: ["configured_policy_denied", ...analysis.reasons],
+      capabilities: analysis.capabilities,
+    };
   }
-  if (policy === "require_approval" || analysis.risk === "high" || analysis.risk === "critical" || analysis.destructive || analysis.longRunning) {
-    return { outcome: "require_approval", action: input.action, policy: "require_approval", risk: analysis.risk, reasons: analysis.reasons, capabilities: analysis.capabilities };
+  if (
+    policy === "require_approval"
+    || analysis.risk === "high"
+    || analysis.risk === "critical"
+    || analysis.destructive
+    || analysis.longRunning
+  ) {
+    return {
+      outcome: "require_approval",
+      action: input.action,
+      policy: "require_approval",
+      risk: analysis.risk,
+      reasons: analysis.reasons,
+      capabilities: analysis.capabilities,
+    };
   }
-  return { outcome: "allow", action: input.action, policy: "allow", risk: analysis.risk, reasons: analysis.reasons, capabilities: analysis.capabilities };
+  return {
+    outcome: "allow",
+    action: input.action,
+    policy: "allow",
+    risk: analysis.risk,
+    reasons: analysis.reasons,
+    capabilities: analysis.capabilities,
+  };
 }
