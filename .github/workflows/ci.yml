@@ -31,6 +31,8 @@ jobs:
           fi
           cat puter-patch/part-* | base64 --decode | gzip --decompress > "$RUNNER_TEMP/puter.patch"
           git apply --index "$RUNNER_TEMP/puter.patch"
+          git rm --cached .github/workflows/puter-e2e.yml
+          rm -f .github/workflows/puter-e2e.yml
           npm install --package-lock-only --ignore-scripts --no-audit --no-fund
           git add package-lock.json
           git checkout origin/main -- .github/workflows/ci.yml
