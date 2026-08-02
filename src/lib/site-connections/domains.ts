@@ -28,7 +28,13 @@ export function normalizeSiteDomain(value: string): string {
   }
 
   const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
-  if (!hostname || hostname.length > 253 || BLOCKED_HOSTS.has(hostname) || hostname.endsWith(".local")) {
+  if (
+    !hostname
+    || hostname.length > 253
+    || hostname.includes("*")
+    || BLOCKED_HOSTS.has(hostname)
+    || hostname.endsWith(".local")
+  ) {
     throw new ApiError(400, "SITE_DOMAIN_FORBIDDEN", "اسم النطاق غير مسموح.");
   }
   if (ipaddr.isValid(hostname) && !isPublicIp(hostname)) {
