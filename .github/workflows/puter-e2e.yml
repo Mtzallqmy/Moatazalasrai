@@ -41,10 +41,10 @@ jobs:
           --health-retries 20
     env:
       NODE_ENV: test
-      APP_URL: http://127.0.0.1:3000
+      APP_URL: http://localhost:3000
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/moataz_puter_e2e
       E2E_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/moataz_puter_e2e
-      E2E_BASE_URL: http://127.0.0.1:3000
+      E2E_BASE_URL: http://localhost:3000
       CREDENTIAL_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
       BOOTSTRAP_ADMIN_TOKEN: ci-only-bootstrap-token
       NEXT_PUBLIC_PUTER_ENABLED: "true"
@@ -63,7 +63,7 @@ jobs:
           npm run dev > puter-e2e-server.log 2>&1 &
           echo $! > puter-e2e-server.pid
           for attempt in $(seq 1 60); do
-            if curl --fail --silent http://127.0.0.1:3000/login >/dev/null; then
+            if curl --fail --silent http://localhost:3000/login >/dev/null; then
               exit 0
             fi
             sleep 1
