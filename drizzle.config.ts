@@ -6,6 +6,7 @@ export default defineConfig({
     "./src/db/mcp-catalog-schema.ts",
     "./src/db/provider-health-schema.ts",
     "./src/db/site-connections-schema.ts",
+    "./src/db/site-oauth-schema.ts",
     "./src/db/sandbox-schema.ts",
   ],
   out: "./drizzle",
