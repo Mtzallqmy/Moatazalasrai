@@ -53,7 +53,7 @@ export async function resumeBrowserTaskAfterApproval(input: {
 
   if (approval.status === "rejected") {
     const now = new Date();
-    const [failed] = await db().transaction(async (tx) => {
+    const failed = await db().transaction(async (tx) => {
       await tx.update(browserTaskSteps).set({
         status: "failed",
         result: { errorCode: "BROWSER_APPROVAL_REJECTED" },
