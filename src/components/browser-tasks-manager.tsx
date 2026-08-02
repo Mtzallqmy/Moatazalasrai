@@ -128,7 +128,10 @@ export function BrowserTasksManager() {
 
   useEffect(() => {
     if (availableAgents.some((agent) => agent.agentId === agentId)) return;
-    setAgentId(availableAgents[0]?.agentId ?? "");
+    const timer = window.setTimeout(() => {
+      setAgentId(availableAgents[0]?.agentId ?? "");
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [availableAgents, agentId]);
 
   async function createTask() {
