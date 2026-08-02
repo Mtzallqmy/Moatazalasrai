@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { toolApprovalsRuntime } from "@/db/agent-runtime-schema";
 import { browserTasksRuntime } from "@/db/browser-runtime-schema";
@@ -7,7 +7,6 @@ import {
   siteConnections,
 } from "@/db/site-connections-schema";
 import { attachments, auditLogs } from "@/db/schema";
-import { consumeToolApproval } from "@/lib/ai-sdk/approvals";
 import { requestExternalToolApproval } from "@/lib/ai-sdk/external-approvals";
 import { browserPlanSchema, type BrowserPlanStep } from "@/lib/browser/contracts";
 import { createBrowserPlan } from "@/lib/browser/planner";
@@ -15,7 +14,6 @@ import {
   cancelBrowserRunnerTask,
   executeBrowserRunnerStep,
   getBrowserRunnerState,
-  getBrowserRunnerTask,
   startBrowserRunnerTask,
 } from "@/lib/browser/runner-client";
 import { env } from "@/lib/config/env";
@@ -23,6 +21,9 @@ import { ApiError } from "@/lib/http/api";
 import { resolveAgentSitePermission } from "@/lib/site-connections/service";
 import { decryptSecret, encryptSecret } from "@/lib/security/encryption";
 import { readAttachmentContent, storeAttachment } from "@/lib/storage/attachments";
+
+type BrowserTaskRow = typeof browserTasksRuntime.$inferSelect;
+type BrowserTaskStepInsert = typeof browserTaskSteps.$inferInsert;
 
 function redactedStepInput(step: BrowserPlanStep) {
   return {
@@ -32,11 +33,13 @@ function redactedStepInput(step: BrowserPlanStep) {
   };
 }
 
-function safeStepResult(value: unknown) {
+function safeStepResult(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { value };
   const result = { ...(value as Record<string, unknown>) };
   if (result.download && typeof result.download === "object") {
-    result.download = { ...(result.download as Record<string, unknown>), contentBase64: undefined };
+    const download = { ...(result.download as Record<string, unknown>) };
+    delete download.contentBase64;
+    result.download = download;
   }
   return result;
 }
@@ -55,8 +58,13 @@ function downloadMime(filename: string) {
   throw new ApiError(415, "BROWSER_DOWNLOAD_TYPE_UNSUPPORTED", "نوع الملف الناتج غير مدعوم للتخزين الآمن.");
 }
 
-async function uploadArtifacts(input: { organizationId: string; plan: ReturnType<typeof browserPlanSchema.parse> }) {
-  const ids = [...new Set(input.plan.steps.map((step) => step.fileArtifactId).filter((value): value is string => Boolean(value)))];
+async function uploadArtifacts(input: {
+  organizationId: string;
+  plan: ReturnType<typeof browserPlanSchema.parse>;
+}) {
+  const ids = [...new Set(input.plan.steps
+    .map((step) => step.fileArtifactId)
+    .filter((value): value is string => Boolean(value)))];
   const artifacts: Record<string, { filename: string; mimeType: string; contentBase64: string }> = {};
   for (const id of ids) {
     const [file] = await db().select().from(attachments).where(and(
@@ -70,19 +78,27 @@ async function uploadArtifacts(input: { organizationId: string; plan: ReturnType
     if (content.length > env().browserAllowedDownloadBytes) {
       throw new ApiError(413, "BROWSER_UPLOAD_FILE_TOO_LARGE", "ملف الرفع أكبر من الحد المسموح.");
     }
-    artifacts[id] = { filename: file.filename, mimeType: file.mimeType, contentBase64: content.toString("base64") };
+    artifacts[id] = {
+      filename: file.filename,
+      mimeType: file.mimeType,
+      contentBase64: content.toString("base64"),
+    };
   }
   return artifacts;
 }
 
-async function prepareBrowserTask(input: { organizationId: string; browserTaskId: string }) {
+async function prepareBrowserTask(input: {
+  organizationId: string;
+  browserTaskId: string;
+}): Promise<BrowserTaskRow> {
   const [task] = await db().select().from(browserTasksRuntime).where(and(
     eq(browserTasksRuntime.id, input.browserTaskId),
     eq(browserTasksRuntime.organizationId, input.organizationId),
   )).limit(1);
   if (!task) throw new ApiError(404, "BROWSER_TASK_NOT_FOUND", "مهمة المتصفح غير موجودة.");
-  if (task.encryptedPlan) return task;
-  if (["completed", "failed", "cancelled", "expired"].includes(task.status)) return task;
+  if (task.encryptedPlan || ["completed", "failed", "cancelled", "expired"].includes(task.status)) {
+    return task;
+  }
 
   const [connection] = await db().select({
     id: siteConnections.id,
@@ -95,14 +111,24 @@ async function prepareBrowserTask(input: { organizationId: string; browserTaskId
     eq(siteConnections.organizationId, input.organizationId),
   )).limit(1);
   if (!connection || connection.status !== "verified" || !connection.encryptedSessionState) {
-    await db().update(browserTasksRuntime).set({ status: "awaiting_connection", updatedAt: new Date() }).where(eq(browserTasksRuntime.id, task.id));
-    return { ...task, status: "awaiting_connection" as const };
+    const [awaiting] = await db().update(browserTasksRuntime).set({
+      status: "awaiting_connection",
+      updatedAt: new Date(),
+    }).where(and(
+      eq(browserTasksRuntime.id, task.id),
+      eq(browserTasksRuntime.organizationId, input.organizationId),
+    )).returning();
+    return awaiting ?? task;
   }
 
-  await db().update(browserTasksRuntime).set({ status: "planning", updatedAt: new Date() }).where(and(
+  await db().update(browserTasksRuntime).set({
+    status: "planning",
+    updatedAt: new Date(),
+  }).where(and(
     eq(browserTasksRuntime.id, task.id),
     eq(browserTasksRuntime.organizationId, input.organizationId),
   ));
+
   const planned = await createBrowserPlan({
     organizationId: input.organizationId,
     agentId: task.agentId,
@@ -116,11 +142,24 @@ async function prepareBrowserTask(input: { organizationId: string; browserTaskId
     JSON.stringify(planned.plan),
     `browser-plan:${input.organizationId}:${task.id}`,
   );
-  const updated = await db().transaction(async (tx) => {
+  const stepRows: BrowserTaskStepInsert[] = planned.plan.steps.map((step, index) => ({
+    organizationId: input.organizationId,
+    browserTaskId: task.id,
+    sequence: index,
+    action: step.action,
+    target: step.target ?? (step.url ? { url: step.url } : {}),
+    inputRedacted: redactedStepInput(step),
+    requiredPermission: step.requiredPermission,
+    riskLevel: step.risk,
+    status: "queued",
+    expectedResult: step.expectedResult,
+  }));
+
+  return db().transaction(async (tx) => {
     const [row] = await tx.update(browserTasksRuntime).set({
       status: "running",
       riskLevel: planned.riskLevel,
-      plan: planned.publicPlan,
+      plan: planned.publicPlan as Record<string, unknown>,
       encryptedPlan,
       startedAt: task.startedAt ?? new Date(),
       updatedAt: new Date(),
@@ -128,18 +167,9 @@ async function prepareBrowserTask(input: { organizationId: string; browserTaskId
       eq(browserTasksRuntime.id, task.id),
       eq(browserTasksRuntime.organizationId, input.organizationId),
     )).returning();
-    await tx.insert(browserTaskSteps).values(planned.plan.steps.map((step, index) => ({
-      organizationId: input.organizationId,
-      browserTaskId: task.id,
-      sequence: index,
-      action: step.action,
-      target: step.target ?? (step.url ? { url: step.url } : {}),
-      inputRedacted: redactedStepInput(step),
-      requiredPermission: step.requiredPermission,
-      riskLevel: step.risk,
-      status: "queued",
-      expectedResult: step.expectedResult,
-    }))).onConflictDoNothing({ target: [browserTaskSteps.browserTaskId, browserTaskSteps.sequence] });
+    if (!row) throw new ApiError(409, "BROWSER_TASK_CHANGED", "تغيرت مهمة المتصفح أثناء التخطيط.");
+    await tx.insert(browserTaskSteps).values(stepRows)
+      .onConflictDoNothing({ target: [browserTaskSteps.browserTaskId, browserTaskSteps.sequence] });
     await tx.insert(auditLogs).values({
       organizationId: input.organizationId,
       actorType: "agent",
@@ -149,15 +179,165 @@ async function prepareBrowserTask(input: { organizationId: string; browserTaskId
       resourceId: task.id,
       metadata: { stepCount: planned.plan.steps.length, riskLevel: planned.riskLevel },
     });
-    return row ?? task;
+    return row;
   });
-  return updated;
 }
 
-export async function executeBrowserTaskRuntime(input: { organizationId: string; browserTaskId: string }) {
+async function failDeniedStep(input: {
+  organizationId: string;
+  task: BrowserTaskRow;
+  stepRowId: string;
+  step: BrowserPlanStep;
+}) {
+  const now = new Date();
+  await db().transaction(async (tx) => {
+    await tx.update(browserTaskSteps).set({
+      status: "failed",
+      result: { errorCode: "SITE_ACTION_DENIED" },
+      completedAt: now,
+    }).where(eq(browserTaskSteps.id, input.stepRowId));
+    await tx.update(browserTasksRuntime).set({
+      status: "failed",
+      errorCode: "SITE_ACTION_DENIED",
+      errorMessage: "سياسة الاتصال تمنع الخطوة.",
+      completedAt: now,
+      updatedAt: now,
+    }).where(and(
+      eq(browserTasksRuntime.id, input.task.id),
+      eq(browserTasksRuntime.organizationId, input.organizationId),
+    ));
+    await tx.insert(auditLogs).values({
+      organizationId: input.organizationId,
+      actorType: "agent",
+      actorId: input.task.agentId,
+      action: "browser_task.step_denied",
+      resourceType: "browser_task",
+      resourceId: input.task.id,
+      metadata: {
+        stepId: input.step.id,
+        action: input.step.action,
+        permission: input.step.requiredPermission,
+        risk: input.step.risk,
+      },
+    });
+  });
+  return { ...input.task, status: "failed" as const, completedAt: now, updatedAt: now };
+}
+
+async function waitForApproval(input: {
+  organizationId: string;
+  task: BrowserTaskRow;
+  stepRowId: string;
+  step: BrowserPlanStep;
+  siteDomain: string;
+}) {
+  const [existing] = await db().select().from(toolApprovalsRuntime).where(and(
+    eq(toolApprovalsRuntime.organizationId, input.organizationId),
+    eq(toolApprovalsRuntime.browserTaskStepId, input.stepRowId),
+  )).limit(1);
+  if (!existing) {
+    await requestExternalToolApproval({
+      organizationId: input.organizationId,
+      requestedByUserId: input.task.userId,
+      agentId: input.task.agentId,
+      toolId: `browser.${input.step.action}`,
+      arguments: {
+        stepId: input.step.id,
+        action: input.step.action,
+        target: input.step.target ?? null,
+        url: input.step.url ?? null,
+        value: input.step.value ?? null,
+        option: input.step.option ?? null,
+      },
+      reason: `الخطوة تتطلب صلاحية ${input.step.requiredPermission} بمستوى خطورة ${input.step.risk}.`,
+      risk: input.step.risk,
+      capability: input.step.requiredPermission,
+      actionSnapshot: {
+        siteDomain: input.siteDomain,
+        stepId: input.step.id,
+        action: input.step.action,
+        target: input.step.target ?? null,
+        expectedResult: input.step.expectedResult,
+        sendsData: input.step.value !== undefined
+          || input.step.option !== undefined
+          || input.step.fileArtifactId !== undefined,
+      },
+      browserTaskId: input.task.id,
+      browserTaskStepId: input.stepRowId,
+    });
+  }
+  const now = new Date();
+  await db().transaction(async (tx) => {
+    await tx.update(browserTaskSteps).set({ status: "awaiting_approval" })
+      .where(eq(browserTaskSteps.id, input.stepRowId));
+    await tx.update(browserTasksRuntime).set({ status: "awaiting_approval", updatedAt: now })
+      .where(and(
+        eq(browserTasksRuntime.id, input.task.id),
+        eq(browserTasksRuntime.organizationId, input.organizationId),
+      ));
+  });
+  return { ...input.task, status: "awaiting_approval" as const, updatedAt: now };
+}
+
+async function persistCompletedStep(input: {
+  organizationId: string;
+  task: BrowserTaskRow;
+  stepRowId: string;
+  step: BrowserPlanStep;
+  result: Record<string, unknown>;
+  durationMs?: number;
+}) {
+  const now = new Date();
+  return db().transaction(async (tx) => {
+    await tx.update(browserTaskSteps).set({
+      status: "completed",
+      result: input.result,
+      completedAt: now,
+    }).where(eq(browserTaskSteps.id, input.stepRowId));
+    const [row] = await tx.update(browserTasksRuntime).set({
+      currentStep: input.task.currentStep + 1,
+      runnerEventSequence: input.task.runnerEventSequence + 1,
+      status: "running",
+      updatedAt: now,
+    }).where(and(
+      eq(browserTasksRuntime.id, input.task.id),
+      eq(browserTasksRuntime.organizationId, input.organizationId),
+    )).returning();
+    if (!row) throw new ApiError(409, "BROWSER_TASK_CHANGED", "تغيرت مهمة المتصفح أثناء حفظ الخطوة.");
+    await tx.insert(auditLogs).values({
+      organizationId: input.organizationId,
+      actorType: "agent",
+      actorId: input.task.agentId,
+      action: "browser_task.step_completed",
+      resourceType: "browser_task",
+      resourceId: input.task.id,
+      metadata: {
+        stepId: input.step.id,
+        action: input.step.action,
+        permission: input.step.requiredPermission,
+        risk: input.step.risk,
+        durationMs: input.durationMs ?? null,
+      },
+    });
+    return row;
+  });
+}
+
+export async function executeBrowserTaskRuntime(input: {
+  organizationId: string;
+  browserTaskId: string;
+}) {
   let task = await prepareBrowserTask(input);
-  if (["awaiting_connection", "completed", "failed", "cancelled", "expired", "awaiting_approval"].includes(task.status)) return task;
+  if ([
+    "awaiting_connection",
+    "completed",
+    "failed",
+    "cancelled",
+    "expired",
+    "awaiting_approval",
+  ].includes(task.status)) return task;
   if (!task.encryptedPlan) throw new ApiError(500, "BROWSER_PLAN_MISSING", "خطة مهمة المتصفح غير متاحة.");
+
   const plan = browserPlanSchema.parse(JSON.parse(decryptSecret(
     task.encryptedPlan,
     `browser-plan:${input.organizationId}:${task.id}`,
@@ -167,7 +347,9 @@ export async function executeBrowserTaskRuntime(input: { organizationId: string;
     eq(siteConnections.organizationId, input.organizationId),
     eq(siteConnections.status, "verified"),
   )).limit(1);
-  if (!connection?.encryptedSessionState) throw new ApiError(409, "BROWSER_SESSION_MISSING", "جلسة المتصفح غير متاحة.");
+  if (!connection?.encryptedSessionState) {
+    throw new ApiError(409, "BROWSER_SESSION_MISSING", "جلسة المتصفح غير متاحة.");
+  }
   const storageState = JSON.parse(decryptSecret(
     connection.encryptedSessionState,
     `browser-session:${input.organizationId}:${connection.id}`,
@@ -189,8 +371,12 @@ export async function executeBrowserTaskRuntime(input: { organizationId: string;
       externalTaskId: started.taskId,
       status: "running",
       updatedAt: new Date(),
-    }).where(and(eq(browserTasksRuntime.id, task.id), eq(browserTasksRuntime.organizationId, input.organizationId))).returning();
-    task = updated ?? task;
+    }).where(and(
+      eq(browserTasksRuntime.id, task.id),
+      eq(browserTasksRuntime.organizationId, input.organizationId),
+    )).returning();
+    if (!updated) throw new ApiError(409, "BROWSER_TASK_CHANGED", "تغيرت مهمة المتصفح قبل بدء التنفيذ.");
+    task = updated;
   }
 
   while (task.currentStep < plan.steps.length) {
@@ -201,10 +387,13 @@ export async function executeBrowserTaskRuntime(input: { organizationId: string;
     if (!fresh) throw new ApiError(404, "BROWSER_TASK_NOT_FOUND", "مهمة المتصفح غير موجودة.");
     task = fresh;
     if (task.cancelRequestedAt || task.status === "cancelled") {
-      await cancelBrowserRunnerTask({ tenantId: input.organizationId, taskId: task.externalTaskId! }).catch(() => undefined);
+      await cancelBrowserRunnerTask({ tenantId: input.organizationId, taskId: task.externalTaskId! })
+        .catch(() => undefined);
       return task;
     }
-    const step = plan.steps[task.currentStep]!;
+
+    const step = plan.steps[task.currentStep];
+    if (!step) break;
     const [stepRow] = await db().select().from(browserTaskSteps).where(and(
       eq(browserTaskSteps.organizationId, input.organizationId),
       eq(browserTaskSteps.browserTaskId, task.id),
@@ -220,70 +409,25 @@ export async function executeBrowserTaskRuntime(input: { organizationId: string;
       risk: step.risk,
     });
     if (decision.outcome === "deny") {
-      const now = new Date();
-      await db().transaction(async (tx) => {
-        await tx.update(browserTaskSteps).set({ status: "failed", result: { errorCode: "SITE_ACTION_DENIED" }, completedAt: now })
-          .where(eq(browserTaskSteps.id, stepRow.id));
-        await tx.update(browserTasksRuntime).set({ status: "failed", errorCode: "SITE_ACTION_DENIED", errorMessage: "سياسة الاتصال تمنع الخطوة.", completedAt: now, updatedAt: now })
-          .where(eq(browserTasksRuntime.id, task.id));
-        await tx.insert(auditLogs).values({
-          organizationId: input.organizationId,
-          actorType: "agent",
-          actorId: task.agentId,
-          action: "browser_task.step_denied",
-          resourceType: "browser_task",
-          resourceId: task.id,
-          metadata: { stepId: step.id, action: step.action, permission: step.requiredPermission, risk: step.risk },
-        });
+      return failDeniedStep({
+        organizationId: input.organizationId,
+        task,
+        stepRowId: stepRow.id,
+        step,
       });
-      return { ...task, status: "failed" as const };
     }
     if (decision.outcome === "require_approval") {
-      const existing = await db().select().from(toolApprovalsRuntime).where(and(
-        eq(toolApprovalsRuntime.organizationId, input.organizationId),
-        eq(toolApprovalsRuntime.browserTaskStepId, stepRow.id),
-      )).limit(1);
-      if (existing[0]?.status === "approved") {
-        // The resume worker will consume the decision and continue.
-        return { ...task, status: "awaiting_approval" as const };
-      }
-      if (!existing[0]) {
-        await requestExternalToolApproval({
-          organizationId: input.organizationId,
-          requestedByUserId: task.userId,
-          agentId: task.agentId,
-          toolId: `browser.${step.action}`,
-          arguments: {
-            stepId: step.id,
-            action: step.action,
-            target: step.target ?? null,
-            url: step.url ?? null,
-            value: step.value ?? null,
-            option: step.option ?? null,
-          },
-          reason: `الخطوة تتطلب صلاحية ${step.requiredPermission} بمستوى خطورة ${step.risk}.`,
-          risk: step.risk,
-          capability: step.requiredPermission,
-          actionSnapshot: {
-            siteDomain: connection.siteDomain,
-            stepId: step.id,
-            action: step.action,
-            target: step.target ?? null,
-            expectedResult: step.expectedResult,
-            sendsData: step.value !== undefined || step.option !== undefined || step.fileArtifactId !== undefined,
-          },
-          browserTaskId: task.id,
-          browserTaskStepId: stepRow.id,
-        });
-      }
-      await db().transaction(async (tx) => {
-        await tx.update(browserTaskSteps).set({ status: "awaiting_approval" }).where(eq(browserTaskSteps.id, stepRow.id));
-        await tx.update(browserTasksRuntime).set({ status: "awaiting_approval", updatedAt: new Date() }).where(eq(browserTasksRuntime.id, task.id));
+      return waitForApproval({
+        organizationId: input.organizationId,
+        task,
+        stepRowId: stepRow.id,
+        step,
+        siteDomain: connection.siteDomain,
       });
-      return { ...task, status: "awaiting_approval" as const };
     }
 
-    await db().update(browserTaskSteps).set({ status: "running", startedAt: new Date() }).where(eq(browserTaskSteps.id, stepRow.id));
+    await db().update(browserTaskSteps).set({ status: "running", startedAt: new Date() })
+      .where(eq(browserTaskSteps.id, stepRow.id));
     try {
       const executed = await executeBrowserRunnerStep({
         tenantId: input.organizationId,
@@ -304,41 +448,42 @@ export async function executeBrowserTaskRuntime(input: { organizationId: string;
           mimeType: downloadMime(download.filename),
           content,
         });
-        result = { ...result, download: { filename: stored.filename, sizeBytes: stored.sizeBytes, attachmentId: stored.id } };
-      }
-      const now = new Date();
-      const [updated] = await db().transaction(async (tx) => {
-        await tx.update(browserTaskSteps).set({ status: "completed", result, completedAt: now }).where(eq(browserTaskSteps.id, stepRow.id));
-        const [row] = await tx.update(browserTasksRuntime).set({
-          currentStep: task.currentStep + 1,
-          runnerEventSequence: task.runnerEventSequence + 1,
-          status: "running",
-          updatedAt: now,
-        }).where(eq(browserTasksRuntime.id, task.id)).returning();
-        await tx.insert(auditLogs).values({
-          organizationId: input.organizationId,
-          actorType: "agent",
-          actorId: task.agentId,
-          action: "browser_task.step_completed",
-          resourceType: "browser_task",
-          resourceId: task.id,
-          metadata: {
-            stepId: step.id,
-            action: step.action,
-            permission: step.requiredPermission,
-            risk: step.risk,
-            durationMs: executed.durationMs ?? null,
+        result = {
+          ...result,
+          download: {
+            filename: stored.filename,
+            sizeBytes: stored.sizeBytes,
+            attachmentId: stored.id,
           },
-        });
-        return row;
+        };
+      }
+      task = await persistCompletedStep({
+        organizationId: input.organizationId,
+        task,
+        stepRowId: stepRow.id,
+        step,
+        result,
+        durationMs: executed.durationMs,
       });
-      task = updated ?? task;
     } catch (error) {
       const now = new Date();
       const code = error instanceof ApiError ? error.code : "BROWSER_STEP_FAILED";
       await db().transaction(async (tx) => {
-        await tx.update(browserTaskSteps).set({ status: "failed", result: { errorCode: code }, completedAt: now }).where(eq(browserTaskSteps.id, stepRow.id));
-        await tx.update(browserTasksRuntime).set({ status: "failed", errorCode: code, errorMessage: "فشل تنفيذ خطوة المتصفح.", completedAt: now, updatedAt: now }).where(eq(browserTasksRuntime.id, task.id));
+        await tx.update(browserTaskSteps).set({
+          status: "failed",
+          result: { errorCode: code },
+          completedAt: now,
+        }).where(eq(browserTaskSteps.id, stepRow.id));
+        await tx.update(browserTasksRuntime).set({
+          status: "failed",
+          errorCode: code,
+          errorMessage: "فشل تنفيذ خطوة المتصفح.",
+          completedAt: now,
+          updatedAt: now,
+        }).where(and(
+          eq(browserTasksRuntime.id, task.id),
+          eq(browserTasksRuntime.organizationId, input.organizationId),
+        ));
         await tx.insert(auditLogs).values({
           organizationId: input.organizationId,
           actorType: "system",
@@ -348,14 +493,15 @@ export async function executeBrowserTaskRuntime(input: { organizationId: string;
           metadata: { stepId: step.id, action: step.action, errorCode: code },
         });
       });
-      await cancelBrowserRunnerTask({ tenantId: input.organizationId, taskId: task.externalTaskId! }).catch(() => undefined);
+      await cancelBrowserRunnerTask({ tenantId: input.organizationId, taskId: task.externalTaskId! })
+        .catch(() => undefined);
       throw error;
     }
   }
 
   const state = await getBrowserRunnerState({ tenantId: input.organizationId, taskId: task.externalTaskId! });
   const now = new Date();
-  const [completed] = await db().transaction(async (tx) => {
+  const completed = await db().transaction(async (tx) => {
     await tx.update(siteConnections).set({
       encryptedSessionState: encryptSecret(
         JSON.stringify(state.storageState),
@@ -363,8 +509,19 @@ export async function executeBrowserTaskRuntime(input: { organizationId: string;
       ),
       lastUsedAt: now,
       updatedAt: now,
-    }).where(and(eq(siteConnections.id, connection.id), eq(siteConnections.organizationId, input.organizationId)));
-    const [row] = await tx.update(browserTasksRuntime).set({ status: "completed", completedAt: now, updatedAt: now }).where(eq(browserTasksRuntime.id, task.id)).returning();
+    }).where(and(
+      eq(siteConnections.id, connection.id),
+      eq(siteConnections.organizationId, input.organizationId),
+    ));
+    const [row] = await tx.update(browserTasksRuntime).set({
+      status: "completed",
+      completedAt: now,
+      updatedAt: now,
+    }).where(and(
+      eq(browserTasksRuntime.id, task.id),
+      eq(browserTasksRuntime.organizationId, input.organizationId),
+    )).returning();
+    if (!row) throw new ApiError(409, "BROWSER_TASK_CHANGED", "تغيرت مهمة المتصفح عند الإكمال.");
     await tx.insert(auditLogs).values({
       organizationId: input.organizationId,
       actorType: "system",
@@ -375,47 +532,7 @@ export async function executeBrowserTaskRuntime(input: { organizationId: string;
     });
     return row;
   });
-  await cancelBrowserRunnerTask({ tenantId: input.organizationId, taskId: task.externalTaskId! }).catch(() => undefined);
-  return completed ?? task;
-}
-
-export async function resumeBrowserTaskRuntime(input: {
-  organizationId: string;
-  approvalId: string;
-  browserTaskId: string;
-}) {
-  const [approval] = await db().select().from(toolApprovalsRuntime).where(and(
-    eq(toolApprovalsRuntime.organizationId, input.organizationId),
-    eq(toolApprovalsRuntime.approvalId, input.approvalId),
-    eq(toolApprovalsRuntime.browserTaskId, input.browserTaskId),
-  )).limit(1);
-  if (!approval || !approval.browserTaskStepId) throw new ApiError(404, "TOOL_APPROVAL_NOT_FOUND", "طلب الموافقة غير موجود.");
-  if (approval.status !== "approved" && approval.status !== "rejected") {
-    throw new ApiError(409, "TOOL_APPROVAL_NOT_DECIDED", "لم يُتخذ قرار صالح لهذه الموافقة.");
-  }
-  if (approval.status === "rejected") {
-    const now = new Date();
-    const [task] = await db().transaction(async (tx) => {
-      await tx.update(browserTaskSteps).set({ status: "failed", result: { errorCode: "BROWSER_APPROVAL_REJECTED" }, completedAt: now })
-        .where(eq(browserTaskSteps.id, approval.browserTaskStepId!));
-      const [row] = await tx.update(browserTasksRuntime).set({ status: "failed", errorCode: "BROWSER_APPROVAL_REJECTED", errorMessage: "رفض المستخدم تنفيذ الخطوة.", completedAt: now, updatedAt: now })
-        .where(and(eq(browserTasksRuntime.id, input.browserTaskId), eq(browserTasksRuntime.organizationId, input.organizationId))).returning();
-      return row;
-    });
-    await consumeToolApproval({ organizationId: input.organizationId, approvalId: input.approvalId });
-    return task;
-  }
-  const [task] = await db().select().from(browserTasksRuntime).where(and(
-    eq(browserTasksRuntime.id, input.browserTaskId),
-    eq(browserTasksRuntime.organizationId, input.organizationId),
-  )).limit(1);
-  if (!task?.externalTaskId) throw new ApiError(409, "BROWSER_SESSION_EXPIRED", "انتهت جلسة تنفيذ المتصفح ولا يمكن إعادة الخطوات السابقة بأمان.");
-  const runner = await getBrowserRunnerTask({ tenantId: input.organizationId, taskId: task.externalTaskId, after: task.runnerEventSequence });
-  if (runner.status !== "running") throw new ApiError(409, "BROWSER_SESSION_EXPIRED", "انتهت جلسة تنفيذ المتصفح ولا يمكن إعادة الخطوات السابقة بأمان.");
-  await db().transaction(async (tx) => {
-    await tx.update(browserTaskSteps).set({ status: "queued" }).where(eq(browserTaskSteps.id, approval.browserTaskStepId!));
-    await tx.update(browserTasksRuntime).set({ status: "running", updatedAt: new Date() }).where(eq(browserTasksRuntime.id, task.id));
-  });
-  await consumeToolApproval({ organizationId: input.organizationId, approvalId: input.approvalId });
-  return executeBrowserTaskRuntime({ organizationId: input.organizationId, browserTaskId: input.browserTaskId });
+  await cancelBrowserRunnerTask({ tenantId: input.organizationId, taskId: task.externalTaskId! })
+    .catch(() => undefined);
+  return completed;
 }
