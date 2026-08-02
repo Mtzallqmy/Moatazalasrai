@@ -12,16 +12,21 @@ test.describe("Puter browser provider", () => {
 
   test("connects, discovers models, streams, persists, and survives reload", async ({ page }) => {
     const email = `puter-e2e-${Date.now()}@example.test`;
-    await page.goto("/register");
-    await page.getByLabel("الاسم الكامل").fill("مستخدم Puter E2E");
-    await page.getByLabel("اسم المؤسسة").fill(`مختبر Puter ${Date.now()}`);
-    await page.getByLabel("البريد الإلكتروني").fill(email);
-    await page.getByLabel("كلمة المرور").fill("A-strong-test-password-123!");
-    await page.getByRole("button", { name: "إنشاء الحساب والمؤسسة" }).click();
-    await expect(page).toHaveURL(/\/dashboard/);
-
     const sql = postgres(process.env.E2E_DATABASE_URL!, { max: 1, prepare: false });
     try {
+      const organizationId = randomUUID();
+      await sql`
+        INSERT INTO organizations (id, name, slug, public_registration_enabled)
+        VALUES (${organizationId}, 'مختبر Puter E2E', ${`puter-e2e-${organizationId}`}, true)
+      `;
+
+      await page.goto("/register");
+      await page.getByLabel("الاسم الكامل").fill("مستخدم Puter E2E");
+      await page.getByLabel("البريد الإلكتروني").fill(email);
+      await page.getByLabel("كلمة المرور").fill("A-strong-test-password-123!");
+      await page.getByRole("button", { name: "إنشاء حساب مستخدم" }).click();
+      await expect(page).toHaveURL(/\/dashboard/);
+
       const [account] = await sql<{ user_id: string; organization_id: string }[]>`
         SELECT u.id AS user_id, om.organization_id
         FROM users u
