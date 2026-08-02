@@ -3,7 +3,13 @@ import { env } from "@/lib/config/env";
 import type {
   AgentRunResumePayload,
   AgentTeamRunPayload,
+  BrowserResumePayload,
+  BrowserTaskPayload,
   DocumentParsePayload,
+  SandboxCleanupPayload,
+  SandboxExecutionPayload,
+  SandboxResumePayload,
+  SandboxWorkspacePayload,
 } from "@/worker/schemas";
 
 let workerUtilsPromise: Promise<WorkerUtils> | null = null;
@@ -24,35 +30,98 @@ export async function releaseWorkerUtils() {
   if (promise) await (await promise).release();
 }
 
-export async function enqueueAgentTeamRun(payload: AgentTeamRunPayload) {
+async function addJob(name: string, payload: unknown, options: {
+  queueName: string;
+  maxAttempts?: number;
+  jobKey: string;
+  jobKeyMode?: "replace" | "preserve_run_at" | "unsafe_dedupe";
+  runAt?: Date;
+}) {
   const worker = await getWorkerUtils();
-  const job = await worker.addJob("agent-team-run", payload, {
-    queueName: "agent-teams",
-    maxAttempts: 5,
-    jobKey: `agent-team-run:${payload.teamRunId}`,
-    jobKeyMode: "unsafe_dedupe",
+  const job = await worker.addJob(name, payload, {
+    queueName: options.queueName,
+    maxAttempts: options.maxAttempts ?? 5,
+    jobKey: options.jobKey,
+    jobKeyMode: options.jobKeyMode ?? "unsafe_dedupe",
+    runAt: options.runAt,
   });
   return { jobId: String(job.id) };
 }
 
-export async function enqueueDocumentParse(payload: DocumentParsePayload) {
-  const worker = await getWorkerUtils();
-  const job = await worker.addJob("document-parse", payload, {
+export function enqueueAgentTeamRun(payload: AgentTeamRunPayload) {
+  return addJob("agent-team-run", payload, {
+    queueName: "agent-teams",
+    jobKey: `agent-team-run:${payload.teamRunId}`,
+  });
+}
+
+export function enqueueDocumentParse(payload: DocumentParsePayload) {
+  return addJob("document-parse", payload, {
     queueName: "rag",
-    maxAttempts: 5,
     jobKey: `document-parse:${payload.documentId}`,
     jobKeyMode: "replace",
   });
-  return { jobId: String(job.id) };
 }
 
-export async function enqueueAgentRunResume(payload: AgentRunResumePayload) {
-  const worker = await getWorkerUtils();
-  const job = await worker.addJob("agent-run-resume", payload, {
+export function enqueueAgentRunResume(payload: AgentRunResumePayload) {
+  return addJob("agent-run-resume", payload, {
     queueName: "agent-approvals",
-    maxAttempts: 5,
     jobKey: `agent-run-resume:${payload.approvalId}`,
-    jobKeyMode: "unsafe_dedupe",
   });
-  return { jobId: String(job.id) };
+}
+
+export function enqueueSandboxCreate(payload: SandboxWorkspacePayload) {
+  return addJob("sandbox-create", payload, {
+    queueName: `sandbox:${payload.organizationId}`,
+    jobKey: `sandbox-create:${payload.workspaceId}`,
+  });
+}
+
+export function enqueueSandboxExecute(payload: SandboxExecutionPayload) {
+  return addJob("sandbox-execute", payload, {
+    queueName: `sandbox:${payload.organizationId}`,
+    maxAttempts: 3,
+    jobKey: `sandbox-execute:${payload.executionId}`,
+  });
+}
+
+export function enqueueSandboxResume(payload: SandboxResumePayload) {
+  return addJob("sandbox-resume", payload, {
+    queueName: `sandbox:${payload.organizationId}`,
+    maxAttempts: 3,
+    jobKey: `sandbox-resume:${payload.approvalId}`,
+  });
+}
+
+export function enqueueSandboxReset(payload: SandboxWorkspacePayload) {
+  return addJob("sandbox-reset", payload, {
+    queueName: `sandbox:${payload.organizationId}`,
+    maxAttempts: 3,
+    jobKey: `sandbox-reset:${payload.workspaceId}`,
+  });
+}
+
+export function enqueueSandboxCleanup(payload: SandboxCleanupPayload = {}) {
+  return addJob("sandbox-cleanup", payload, {
+    queueName: "sandbox-maintenance",
+    maxAttempts: 3,
+    jobKey: `sandbox-cleanup:${payload.organizationId ?? "all"}`,
+    jobKeyMode: "replace",
+  });
+}
+
+export function enqueueBrowserTask(payload: BrowserTaskPayload) {
+  return addJob("browser-task-execute", payload, {
+    queueName: `browser:${payload.organizationId}`,
+    maxAttempts: 3,
+    jobKey: `browser-task-execute:${payload.browserTaskId}`,
+  });
+}
+
+export function enqueueBrowserResume(payload: BrowserResumePayload) {
+  return addJob("browser-task-resume", payload, {
+    queueName: `browser:${payload.organizationId}`,
+    maxAttempts: 3,
+    jobKey: `browser-task-resume:${payload.approvalId}`,
+  });
 }

@@ -92,7 +92,8 @@ export function secureHashEquals(expectedHex: string, value: string): boolean {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
-export function maskSecret(value: string): string {
+export function maskSecret(value: string | undefined): string {
+  if (!value) throw new Error("Cannot mask an empty secret.");
   if (value.length <= 8) return "••••••••";
   return `${value.slice(0, 4)}••••••••${value.slice(-4)}`;
 }
