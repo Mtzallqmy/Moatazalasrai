@@ -9,6 +9,7 @@ import type { ClientAIModel, PuterConnectionState } from "@/lib/puter/types";
 
 export function PuterProviderCard() {
   const [state, setState] = useState<PuterConnectionState>("idle");
+  const [ready, setReady] = useState(false);
   const [models, setModels] = useState<ClientAIModel[]>([]);
   const [error, setError] = useState("");
 
@@ -33,6 +34,7 @@ export function PuterProviderCard() {
         if (!active) return;
         if (!client.auth.isSignedIn()) {
           setState("idle");
+          setReady(true);
           return;
         }
         setState("loading-models");
@@ -40,10 +42,12 @@ export function PuterProviderCard() {
         if (!active) return;
         setModels(available);
         setState("connected");
+        setReady(true);
       }).catch((cause) => {
         if (!active) return;
         setState("error");
         setError(cause instanceof Error ? cause.message : "تعذر تحميل Puter.");
+        setReady(true);
       });
     }, 0);
     return () => {
@@ -53,6 +57,7 @@ export function PuterProviderCard() {
   }, []);
 
   async function connect() {
+    if (!ready) return;
     setState("connecting");
     setError("");
     try {
@@ -66,6 +71,7 @@ export function PuterProviderCard() {
   }
 
   async function disconnect() {
+    if (!ready) return;
     try {
       const client = await getPuterClient();
       client.auth.signOut();
@@ -82,7 +88,7 @@ export function PuterProviderCard() {
   const connected = state === "connected" || state === "loading-models";
   const busy = state === "loading-sdk" || state === "connecting" || state === "loading-models";
 
-  return <Card className="mb-5 p-5 sm:p-6" aria-label="مزوّد Puter">
+  return <Card className="mb-5 p-5 sm:p-6" aria-label="مزوّد Puter" data-puter-ready={ready ? "true" : "false"} data-puter-state={state}>
     <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
       <div className="max-w-3xl">
         <div className="flex flex-wrap items-center gap-2">
@@ -98,13 +104,13 @@ export function PuterProviderCard() {
         </div>
       </div>
       <div className="flex min-w-56 flex-col gap-2">
-        {!connected ? <Button disabled={busy} onClick={() => void connect()} aria-label="الاتصال بحساب Puter">
-          {busy ? <Loader2 className="animate-spin" size={16} /> : <LogIn size={16} />} الاتصال بـPuter
+        {!connected ? <Button disabled={!ready || busy} onClick={() => void connect()} aria-label="الاتصال بحساب Puter">
+          {!ready || busy ? <Loader2 className="animate-spin" size={16} /> : <LogIn size={16} />} الاتصال بـPuter
         </Button> : <>
-          <Button variant="secondary" disabled={busy} onClick={() => void loadModels(true)} aria-label="إعادة تحميل نماذج Puter">
+          <Button variant="secondary" disabled={!ready || busy} onClick={() => void loadModels(true)} aria-label="إعادة تحميل نماذج Puter">
             {state === "loading-models" ? <Loader2 className="animate-spin" size={16} /> : <RefreshCw size={16} />} إعادة تحميل النماذج
           </Button>
-          <Button variant="ghost" onClick={() => void disconnect()} aria-label="قطع الاتصال بحساب Puter"><LogOut size={16} /> قطع الاتصال</Button>
+          <Button variant="ghost" disabled={!ready} onClick={() => void disconnect()} aria-label="قطع الاتصال بحساب Puter"><LogOut size={16} /> قطع الاتصال</Button>
         </>}
       </div>
     </div>
