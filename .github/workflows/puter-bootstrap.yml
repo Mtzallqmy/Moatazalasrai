@@ -1,9 +1,9 @@
 name: Bootstrap Puter Provider Branch
 
 on:
-  push:
+  pull_request:
     branches:
-      - feature/puter-provider
+      - main
     paths:
       - puter-integration.patch.gz.b64
       - .github/workflows/puter-bootstrap.yml
@@ -13,6 +13,7 @@ permissions:
 
 jobs:
   apply:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
