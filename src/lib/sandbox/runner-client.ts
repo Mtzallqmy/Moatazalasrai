@@ -1,4 +1,4 @@
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { env } from "@/lib/config/env";
 import { ApiError } from "@/lib/http/api";
@@ -15,6 +15,26 @@ const workspaceResponseSchema = z.object({
 const executionResponseSchema = z.object({
   executionId: z.string().min(1).max(300),
   accepted: z.boolean(),
+}).strict();
+
+const runnerEventSchema = z.object({
+  sequence: z.number().int().positive(),
+  type: z.string().min(1).max(100),
+  stream: z.enum(["stdout", "stderr"]).optional(),
+  payload: z.record(z.string(), z.unknown()),
+  createdAt: z.string().datetime(),
+}).strict();
+
+const executionSnapshotSchema = z.object({
+  executionId: z.string().min(1).max(300),
+  status: z.enum(["running", "completed", "failed", "cancelled", "timed_out"]),
+  startedAt: z.string().datetime(),
+  completedAt: z.string().datetime().nullable(),
+  exitCode: z.number().int().nullable(),
+  outputTruncated: z.boolean(),
+  stdoutBytes: z.number().int().nonnegative(),
+  stderrBytes: z.number().int().nonnegative(),
+  events: z.array(runnerEventSchema).max(500),
 }).strict();
 
 const fileEntrySchema = z.object({
@@ -111,25 +131,22 @@ export function createRunnerWorkspace(input: {
   diskLimitBytes: number;
   networkMode: string;
 }) {
+  return runnerRequest({ pathname: "/v1/workspaces", body: input, schema: workspaceResponseSchema });
+}
+
+export function resetRunnerWorkspace(input: { tenantId: string; externalWorkspaceId: string }) {
   return runnerRequest({
-    pathname: "/v1/workspaces",
-    body: input,
+    pathname: `/v1/workspaces/${encodeURIComponent(input.externalWorkspaceId)}/reset`,
+    body: { tenantId: input.tenantId },
     schema: workspaceResponseSchema,
   });
 }
 
-export function resetRunnerWorkspace(externalWorkspaceId: string) {
-  return runnerRequest({
-    pathname: `/v1/workspaces/${encodeURIComponent(externalWorkspaceId)}/reset`,
-    body: {},
-    schema: workspaceResponseSchema,
-  });
-}
-
-export function deleteRunnerWorkspace(externalWorkspaceId: string) {
+export function deleteRunnerWorkspace(input: { tenantId: string; externalWorkspaceId: string }) {
+  const query = new URLSearchParams({ tenantId: input.tenantId });
   return runnerRequest({
     method: "DELETE",
-    pathname: `/v1/workspaces/${encodeURIComponent(externalWorkspaceId)}`,
+    pathname: `/v1/workspaces/${encodeURIComponent(input.externalWorkspaceId)}?${query.toString()}`,
     schema: z.object({ deleted: z.literal(true) }).strict(),
   });
 }
@@ -150,33 +167,52 @@ export function startRunnerExecution(input: {
   });
 }
 
-export function stopRunnerExecution(externalWorkspaceId: string, externalExecutionId: string) {
+export function getRunnerExecution(input: {
+  tenantId: string;
+  externalWorkspaceId: string;
+  externalExecutionId: string;
+  after: number;
+}) {
+  const query = new URLSearchParams({ tenantId: input.tenantId, after: String(input.after) });
   return runnerRequest({
-    pathname: `/v1/workspaces/${encodeURIComponent(externalWorkspaceId)}/executions/${encodeURIComponent(externalExecutionId)}/stop`,
-    body: {},
+    method: "GET",
+    pathname: `/v1/workspaces/${encodeURIComponent(input.externalWorkspaceId)}/executions/${encodeURIComponent(input.externalExecutionId)}?${query.toString()}`,
+    schema: executionSnapshotSchema,
+  });
+}
+
+export function stopRunnerExecution(input: {
+  tenantId: string;
+  externalWorkspaceId: string;
+  externalExecutionId: string;
+}) {
+  return runnerRequest({
+    pathname: `/v1/workspaces/${encodeURIComponent(input.externalWorkspaceId)}/executions/${encodeURIComponent(input.externalExecutionId)}/stop`,
+    body: { tenantId: input.tenantId },
     schema: z.object({ stopped: z.boolean() }).strict(),
   });
 }
 
-export function listRunnerFiles(externalWorkspaceId: string, path: string, depth: number) {
-  const query = new URLSearchParams({ path, depth: String(depth) });
+export function listRunnerFiles(input: { tenantId: string; externalWorkspaceId: string; path: string; depth: number }) {
+  const query = new URLSearchParams({ tenantId: input.tenantId, path: input.path, depth: String(input.depth) });
   return runnerRequest({
     method: "GET",
-    pathname: `/v1/workspaces/${encodeURIComponent(externalWorkspaceId)}/files?${query.toString()}`,
+    pathname: `/v1/workspaces/${encodeURIComponent(input.externalWorkspaceId)}/files?${query.toString()}`,
     schema: listFilesResponseSchema,
   });
 }
 
-export function readRunnerFile(externalWorkspaceId: string, path: string, maxBytes: number) {
-  const query = new URLSearchParams({ path, maxBytes: String(maxBytes) });
+export function readRunnerFile(input: { tenantId: string; externalWorkspaceId: string; path: string; maxBytes: number }) {
+  const query = new URLSearchParams({ tenantId: input.tenantId, path: input.path, maxBytes: String(input.maxBytes) });
   return runnerRequest({
     method: "GET",
-    pathname: `/v1/workspaces/${encodeURIComponent(externalWorkspaceId)}/file?${query.toString()}`,
+    pathname: `/v1/workspaces/${encodeURIComponent(input.externalWorkspaceId)}/file?${query.toString()}`,
     schema: readFileResponseSchema,
   });
 }
 
 export function writeRunnerFile(input: {
+  tenantId: string;
   externalWorkspaceId: string;
   path: string;
   content: string;
@@ -191,29 +227,15 @@ export function writeRunnerFile(input: {
 }
 
 export function deleteRunnerFile(input: {
+  tenantId: string;
   externalWorkspaceId: string;
   path: string;
   recursive: boolean;
 }) {
-  const query = new URLSearchParams({ path: input.path, recursive: String(input.recursive) });
+  const query = new URLSearchParams({ tenantId: input.tenantId, path: input.path, recursive: String(input.recursive) });
   return runnerRequest({
     method: "DELETE",
     pathname: `/v1/workspaces/${encodeURIComponent(input.externalWorkspaceId)}/file?${query.toString()}`,
     schema: z.object({ deleted: z.literal(true) }).strict(),
   });
-}
-
-export function verifyRunnerWebhookSignature(input: {
-  timestamp: string;
-  nonce: string;
-  signature: string;
-  pathname: string;
-  body: string;
-}) {
-  const { secret } = runnerConfig();
-  const age = Math.abs(Date.now() - Number(input.timestamp));
-  if (!Number.isFinite(age) || age > 5 * 60_000) return false;
-  const expected = Buffer.from(signature(secret, input.timestamp, input.nonce, "POST", input.pathname, input.body));
-  const actual = Buffer.from(input.signature);
-  return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
