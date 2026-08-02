@@ -130,6 +130,8 @@ async function expirePendingApprovals(organizationId: string) {
     id: toolApprovalsRuntime.id,
     runId: toolApprovalsRuntime.runId,
     toolId: toolApprovalsRuntime.toolId,
+    browserTaskId: toolApprovalsRuntime.browserTaskId,
+    sandboxExecutionId: toolApprovalsRuntime.sandboxExecutionId,
   });
   if (expired.length) {
     await db().insert(auditLogs).values(expired.map((row) => ({
@@ -138,9 +140,20 @@ async function expirePendingApprovals(organizationId: string) {
       action: "tool_approval.expired",
       resourceType: "tool_approval",
       resourceId: row.id,
-      metadata: { runId: row.runId, toolId: row.toolId },
+      metadata: {
+        runId: row.runId,
+        toolId: row.toolId,
+        browserTaskId: row.browserTaskId,
+        sandboxExecutionId: row.sandboxExecutionId,
+      },
     })));
   }
+}
+
+function approvalEncryptionContext(row: typeof toolApprovalsRuntime.$inferSelect) {
+  return row.runId
+    ? `approval:${row.organizationId}:${row.runId}`
+    : `approval:${row.organizationId}:external:${row.approvalId}`;
 }
 
 function publicApproval(row: typeof toolApprovalsRuntime.$inferSelect) {
@@ -148,9 +161,28 @@ function publicApproval(row: typeof toolApprovalsRuntime.$inferSelect) {
     ...row,
     encryptedArguments: undefined,
     argumentsSummary: row.encryptedArguments
-      ? redactedArgumentSummary(JSON.parse(decryptSecret(row.encryptedArguments, `approval:${row.organizationId}:${row.runId}`)))
+      ? redactedArgumentSummary(JSON.parse(decryptSecret(row.encryptedArguments, approvalEncryptionContext(row))))
       : {},
   };
+}
+
+function externalToolPresentation(row: typeof toolApprovalsRuntime.$inferSelect) {
+  if (row.toolId.startsWith("sandbox.")) {
+    return {
+      toolName: ({
+        "sandbox.exec": "تنفيذ أمر في Sandbox",
+        "sandbox.writeFile": "كتابة ملف في Sandbox",
+        "sandbox.deleteFile": "حذف ملف من Sandbox",
+        "sandbox.reset": "إعادة ضبط Sandbox",
+        "sandbox.downloadArtifact": "تنزيل ملف من Sandbox",
+      } as Record<string, string>)[row.toolId] ?? "عملية Sandbox",
+      serverName: "بيئة Sandbox المعزولة",
+    };
+  }
+  if (row.toolId.startsWith("browser.")) {
+    return { toolName: "إجراء داخل موقع خارجي", serverName: "متصفح الوكيل" };
+  }
+  return null;
 }
 
 async function hydrateApprovals(
@@ -173,12 +205,13 @@ async function hydrateApprovals(
   const serverById = new Map(servers.map((row) => [row.id, row]));
   const agentById = new Map(agentRows.map((row) => [row.id, row]));
   return rows.map((row) => {
+    const external = externalToolPresentation(row);
     const tool = toolById.get(row.toolId);
     return {
       ...publicApproval(row),
-      toolName: tool?.title ?? tool?.name ?? "أداة MCP",
-      serverName: row.serverId ? serverById.get(row.serverId)?.name ?? "خادم MCP" : "خادم MCP",
-      agentName: row.agentId ? agentById.get(row.agentId)?.name ?? "وكيل" : "وكيل",
+      toolName: external?.toolName ?? tool?.title ?? tool?.name ?? "أداة MCP",
+      serverName: external?.serverName ?? (row.serverId ? serverById.get(row.serverId)?.name ?? "خادم MCP" : "خادم MCP"),
+      agentName: row.agentId ? agentById.get(row.agentId)?.name ?? "وكيل" : "مستخدم",
     };
   });
 }
@@ -262,7 +295,13 @@ export async function decideToolApproval(input: {
       action: input.approved ? "tool_approval.approved" : "tool_approval.rejected",
       resourceType: "tool_approval",
       resourceId: updated.id,
-      metadata: { runId: updated.runId, toolId: updated.toolId, toolCallId: updated.toolCallId },
+      metadata: {
+        runId: updated.runId,
+        toolId: updated.toolId,
+        toolCallId: updated.toolCallId,
+        browserTaskId: updated.browserTaskId,
+        sandboxExecutionId: updated.sandboxExecutionId,
+      },
     });
     return { kind: "decided" as const, approval: updated };
   });
@@ -299,7 +338,13 @@ export async function consumeToolApproval(input: { organizationId: string; appro
     action: "tool_approval.consumed",
     resourceType: "tool_approval",
     resourceId: updated.id,
-    metadata: { runId: updated.runId, toolId: updated.toolId, toolCallId: updated.toolCallId },
+    metadata: {
+      runId: updated.runId,
+      toolId: updated.toolId,
+      toolCallId: updated.toolCallId,
+      browserTaskId: updated.browserTaskId,
+      sandboxExecutionId: updated.sandboxExecutionId,
+    },
   });
   return updated;
 }
