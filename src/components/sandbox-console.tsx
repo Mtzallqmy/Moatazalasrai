@@ -2,13 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ChevronLeft,
   CircleAlert,
   Copy,
   File,
   FileCode2,
   Folder,
-  FolderOpen,
   Loader2,
   Play,
   RefreshCw,
@@ -16,7 +14,6 @@ import {
   Square,
   TerminalSquare,
   Trash2,
-  X,
 } from "lucide-react";
 import { Badge, Button, Card, EmptyState, Input, Select, Textarea, buttonClass } from "@/components/ui";
 
@@ -111,24 +108,48 @@ export function SandboxConsole({ conversationId, compact = false }: { conversati
     } catch (cause) { setError(cause instanceof Error ? cause.message : "تعذر تحميل الملفات."); }
   }
 
-  useEffect(() => { void loadWorkspaces(); return () => eventSourceRef.current?.close(); }, [conversationId]);
-  useEffect(() => { if (workspaceId) { void loadExecutions(workspaceId); if (activeTab === "files") void loadFiles(); } }, [workspaceId]);
-  useEffect(() => { if (activeTab === "files" && workspaceId) void loadFiles(); }, [activeTab]);
   useEffect(() => {
-    eventSourceRef.current?.close(); setEvents([]);
-    if (!selectedExecutionId) return;
-    const source = new EventSource(`/api/dashboard/sandbox/events?executionId=${encodeURIComponent(selectedExecutionId)}&after=0&limit=500&stream=1`);
-    eventSourceRef.current = source;
-    const handler = (event: MessageEvent) => {
-      try {
-        const value = JSON.parse(event.data) as SandboxEvent;
-        if (typeof value.sequence === "number") setEvents((current) => current.some((item) => item.sequence === value.sequence) ? current : [...current, value].sort((a, b) => a.sequence - b.sequence));
-      } catch {}
+    const timer = window.setTimeout(() => { void loadWorkspaces(); }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      eventSourceRef.current?.close();
     };
-    ["status", "output", "step", "error"].forEach((name) => source.addEventListener(name, handler));
-    source.addEventListener("complete", () => { source.close(); void loadExecutions(); });
-    source.onerror = () => source.close();
-    return () => source.close();
+  }, [conversationId]);
+  useEffect(() => {
+    if (!workspaceId) return;
+    const timer = window.setTimeout(() => {
+      void loadExecutions(workspaceId);
+      if (activeTab === "files") void loadFiles();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [workspaceId]);
+  useEffect(() => {
+    if (activeTab !== "files" || !workspaceId) return;
+    const timer = window.setTimeout(() => { void loadFiles(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [activeTab]);
+  useEffect(() => {
+    eventSourceRef.current?.close();
+    let source: EventSource | null = null;
+    const timer = window.setTimeout(() => {
+      setEvents([]);
+      if (!selectedExecutionId) return;
+      source = new EventSource(`/api/dashboard/sandbox/events?executionId=${encodeURIComponent(selectedExecutionId)}&after=0&limit=500&stream=1`);
+      eventSourceRef.current = source;
+      const handler = (event: MessageEvent) => {
+        try {
+          const value = JSON.parse(event.data) as SandboxEvent;
+          if (typeof value.sequence === "number") setEvents((current) => current.some((item) => item.sequence === value.sequence) ? current : [...current, value].sort((a, b) => a.sequence - b.sequence));
+        } catch {}
+      };
+      ["status", "output", "step", "error"].forEach((name) => source?.addEventListener(name, handler));
+      source.addEventListener("complete", () => { source?.close(); void loadExecutions(); });
+      source.onerror = () => source?.close();
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      source?.close();
+    };
   }, [selectedExecutionId]);
   useEffect(() => { terminalRef.current?.scrollTo({ top: terminalRef.current.scrollHeight }); }, [terminalText]);
 
