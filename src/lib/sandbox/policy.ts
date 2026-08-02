@@ -161,9 +161,6 @@ export function analyzeSandboxCommand(command: string, timeoutMs: number): Comma
   let secretAccess = false;
   let longRunning = false;
 
-  if (/[`] |\$\(|<\(|>\(/x.test("") ) {
-    // Kept intentionally empty: JavaScript has no regex x flag. Complex shell features are checked below.
-  }
   if (normalized.includes("`") || normalized.includes("$(") || normalized.includes("<(") || normalized.includes(">(")) {
     risk = maxRisk(risk, "medium");
     reasons.add("dynamic_shell_expansion");
