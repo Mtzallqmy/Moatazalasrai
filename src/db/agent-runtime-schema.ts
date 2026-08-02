@@ -20,6 +20,8 @@ import {
   toolApprovalStatus,
   users,
 } from "@/db/schema";
+import { browserTasks, browserTaskSteps } from "@/db/site-connections-schema";
+import { sandboxExecutions } from "@/db/sandbox-schema";
 
 export const agentRunSteps = pgTable("agent_run_steps", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -83,10 +85,18 @@ export const toolApprovalsRuntime = pgTable("tool_approvals", {
   capability: text("capability"),
   consumedAt: timestamp("consumed_at", { withTimezone: true }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  browserTaskId: uuid("browser_task_id").references(() => browserTasks.id, { onDelete: "cascade" }),
+  browserTaskStepId: uuid("browser_task_step_id").references(() => browserTaskSteps.id, { onDelete: "cascade" }),
+  sandboxExecutionId: uuid("sandbox_execution_id").references(() => sandboxExecutions.id, { onDelete: "cascade" }),
+  actionSnapshot: jsonb("action_snapshot").$type<Record<string, unknown>>(),
 }, (table) => [
   uniqueIndex("tool_approvals_approval_id_unique_idx").on(table.approvalId),
   uniqueIndex("tool_approvals_run_tool_call_unique_idx").on(table.runId, table.toolCallId),
+  uniqueIndex("tool_approvals_browser_task_step_unique_idx").on(table.browserTaskStepId),
+  uniqueIndex("tool_approvals_sandbox_execution_unique_idx").on(table.sandboxExecutionId),
   index("tool_approvals_run_status_idx").on(table.organizationId, table.runId, table.status, table.expiresAt),
+  index("tool_approvals_browser_task_status_idx").on(table.organizationId, table.browserTaskId, table.status, table.expiresAt),
+  index("tool_approvals_sandbox_status_idx").on(table.organizationId, table.sandboxExecutionId, table.status, table.expiresAt),
 ]);
 
 export const mcpToolCallsRuntime = pgTable("mcp_tool_calls", {
