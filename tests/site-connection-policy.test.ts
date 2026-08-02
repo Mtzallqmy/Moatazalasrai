@@ -24,9 +24,9 @@ describe("site connection policy", () => {
     expect(evaluateSitePermission({ action: "security_settings", policy: "deny", risk: "critical" }).outcome).toBe("deny");
   });
 
-  it("normalizes and deduplicates domain allowlists", () => {
+  it("normalizes, deduplicates, and sorts domain allowlists", () => {
     expect(normalizeDomainAllowlist("Example.COM.", ["api.example.com", "example.com", "API.EXAMPLE.COM."]))
-      .toEqual(["example.com", "api.example.com"]);
+      .toEqual(["api.example.com", "example.com"]);
   });
 
   it("rejects wildcard and local domains", () => {
