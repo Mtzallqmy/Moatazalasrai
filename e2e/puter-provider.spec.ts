@@ -7,6 +7,8 @@ const enabled = process.env.E2E_BASE_URL
   && process.env.NEXT_PUBLIC_PUTER_ENABLED === "true"
   && process.env.NEXT_PUBLIC_PUTER_E2E_MOCK === "true";
 
+const baseUrl = process.env.E2E_BASE_URL ?? "http://127.0.0.1:3000";
+
 test.describe("Puter browser provider", () => {
   test.skip(!enabled, "Puter E2E requires an isolated deployment with the explicit browser mock enabled.");
 
@@ -15,16 +17,22 @@ test.describe("Puter browser provider", () => {
     const sql = postgres(process.env.E2E_DATABASE_URL!, { max: 1, prepare: false });
     try {
       const organizationId = randomUUID();
+      await sql`UPDATE organizations SET public_registration_enabled = false WHERE public_registration_enabled = true`;
       await sql`
         INSERT INTO organizations (id, name, slug, public_registration_enabled)
         VALUES (${organizationId}, 'مختبر Puter E2E', ${`puter-e2e-${organizationId}`}, true)
       `;
 
-      await page.goto("/register");
-      await page.getByLabel("الاسم الكامل").fill("مستخدم Puter E2E");
-      await page.getByLabel("البريد الإلكتروني").fill(email);
-      await page.getByLabel("كلمة المرور").fill("A-strong-test-password-123!");
-      await page.getByRole("button", { name: "إنشاء حساب مستخدم" }).click();
+      const registration = await page.context().request.post(`${baseUrl}/api/auth/register`, {
+        headers: { origin: baseUrl },
+        data: {
+          name: "مستخدم Puter E2E",
+          email,
+          password: "A-strong-test-password-123!",
+        },
+      });
+      expect(registration.status()).toBe(201);
+      await page.goto("/dashboard");
       await expect(page).toHaveURL(/\/dashboard/);
 
       const [account] = await sql<{ user_id: string; organization_id: string }[]>`
@@ -89,8 +97,11 @@ test.describe("Puter browser provider", () => {
     await page.goto("/dashboard/chat");
     await page.getByRole("button", { name: "محادثة جديدة" }).click();
     await page.getByLabel("مصدر تنفيذ الدردشة").selectOption("puter");
+    await expect(page.getByLabel("نموذج Puter").locator('option[value="puter-e2e-model"]')).toHaveCount(1);
     await page.getByLabel("نموذج Puter").selectOption("puter-e2e-model");
-    await page.getByPlaceholder("اكتب طلبك… Enter للإرسال وShift+Enter لسطر جديد").fill("ابدأ اختبار Puter");
+    const composer = page.getByPlaceholder("اكتب طلبك… Enter للإرسال وShift+Enter لسطر جديد");
+    await expect(composer).toBeEnabled();
+    await composer.fill("ابدأ اختبار Puter");
     await page.getByRole("button", { name: "إرسال" }).click();
     await page.getByRole("button", { name: "أفهم وأتابع" }).click();
     await expect(page.getByText("نجح بث Puter التجريبي")).toBeVisible();
