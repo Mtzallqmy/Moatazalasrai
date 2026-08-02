@@ -134,7 +134,16 @@ describe("runtime limits and observability safety", () => {
     expect(Object.keys(taskList).sort()).toEqual([
       "agent-run-resume",
       "agent-team-run",
+      "browser-task-execute",
+      "browser-task-resume",
       "document-parse",
+      "sandbox-artifact-cleanup",
+      "sandbox-cleanup",
+      "sandbox-create",
+      "sandbox-execute",
+      "sandbox-health-check",
+      "sandbox-reset",
+      "sandbox-resume",
     ]);
     expect(Object.keys(taskList)).not.toContain("document-embed");
     expect(Object.keys(taskList)).not.toContain("memory-compact");
