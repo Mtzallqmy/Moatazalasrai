@@ -17,7 +17,7 @@ describe("Puter streaming adapter", () => {
     const onText = vi.fn();
     const result = await streamPuterChat({
       client: clientFrom([{ type: "reasoning", reasoning: "hidden" }, { type: "text", text: "مر" }, { type: "usage", usage: { total: 2 } }, { type: "text", text: "حبًا" }]),
-      messages: [{ role: "user", content: "مرحبا", images: [] }],
+      messages: [{ role: "user", content: "مرحبا" }],
       model: "model-a",
       onText,
     });
@@ -28,7 +28,7 @@ describe("Puter streaming adapter", () => {
   it("surfaces error chunks", async () => {
     await expect(streamPuterChat({
       client: clientFrom([{ type: "error", message: "رفض Puter" } as PuterChatChunk & { message: string }]),
-      messages: [{ role: "user", content: "x", images: [] }],
+      messages: [{ role: "user", content: "x" }],
       model: "model-a",
       onText: () => undefined,
     })).rejects.toThrow("رفض Puter");
@@ -39,7 +39,7 @@ describe("Puter streaming adapter", () => {
     const onText = vi.fn(() => controller.abort());
     await expect(streamPuterChat({
       client: clientFrom([{ type: "text", text: "أ" }, { type: "text", text: "ب" }]),
-      messages: [{ role: "user", content: "x", images: [] }],
+      messages: [{ role: "user", content: "x" }],
       model: "model-a",
       signal: controller.signal,
       onText,
