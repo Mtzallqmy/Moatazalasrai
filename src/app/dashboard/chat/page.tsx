@@ -6,6 +6,7 @@ import { db } from "@/db";
 import { agents, conversations, userPreferences } from "@/db/schema";
 import { currentSession } from "@/lib/auth/session";
 import { defaultChatAppearance, normalizeChatAppearance } from "@/lib/chat/appearance";
+import { isPuterEnabled } from "@/lib/puter/feature";
 
 export default async function ChatPage({ searchParams }: { searchParams: Promise<{ conversationId?: string }> }) {
   const session = await currentSession();
@@ -26,5 +27,5 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
     }).from(userPreferences).where(eq(userPreferences.userId, session.userId)).limit(1),
   ]);
   const params = await searchParams;
-  return <DashboardShell session={session} activePath="/dashboard/chat" title="الدردشة" description="محادثات محفوظة وتشغيل فعلي للنموذج عبر الوكيل المنشور."><ChatConsole agents={publishedAgents} initialConversations={rows.map((row) => ({ ...row, updatedAt: row.updatedAt.toISOString() }))} initialConversationId={params.conversationId} initialAppearance={normalizeChatAppearance(storedAppearance ?? defaultChatAppearance)} /></DashboardShell>;
+  return <DashboardShell session={session} activePath="/dashboard/chat" title="الدردشة" description="محادثات محفوظة وتشغيل فعلي للنموذج عبر الوكيل المنشور."><ChatConsole agents={publishedAgents} initialConversations={rows.map((row) => ({ ...row, updatedAt: row.updatedAt.toISOString() }))} initialConversationId={params.conversationId} initialAppearance={normalizeChatAppearance(storedAppearance ?? defaultChatAppearance)} puterEnabled={isPuterEnabled()} /></DashboardShell>;
 }

@@ -3,11 +3,13 @@ import { redirect } from "next/navigation";
 import { DashboardShell } from "@/components/dashboard-shell";
 import { ProviderForm } from "@/components/provider-form";
 import { ProviderManager } from "@/components/provider-manager";
+import { PuterProviderCard } from "@/components/puter-provider-card";
 import { db } from "@/db";
 import { providerCredentials } from "@/db/schema";
 import { currentSession } from "@/lib/auth/session";
 import { getProviderPreset } from "@/lib/providers/catalog";
 import { inferProviderSlug } from "@/lib/providers/registry";
+import { isPuterEnabled } from "@/lib/puter/feature";
 
 export default async function ProvidersPage() {
   const session = await currentSession();
@@ -36,6 +38,7 @@ export default async function ProvidersPage() {
   )).orderBy(desc(providerCredentials.createdAt));
 
   return <DashboardShell session={session} activePath="/dashboard/providers" title="المزودون والنماذج" description="اختبار مفاتيح API والنماذج فعليًا، إدارة دورة حياة الاتصالات، واستخدامها في الوكلاء والدردشات والتكاملات.">
+    {isPuterEnabled() ? <PuterProviderCard /> : null}
     <ProviderForm />
     <ProviderManager initialProviders={rows.map((row) => {
       const providerSlug = inferProviderSlug(row.provider, row.baseUrl);

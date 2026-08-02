@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { Check, Palette, X } from "lucide-react";
+import { Check, Cloud, Loader2, Palette, X } from "lucide-react";
 import {
   chatThemeOptions,
   chatWallpaperOptions,
@@ -9,6 +9,10 @@ import {
   type ChatThemeId,
   type ChatWallpaperId,
 } from "@/lib/chat/appearance";
+import { getPuterClient } from "@/lib/puter/client";
+import { streamPuterChat } from "@/lib/puter/chat";
+import { listPuterModels } from "@/lib/puter/models";
+import type { ClientAIModel, PuterChatMessage } from "@/lib/puter/types";
 
 type Agent = { id: string; name: string };
 type Conversation = { id: string; title: string | null; agentId: string; agentName: string; updatedAt: string };
@@ -18,11 +22,12 @@ type FailedUpload = { id: string; file: File; message: string };
 type ModelOption = { providerCredentialId: string; providerName: string; model: string; freeTierEligible: boolean };
 type Api<T> = { success?: boolean; data?: T; error?: { code?: string; message?: string; requestId?: string } };
 
-export function ChatConsole({ agents, initialConversations, initialConversationId, initialAppearance }: {
+export function ChatConsole({ agents, initialConversations, initialConversationId, initialAppearance, puterEnabled }: {
   agents: Agent[];
   initialConversations: Conversation[];
   initialConversationId?: string;
   initialAppearance: ChatAppearance;
+  puterEnabled: boolean;
 }) {
   const [conversations, setConversations] = useState(initialConversations);
   const [conversationId, setConversationId] = useState(
@@ -44,11 +49,39 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
   const [draft, setDraft] = useState("");
   const [models, setModels] = useState<ModelOption[]>([]);
   const [selectedModel, setSelectedModel] = useState("auto");
+  const [executionMode, setExecutionMode] = useState<"server" | "puter">("server");
+  const [puterModels, setPuterModels] = useState<ClientAIModel[]>([]);
+  const [puterModel, setPuterModel] = useState("");
+  const [puterModelsLoading, setPuterModelsLoading] = useState(false);
+  const [puterConnected, setPuterConnected] = useState(false);
+  const [privacyOpen, setPrivacyOpen] = useState(false);
+  const [pendingPuterText, setPendingPuterText] = useState<string | null>(null);
   const [appearance, setAppearance] = useState(initialAppearance);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [savingAppearance, setSavingAppearance] = useState(false);
   const streamController = useRef<AbortController | null>(null);
+  const puterExecutionRef = useRef<{ executionId: string; userMessageId: string; model: string } | null>(null);
   const scrollAnchor = useRef<HTMLDivElement | null>(null);
+
+
+  async function connectPuter(forceModels = false) {
+    if (!puterEnabled) return;
+    setPuterModelsLoading(true);
+    setError(null);
+    try {
+      const client = await getPuterClient();
+      if (!client.auth.isSignedIn()) await client.auth.signIn();
+      const available = await listPuterModels({ force: forceModels, client });
+      setPuterModels(available);
+      setPuterModel((current) => available.some((item) => item.id === current) ? current : available[0]?.id ?? "");
+      setPuterConnected(true);
+    } catch (cause) {
+      setPuterConnected(false);
+      setError(cause instanceof Error ? cause.message : "تعذر الاتصال بـPuter.");
+    } finally {
+      setPuterModelsLoading(false);
+    }
+  }
 
   useEffect(() => {
     fetch("/api/dashboard/models").then(async (response) => {
@@ -275,7 +308,7 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
     }
   }
 
-  async function sendText(text: string) {
+  async function sendServerText(text: string) {
     if (!conversationId || loading || !text.trim()) return;
     const optimisticId = `local-${crypto.randomUUID()}`;
     const optimistic: Message = {
@@ -329,6 +362,103 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
     }
   }
 
+  async function finishPuterExecution(input: {
+    executionId: string;
+    userMessageId: string;
+    model: string;
+    status: "completed" | "failed" | "cancelled";
+    content?: string;
+  }) {
+    const response = await fetch("/api/dashboard/chat/puter", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ conversationId, ...input }),
+    });
+    const result = await response.json().catch(() => null) as Api<{ assistantMessage: Message | null }> | null;
+    if (!response.ok || !result?.success) throw new Error(result?.error?.message ?? "تعذر حفظ نتيجة Puter.");
+    return result.data?.assistantMessage ?? null;
+  }
+
+  async function sendPuterText(text: string) {
+    if (!conversationId || loading || !text.trim() || !puterModel) return;
+    const optimisticId = `local-${crypto.randomUUID()}`;
+    const assistantId = `stream-puter-${crypto.randomUUID()}`;
+    setMessages((current) => [...current, {
+      id: optimisticId, role: "user", content: text.trim(), createdAt: new Date().toISOString(), attachments: [],
+    }]);
+    setLoading(true);
+    setError(null);
+    setRetryText(null);
+    const controller = new AbortController();
+    streamController.current = controller;
+    try {
+      const client = await getPuterClient();
+      if (!client.auth.isSignedIn()) throw new Error("اتصل بحساب Puter قبل بدء الدردشة.");
+      const response = await fetch("/api/dashboard/chat/puter", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          conversationId,
+          message: text.trim(),
+          model: puterModel,
+          clientRequestId: crypto.randomUUID(),
+        }),
+        signal: controller.signal,
+      });
+      const result = await response.json().catch(() => null) as Api<{
+        executionId: string;
+        userMessage: Message;
+        messages: PuterChatMessage[];
+      }> | null;
+      if (!response.ok || !result?.success || !result.data) throw new Error(result?.error?.message ?? "تعذر بدء دردشة Puter.");
+      const execution = { executionId: result.data.executionId, userMessageId: result.data.userMessage.id, model: puterModel };
+      puterExecutionRef.current = execution;
+      setMessages((items) => [...items.map((item) => item.id === optimisticId ? result.data!.userMessage : item), {
+        id: assistantId, role: "assistant", content: "", model: puterModel, createdAt: new Date().toISOString(),
+        metadata: { provider: "puter", executionSource: "client" },
+      }]);
+      const finalText = await streamPuterChat({
+        client,
+        messages: result.data.messages,
+        model: puterModel,
+        signal: controller.signal,
+        onText(delta) {
+          setMessages((items) => items.map((item) => item.id === assistantId ? { ...item, content: item.content + delta } : item));
+        },
+      });
+      const saved = await finishPuterExecution({ ...execution, status: "completed", content: finalText });
+      if (saved) setMessages((items) => items.map((item) => item.id === assistantId ? saved : item));
+      setRetryText(null);
+      setDraft("");
+    } catch (cause) {
+      const execution = puterExecutionRef.current;
+      const cancelled = cause instanceof DOMException && cause.name === "AbortError";
+      if (execution) {
+        await finishPuterExecution({ ...execution, status: cancelled ? "cancelled" : "failed" }).catch(() => undefined);
+      }
+      setMessages((items) => items.filter((item) => item.id !== assistantId || item.content.trim()));
+      setError(cancelled ? "تم إيقاف تحديث استجابة Puter." : cause instanceof Error ? cause.message : "تعذر تشغيل Puter.");
+      if (!cancelled) setRetryText(text.trim());
+    } finally {
+      puterExecutionRef.current = null;
+      streamController.current = null;
+      setLoading(false);
+    }
+  }
+
+  async function sendText(text: string) {
+    if (executionMode === "puter") {
+      if (localStorage.getItem("moataz:puter:privacy-consent") !== "accepted") {
+        setPendingPuterText(text.trim());
+        setPrivacyOpen(true);
+        return;
+      }
+      await sendPuterText(text);
+      return;
+    }
+    await sendServerText(text);
+  }
+
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -341,7 +471,7 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
 
   async function stop() {
     streamController.current?.abort();
-    if (runId) {
+    if (executionMode === "server" && runId) {
       await fetch("/api/dashboard/runs", {
         method: "DELETE",
         headers: { "content-type": "application/json" },
@@ -549,19 +679,41 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
           ) : null}
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-3">
-              <select className="form-control max-w-72 text-sm" value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} aria-label="النموذج">
+              {puterEnabled ? <select
+                className="form-control max-w-56 text-sm"
+                value={executionMode}
+                onChange={(event) => {
+                  const mode = event.target.value === "puter" ? "puter" : "server";
+                  setExecutionMode(mode);
+                  setAttachments([]);
+                  if (mode === "puter" && !puterModels.length) void connectPuter();
+                }}
+                aria-label="مصدر تنفيذ الدردشة"
+              >
+                <option value="server">مزوّد الوكيل الخادمي</option>
+                <option value="puter">Puter — من المتصفح</option>
+              </select> : null}
+              {executionMode === "puter" ? <>
+                <select className="form-control max-w-72 text-sm" value={puterModel} onChange={(event) => setPuterModel(event.target.value)} aria-label="نموذج Puter" disabled={puterModelsLoading}>
+                  <option value="">اختر نموذج Puter</option>
+                  {puterModels.map((item) => <option key={item.id} value={item.id}>{item.name} — {item.provider}</option>)}
+                </select>
+                <button type="button" className="secondary-button px-3 py-2 text-xs" disabled={puterModelsLoading} onClick={() => void connectPuter(true)}>
+                  {puterModelsLoading ? <Loader2 className="animate-spin" size={14} /> : <Cloud size={14} />} {puterConnected ? "تحديث Puter" : "الاتصال بـPuter"}
+                </button>
+              </> :               <select className="form-control max-w-72 text-sm" value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} aria-label="النموذج">
                 <option value="auto">اختيار تلقائي حسب القدرات</option>
                 {models.map((item) => <option key={`${item.providerCredentialId}:${item.model}`} value={`${item.providerCredentialId}:${item.model}`}>
                   {item.providerName} — {item.model}{item.freeTierEligible ? " (مجاني)" : ""}
                 </option>)}
-              </select>
-              <label className="secondary-button cursor-pointer text-sm">
+              </select>}
+              <label className={`secondary-button text-sm ${executionMode === "puter" ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}>
                 {uploading ? "جارٍ الرفع…" : "إرفاق ملفات"}
                 <input
                   type="file"
                   multiple
                   className="sr-only"
-                  disabled={!conversationId || loading || uploading || attachments.length >= 8}
+                  disabled={!conversationId || loading || uploading || attachments.length >= 8 || executionMode === "puter"}
                   accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.docx,.txt,.md,.csv,.json,.xlsx,.pptx,.mp3,.wav,.ogg,.m4a,.mp4,.webm,.mov,.zip,.rar,.7z"
                   onChange={(event) => {
                     uploadFiles(event.target.files);
@@ -575,11 +727,28 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
             {loading ? (
               <button type="button" onClick={stop} className="danger-button">إيقاف التوليد</button>
             ) : (
-              <button disabled={!conversationId || uploading} className="primary-button disabled:opacity-50">إرسال</button>
+              <button disabled={!conversationId || uploading || (executionMode === "puter" && (!puterModel || !puterConnected))} className="primary-button disabled:opacity-50">إرسال</button>
             )}
           </div>
         </form>
       </section>
+      {privacyOpen ? <div className="fixed inset-0 z-[80] grid place-items-center bg-slate-950/70 p-4" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setPrivacyOpen(false); }}>
+        <section className="modal-card max-w-lg" role="dialog" aria-modal="true" aria-labelledby="puter-privacy-title">
+          <h2 id="puter-privacy-title" className="text-xl font-extrabold">قبل استخدام Puter</h2>
+          <p className="mt-3 text-sm leading-7 text-[var(--text-secondary)]">سيُرسل نص طلبك وسياق المحادثة الضروري إلى Puter وإلى مزوّد النموذج الذي يختاره Puter. لا ترسل أسرار المؤسسة أو مفاتيح API أو بيانات اعتماد.</p>
+          <p className="mt-2 text-xs leading-6 text-[var(--text-secondary)]">تنفيذ النموذج يحدث من جلسة متصفحك، ويُحتسب الاستخدام على حساب Puter الخاص بك.</p>
+          <div className="mt-6 flex justify-end gap-2">
+            <button type="button" className="secondary-button" onClick={() => { setPrivacyOpen(false); setPendingPuterText(null); }}>إلغاء</button>
+            <button type="button" className="primary-button" autoFocus onClick={() => {
+              localStorage.setItem("moataz:puter:privacy-consent", "accepted");
+              const pending = pendingPuterText;
+              setPrivacyOpen(false);
+              setPendingPuterText(null);
+              if (pending) void sendPuterText(pending);
+            }}>أفهم وأتابع</button>
+          </div>
+        </section>
+      </div> : null}
     </div>
   );
 }
