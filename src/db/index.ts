@@ -56,6 +56,20 @@ const requiredTables = [
   "agent_team_runs",
   "agent_team_run_steps",
   "worker_heartbeats",
+  "site_connections",
+  "agent_site_connections",
+  "site_connection_permissions",
+  "browser_tasks",
+  "browser_task_steps",
+  "site_oauth_states",
+  "browser_login_sessions",
+  "sandbox_workspaces",
+  "conversation_sandbox_workspaces",
+  "sandbox_permissions",
+  "sandbox_executions",
+  "sandbox_events",
+  "sandbox_files",
+  "sandbox_artifacts",
 ] as const;
 
 export async function checkDatabase(): Promise<{
@@ -97,7 +111,21 @@ export async function checkDatabase(): Promise<{
       to_regclass('public.agent_run_checkpoints')::text AS agent_run_checkpoints,
       to_regclass('public.agent_team_runs')::text AS agent_team_runs,
       to_regclass('public.agent_team_run_steps')::text AS agent_team_run_steps,
-      to_regclass('public.worker_heartbeats')::text AS worker_heartbeats
+      to_regclass('public.worker_heartbeats')::text AS worker_heartbeats,
+      to_regclass('public.site_connections')::text AS site_connections,
+      to_regclass('public.agent_site_connections')::text AS agent_site_connections,
+      to_regclass('public.site_connection_permissions')::text AS site_connection_permissions,
+      to_regclass('public.browser_tasks')::text AS browser_tasks,
+      to_regclass('public.browser_task_steps')::text AS browser_task_steps,
+      to_regclass('public.site_oauth_states')::text AS site_oauth_states,
+      to_regclass('public.browser_login_sessions')::text AS browser_login_sessions,
+      to_regclass('public.sandbox_workspaces')::text AS sandbox_workspaces,
+      to_regclass('public.conversation_sandbox_workspaces')::text AS conversation_sandbox_workspaces,
+      to_regclass('public.sandbox_permissions')::text AS sandbox_permissions,
+      to_regclass('public.sandbox_executions')::text AS sandbox_executions,
+      to_regclass('public.sandbox_events')::text AS sandbox_events,
+      to_regclass('public.sandbox_files')::text AS sandbox_files,
+      to_regclass('public.sandbox_artifacts')::text AS sandbox_artifacts
   `;
   const state = rows[0] as Record<string, string | null> | undefined;
   const missingTables = requiredTables.filter((table) => !state?.[table]);
