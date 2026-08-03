@@ -53,12 +53,14 @@ test.describe("Puter browser provider", () => {
       const agentId = randomUUID();
       await sql`
         INSERT INTO provider_credentials (
-          id, organization_id, provider, name, base_url, encrypted_secret,
-          secret_hint, discovered_models, validation_status, enabled
+          id, organization_id, provider, provider_type_id, transport_mode, credential_mode,
+          name, base_url, encrypted_secret, secret_hint, discovered_models,
+          validation_status, health_status, enabled
         ) VALUES (
-          ${credentialId}, ${account.organization_id}, 'openai', 'Unchanged E2E Server Provider',
-          'https://api.openai.com/v1', 'e2e-unused-secret', 'e2e',
-          ${sql.json(["existing-model"])}, 'verified', true
+          ${credentialId}, ${account.organization_id}, 'openai', 'openai', 'direct', 'encrypted_byok',
+          'Unchanged E2E Server Provider', 'https://api.openai.com/v1',
+          'e2e-unused-secret', 'e2e', ${sql.json(["existing-model"])},
+          'verified', 'healthy', true
         )
       `;
       await sql`
