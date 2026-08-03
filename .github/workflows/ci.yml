@@ -29,7 +29,7 @@ jobs:
             exit 0
           fi
 
-          echo "e53822654c4fd583a43f3e84baf415f8553c73324302ac7d8a8fc65a01cb9f8a  -" | head -c 4000 .bootstrap/cloudflare-provider-patch.04.b64 | sha256sum --check --strict
+          test "$(head -c 4000 .bootstrap/cloudflare-provider-patch.04.b64 | sha256sum | cut -d' ' -f1)" = "e53822654c4fd583a43f3e84baf415f8553c73324302ac7d8a8fc65a01cb9f8a"
           echo "b2631f5f77e0d04b9c3b3d644905113b6e9ae42c8ab851ad61f186dde717f989  .bootstrap/cloudflare-provider-patch.04.00.b64" | sha256sum --check --strict
           echo "7fa9bb80e9dc6992664a09670084aa958f322dc5eac46d2832e0d3446f89d2bb  .bootstrap/cloudflare-provider-patch.04.01.b64" | sha256sum --check --strict
           echo "cd3dfe93e829d7d12a6656e354d685ded156ecf5b6aa4c61597de9dbbb9e5612  .bootstrap/cloudflare-provider-patch.04.02.b64" | sha256sum --check --strict
