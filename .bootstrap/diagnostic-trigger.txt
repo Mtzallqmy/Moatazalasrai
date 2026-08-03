@@ -1,1 +1,1 @@
-trigger diagnostic workflow
+trigger verified patch application
