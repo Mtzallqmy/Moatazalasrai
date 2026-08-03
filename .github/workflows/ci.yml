@@ -1,68 +1,85 @@
 name: CI
 
 on:
+  push:
+    branches: [main]
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  apply-cloudflare-provider-platform:
-    if: github.head_ref == 'feature/cloudflare-provider-platform'
+  validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://user:password@example.invalid/database?sslmode=require
+      CREDENTIAL_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      BOOTSTRAP_ADMIN_TOKEN: ci-only-bootstrap-token
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 0
-      - name: Apply reviewed Cloudflare provider patch
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ ! -f .bootstrap/cloudflare-provider-patch.b64 ]]; then
-            echo "Patch already applied."
-            exit 0
-          fi
+          node-version: 22.18.0
+          cache: npm
+      - name: Verify package lock consistency
+        run: node scripts/verify-lockfile.mjs
+      - run: npm ci --no-audit --no-fund
+      - name: Audit production dependencies (high or critical)
+        run: npm audit --omit=dev --audit-level=high
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:e2e
+      - run: npm run build
 
-          test "$(head -c 4000 .bootstrap/cloudflare-provider-patch.04.b64 | sha256sum | cut -d' ' -f1)" = "e53822654c4fd583a43f3e84baf415f8553c73324302ac7d8a8fc65a01cb9f8a"
-          echo "b2631f5f77e0d04b9c3b3d644905113b6e9ae42c8ab851ad61f186dde717f989  .bootstrap/cloudflare-provider-patch.04.00.b64" | sha256sum --check --strict
-          echo "7fa9bb80e9dc6992664a09670084aa958f322dc5eac46d2832e0d3446f89d2bb  .bootstrap/cloudflare-provider-patch.04.01.b64" | sha256sum --check --strict
-          echo "cd3dfe93e829d7d12a6656e354d685ded156ecf5b6aa4c61597de9dbbb9e5612  .bootstrap/cloudflare-provider-patch.04.02.b64" | sha256sum --check --strict
-          echo "f4b00009fa8bca32230b9b938fcff3026f5c97248cc0bb39057d3569d6ad20f5  .bootstrap/cloudflare-provider-patch.04.03.b64" | sha256sum --check --strict
-          echo "725ae7b2496e39d83ddb4efbc377a33533a586e9eebf663840b3a06c2d9cee28  .bootstrap/cloudflare-provider-patch.04.04.b64" | sha256sum --check --strict
-          echo "cb112f99ec5e85441fe7fa32086b4b968616ea43b0bf2f5534aaee13f56b2207  .bootstrap/cloudflare-provider-patch.04.05.b64" | sha256sum --check --strict
-          echo "5d7e54657c7c5598fdfe53318d332593b1305091683fb304a57b9e3f21da3d1e  .bootstrap/cloudflare-provider-patch.04.06.b64" | sha256sum --check --strict
-
-          {
-            cat .bootstrap/cloudflare-provider-patch.b64
-            cat .bootstrap/cloudflare-provider-patch.01.b64
-            cat .bootstrap/cloudflare-provider-patch.02.b64
-            cat .bootstrap/cloudflare-provider-patch.03.b64
-            head -c 4000 .bootstrap/cloudflare-provider-patch.04.b64
-            cat .bootstrap/cloudflare-provider-patch.04.00.b64
-            cat .bootstrap/cloudflare-provider-patch.04.01.b64
-            cat .bootstrap/cloudflare-provider-patch.04.02.b64
-            cat .bootstrap/cloudflare-provider-patch.04.03.b64
-            cat .bootstrap/cloudflare-provider-patch.04.04.b64
-            cat .bootstrap/cloudflare-provider-patch.04.05.b64
-            cat .bootstrap/cloudflare-provider-patch.04.06.b64
-            cat .bootstrap/cloudflare-provider-patch.05.b64
-            cat .bootstrap/cloudflare-provider-patch.06.b64
-          } > /tmp/cloudflare-provider.patch.b64
-
-          echo "bc6e0d0174747b4ccf21ca18d84ac89bbb3cd6e32bed63189297faf36bf6ab18  /tmp/cloudflare-provider.patch.b64" | sha256sum --check --strict
-          base64 --decode /tmp/cloudflare-provider.patch.b64 | gzip --decompress > /tmp/cloudflare-provider.patch
-          echo "eb85003fad313ef9f410a7078a5d8a1f43d6b74e0f5fb20c3f8b4fbdfd4b63a2  /tmp/cloudflare-provider.patch" | sha256sum --check --strict
-          git apply --check --whitespace=nowarn /tmp/cloudflare-provider.patch
-          git apply --whitespace=nowarn /tmp/cloudflare-provider.patch
-          rm -rf .bootstrap
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "feat(ai): add Cloudflare provider platform and resilient chat runtime"
-          git push origin "HEAD:${GITHUB_HEAD_REF}"
+  postgres-integration:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: moataz_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d moataz_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/moataz_test
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/moataz_test
+      CREDENTIAL_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      BOOTSTRAP_ADMIN_TOKEN: ci-only-bootstrap-token
+      AI_WORKER_ENABLED: "true"
+      AI_OTEL_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22.18.0
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Apply platform and Graphile migrations
+        run: npm run db:migrate:all
+      - name: Run PostgreSQL integration tests
+        run: npm run test:integration -- --reporter=verbose 2>&1 | tee postgres-integration.log
+      - name: Upload PostgreSQL integration diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: postgres-integration-${{ github.run_id }}
+          path: postgres-integration.log
+          if-no-files-found: ignore
+          retention-days: 3
