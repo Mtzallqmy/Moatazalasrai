@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { secureHashEquals } from "@/lib/security/encryption";
+import { defaultProviderTypeId } from "@/lib/providers/provider-config";
 import type { ProviderCredentialMode, ProviderKind, ProviderTransportMode, ProviderTypeId } from "@/lib/providers/types";
 
 export function normalizeValidationBaseUrl(value: string) {
@@ -48,23 +49,23 @@ export function providerValidationConfigHash(input: {
 export function providerValidationMatches(
   session: {
     provider: ProviderKind;
-    providerTypeId: string | null;
+    providerTypeId?: string | null;
     providerSlug: string;
-    transportMode: string;
-    credentialMode: string;
-    gatewayId: string | null;
-    keyAlias: string | null;
+    transportMode?: string | null;
+    credentialMode?: string | null;
+    gatewayId?: string | null;
+    keyAlias?: string | null;
     normalizedBaseUrl: string;
-    apiKeyHash: string | null;
-    configHash: string | null;
+    apiKeyHash?: string | null;
+    configHash?: string | null;
     testedModel: string;
   },
   input: {
     provider: ProviderKind;
-    providerTypeId: ProviderTypeId;
+    providerTypeId?: ProviderTypeId;
     providerSlug: string;
-    transportMode: ProviderTransportMode;
-    credentialMode: ProviderCredentialMode;
+    transportMode?: ProviderTransportMode;
+    credentialMode?: ProviderCredentialMode;
     gatewayId?: string | null;
     keyAlias?: string | null;
     baseUrl: string;
@@ -76,19 +77,33 @@ export function providerValidationMatches(
     collectLog?: boolean;
   },
 ) {
-  const configHash = providerValidationConfigHash(input);
-  const apiKeyMatches = input.credentialMode !== "encrypted_byok"
-    ? session.apiKeyHash === null
+  const providerTypeId = input.providerTypeId ?? defaultProviderTypeId(input.provider);
+  const transportMode = input.transportMode ?? "direct";
+  const credentialMode = input.credentialMode ?? "encrypted_byok";
+  const normalizedInput = {
+    ...input,
+    providerTypeId,
+    transportMode,
+    credentialMode,
+  };
+  const configHash = providerValidationConfigHash(normalizedInput);
+  const sessionProviderTypeId = session.providerTypeId ?? defaultProviderTypeId(session.provider);
+  const sessionTransportMode = session.transportMode ?? "direct";
+  const sessionCredentialMode = session.credentialMode ?? "encrypted_byok";
+  const apiKeyMatches = credentialMode !== "encrypted_byok"
+    ? (session.apiKeyHash ?? null) === null
     : Boolean(session.apiKeyHash && input.apiKey && secureHashEquals(session.apiKeyHash, input.apiKey));
+  const configMatches = session.configHash ? session.configHash === configHash : true;
+
   return session.provider === input.provider
-    && session.providerTypeId === input.providerTypeId
+    && sessionProviderTypeId === providerTypeId
     && session.providerSlug === input.providerSlug
-    && session.transportMode === input.transportMode
-    && session.credentialMode === input.credentialMode
+    && sessionTransportMode === transportMode
+    && sessionCredentialMode === credentialMode
     && (session.gatewayId ?? null) === (input.gatewayId?.trim() || null)
     && (session.keyAlias ?? null) === (input.keyAlias?.trim() || null)
     && normalizeValidationBaseUrl(session.normalizedBaseUrl) === normalizeValidationBaseUrl(input.baseUrl)
     && session.testedModel === input.testModel
-    && session.configHash === configHash
+    && configMatches
     && apiKeyMatches;
 }

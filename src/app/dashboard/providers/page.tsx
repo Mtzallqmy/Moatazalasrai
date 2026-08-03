@@ -9,7 +9,8 @@ import { db } from "@/db";
 import { providerCredentials } from "@/db/schema";
 import { currentSession } from "@/lib/auth/session";
 import { getProviderPreset } from "@/lib/providers/catalog";
-import { asProviderTypeId } from "@/lib/providers/provider-config";
+import { asCredentialMode, asProviderTypeId, asTransportMode } from "@/lib/providers/provider-config";
+import { isProviderHealthStatus } from "@/lib/providers/types";
 import { inferProviderSlug } from "@/lib/providers/registry";
 import { isPuterEnabled } from "@/lib/puter/feature";
 
@@ -62,6 +63,9 @@ export default async function ProvidersPage() {
     <ProviderForm />
     <ProviderManager initialProviders={rows.map((row) => {
       const providerTypeId = asProviderTypeId(row.providerTypeId, row.provider);
+      const transportMode = asTransportMode(row.transportMode);
+      const credentialMode = asCredentialMode(row.credentialMode);
+      const healthStatus = isProviderHealthStatus(row.healthStatus) ? row.healthStatus : "unknown";
       const providerSlug = providerTypeId === "cloudflare-workers-ai"
         ? "cloudflare-workers-ai"
         : providerTypeId === "cloudflare-ai-gateway"
@@ -71,15 +75,18 @@ export default async function ProvidersPage() {
       return {
         ...row,
         providerTypeId,
+        transportMode,
+        credentialMode,
+        healthStatus,
         providerSlug,
         providerLabel: providerTypeId === "cloudflare-workers-ai"
           ? "Cloudflare Workers AI"
           : providerTypeId === "cloudflare-ai-gateway"
             ? "Cloudflare AI Gateway"
             : preset?.labelAr ?? preset?.label ?? providerSlug,
-        apiStyle: row.transportMode === "cloudflare_workers_ai"
+        apiStyle: transportMode === "cloudflare_workers_ai"
           ? "workers_ai_binding"
-          : row.transportMode === "cloudflare_ai_gateway_rest"
+          : transportMode === "cloudflare_ai_gateway_rest"
             ? "cloudflare_rest_chat"
             : preset?.apiStyle ?? "openai_chat",
         lastValidatedAt: row.lastValidatedAt?.toISOString() ?? null,

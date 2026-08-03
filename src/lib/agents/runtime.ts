@@ -155,7 +155,9 @@ async function executeRuntimeCandidate(input: Omit<Parameters<typeof executeAiSd
       status: "completed",
       text: result.text,
       usage: { inputTokens: result.inputTokens, outputTokens: result.outputTokens },
-      providerRequestId: "providerRequestId" in result ? result.providerRequestId : undefined,
+      providerRequestId: "providerRequestId" in result && typeof result.providerRequestId === "string"
+        ? result.providerRequestId
+        : undefined,
       state,
     };
   } catch (error) {

@@ -6,7 +6,7 @@ import { browserPlanSchema, type BrowserPlan } from "@/lib/browser/contracts";
 import { createDirectLanguageModel } from "@/lib/ai-sdk/model-factory";
 import { env } from "@/lib/config/env";
 import { ApiError } from "@/lib/http/api";
-import { resolveProviderApiKey } from "@/lib/providers/provider-config";
+import { asProviderTypeId, asTransportMode, resolveProviderApiKey } from "@/lib/providers/provider-config";
 
 const SYSTEM_PROMPT = `أنت مخطط مهام متصفح مقيد لمنصة SaaS متعددة المؤسسات.
 حوّل تعليمات المستخدم فقط إلى خطة قصيرة قابلة للتحقق. لا تنفذ شيئًا ولا تفترض صلاحيات.
@@ -86,7 +86,9 @@ export async function createBrowserPlan(input: {
     throw new ApiError(422, "BROWSER_PLANNER_UNAVAILABLE", "الوكيل أو مزود التخطيط غير متاح.");
   }
 
-  if (runtime.transportMode === "cloudflare_ai_gateway_rest" || runtime.transportMode === "cloudflare_workers_ai") {
+  const providerTypeId = asProviderTypeId(runtime.providerTypeId, runtime.provider);
+  const transportMode = asTransportMode(runtime.transportMode);
+  if (transportMode === "cloudflare_ai_gateway_rest" || transportMode === "cloudflare_workers_ai") {
     throw new ApiError(422, "BROWSER_PLANNER_TRANSPORT_UNSUPPORTED", "تخطيط المتصفح يحتاج مزودًا يدعم Vercel AI SDK وstructured output على الخادم.");
   }
   const model = createDirectLanguageModel({
@@ -105,8 +107,8 @@ export async function createBrowserPlan(input: {
     model: runtime.model,
     organizationId: input.organizationId,
     requestId: input.requestId,
-    providerTypeId: runtime.providerTypeId,
-    transportMode: runtime.transportMode,
+    providerTypeId,
+    transportMode,
     gatewayId: runtime.gatewayId ?? undefined,
     keyAlias: runtime.keyAlias ?? undefined,
     skipCache: runtime.gatewaySkipCache,

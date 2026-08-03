@@ -30,6 +30,24 @@ export type ProviderHealthStatus =
   | "disabled"
   | "unknown";
 
+export const providerHealthStatuses = [
+  "unconfigured",
+  "validating",
+  "healthy",
+  "degraded",
+  "rate_limited",
+  "unauthorized",
+  "model_unavailable",
+  "network_error",
+  "misconfigured",
+  "disabled",
+  "unknown",
+] as const satisfies readonly ProviderHealthStatus[];
+
+export function isProviderHealthStatus(value: string): value is ProviderHealthStatus {
+  return (providerHealthStatuses as readonly string[]).includes(value);
+}
+
 export type ProviderErrorCategory =
   | "authentication"
   | "authorization"
