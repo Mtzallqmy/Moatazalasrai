@@ -44,18 +44,19 @@ Railway/Docker هو runtime الأساسي. لا تُنقل PostgreSQL أو Grap
 
 عند استخدام التخزين المحلي داخل Docker اربط volume دائمًا إلى `/app/.data`; لا تستخدمه مع عدة replicas. للإنتاج اختر `OBJECT_STORAGE_DRIVER=r2`. يبقى pre-deploy هو `npm run db:migrate:all` مرة واحدة، ولا ينفذ Web أو Worker migrations عند البدء.
 
-### تفعيل AI Gateway تدريجيًا
+### تفعيل منصة مزوّدي Cloudflare تدريجيًا
 
-1. أضف `CLOUDFLARE_ACCOUNT_ID` و`CLOUDFLARE_AI_GATEWAY_ID` و`OPENAI_BASE_URL` إلى Web وWorker.
-2. اترك `CLOUDFLARE_AI_GATEWAY_ENABLED=false` وانشر الإصدار أولًا.
-3. تحقق من صفحة التشخيص ومن نجاح طلب OpenAI مباشر.
-4. فعّل البوابة على Web واحد، ثم اختبر Responses API وStreaming وTool Calling.
-5. فعّل Worker بعد ثبات مؤشرات 429/5xx ووقت أول token.
-6. للرجوع الفوري اضبط `CLOUDFLARE_AI_GATEWAY_ENABLED=false` وأعد التشغيل؛ لا توجد migration أو تغييرات بيانات للتراجع عنها.
+1. أضف معرّفات الحساب والبوابة إلى Web وWorker، وأضف فقط الرموز المطلوبة للمسار المختار.
+2. انشر أولًا والاتصالات الحالية على `direct` والـfallback معطل.
+3. شغّل migration ثم تحقق من اتصال خادمي موجود ومن المحادثة والبث.
+4. أنشئ اتصال staging عبر provider-native أو REST واختبره قبل جعله افتراضيًا.
+5. استخدم Workers AI فقط في نشر OpenNext/Wrangler الذي يحتوي binding `AI`.
+6. راقب HTTP status وrequest/trace ID وlatency وحالة `interrupted` للبث، دون payloads أو أسرار.
+7. للرجوع عطّل الاتصال أو أعده إلى `direct`، وأبق الـfallback معطلًا.
 
-`CLOUDFLARE_API_TOKEN` اختياري ولا يُضبط إلا إذا فُعّل Authenticated Gateway.
-لا يُستخدم بوصفه مفتاح مزود، ولا يحل محل مفاتيح BYOK. راجع
-[دليل Cloudflare AI Gateway](cloudflare-ai-gateway.md).
+لا يستخدم التنفيذ الجديد `OPENAI_BASE_URL` أو endpoint `/compat`. `CLOUDFLARE_AI_GATEWAY_TOKEN` مخصص لـAuthenticated Gateway، و`CLOUDFLARE_API_TOKEN` مخصص لـAI Gateway REST API، ولا يحل أي منهما محل BYOK إلا عندما يكون الاتصال مضبوطًا صراحة على مرجع Cloudflare.
+
+راجع [دليل منصة مزوّدي Cloudflare](cloudflare-ai-gateway.md).
 
 ## التهيئة
 

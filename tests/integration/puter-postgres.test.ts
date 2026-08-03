@@ -39,10 +39,10 @@ describeDatabase("Puter client-executed chat persistence", () => {
     await sql`INSERT INTO organization_members (organization_id, user_id, role) VALUES (${organizationId}, ${userId}, 'member')`;
     await sql`
       INSERT INTO provider_credentials (
-        id, organization_id, provider, name, base_url, encrypted_secret,
+        id, organization_id, provider, provider_type_id, transport_mode, credential_mode, name, base_url, encrypted_secret,
         secret_hint, discovered_models, validation_status, enabled
       ) VALUES (
-        ${credentialId}, ${organizationId}, 'openai', 'Existing Server Provider',
+        ${credentialId}, ${organizationId}, 'openai', 'openai', 'direct', 'encrypted_byok', 'Existing Server Provider',
         'https://api.openai.com/v1', 'unchanged-existing-secret', 'test',
         ${sql.json(["existing-model"])}, 'verified', true
       )

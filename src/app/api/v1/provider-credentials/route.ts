@@ -6,6 +6,7 @@ import { ApiError, apiFailure, apiSuccess, getRequestId, handleApiError, parseJs
 import { providerDeleteSchema, providerInputSchema, providerUpdateSchema } from "@/lib/http/contracts";
 import { getProviderPreset, resolveProviderPreset } from "@/lib/providers/catalog";
 import { defaultBaseUrl, inferProviderSlug, validateProvider } from "@/lib/providers/registry";
+import { defaultProviderTypeId } from "@/lib/providers/provider-config";
 import type { ProviderKind } from "@/lib/providers/types";
 import { decryptSecret, encryptSecret, maskSecret } from "@/lib/security/encryption";
 import { inferModelCapabilities, isFreeTierModel } from "@/server/models/capabilities";
@@ -115,17 +116,24 @@ export async function POST(request: Request) {
       requestId,
       signal: request.signal,
     });
+    if (!body.apiKey) throw new ApiError(400, "API_KEY_REQUIRED", "يلزم مفتاح API لمسار API v1 الحالي.");
     const encryptedSecret = encryptSecret(body.apiKey, `provider:${principal.organizationId}`);
     const [created] = await db().insert(providerCredentials).values({
       organizationId: principal.organizationId,
       provider: body.provider,
+      providerTypeId: defaultProviderTypeId(body.provider),
+      transportMode: "direct",
+      credentialMode: "encrypted_byok",
       name: body.name,
       baseUrl: discovery.normalizedBaseUrl,
       encryptedSecret,
       secretHint: maskSecret(body.apiKey),
       discoveredModels: discovery.models,
       validationStatus: "verified",
+      healthStatus: "healthy",
       lastValidatedAt: new Date(),
+      lastCheckedAt: new Date(),
+      lastSuccessfulAt: new Date(),
       lastValidationLatencyMs: discovery.latencyMs,
       enabled: true,
     }).returning(publicProviderSelection);
@@ -189,7 +197,10 @@ export async function PATCH(request: Request) {
     let discovery: Awaited<ReturnType<typeof validateProvider>> | undefined;
     let apiKey: string | undefined;
     if (connectionChanged) {
-      apiKey = body.apiKey ?? decryptSecret(current.encryptedSecret, `provider:${principal.organizationId}`);
+      if (!body.apiKey && !current.encryptedSecret) {
+        throw new ApiError(409, "PROVIDER_MANAGED_CREDENTIAL_UNSUPPORTED", "إدارة اتصالات Cloudflare تتم من لوحة الإدارة في هذا الإصدار.");
+      }
+      apiKey = body.apiKey ?? decryptSecret(current.encryptedSecret!, `provider:${principal.organizationId}`);
       const testModel = body.testModel ?? body.manualModel ?? current.discoveredModels[0];
       if (!testModel) throw new ApiError(400, "MODEL_TEST_REQUIRED", "يلزم نموذج اختبار.");
       discovery = await validateProvider({

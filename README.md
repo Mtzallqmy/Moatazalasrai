@@ -71,19 +71,20 @@ npm run dev
 | `TRUST_CLOUDFLARE_PROXY` | خلف Cloudflare فقط | يثق بـ`CF-Connecting-IP` بعد منع تجاوز الـproxy |
 | `OBJECT_STORAGE_DRIVER` | لا | `local` للتطوير أو `r2` للإنتاج؛ لا تُرسل بيانات اعتماد R2 للعميل |
 | `R2_*` | عند اختيار R2 | bucket خاص وبيانات S3 API محدودة على bucket واحد |
-| `CLOUDFLARE_AI_GATEWAY_ENABLED` / `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_AI_GATEWAY_ID` / `OPENAI_BASE_URL` | عند التفعيل | توجيه OpenAI فقط عبر Cloudflare مع بقاء BYOK؛ Anthropic وGemini مباشران |
+| `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_AI_GATEWAY_ID` | عند استخدام Cloudflare AI | معرّفات الحساب والبوابة، وتُبنى عناوين provider-native وREST مركزيًا |
+| `CLOUDFLARE_AI_GATEWAY_TOKEN` / `CLOUDFLARE_API_TOKEN` | حسب المسار | أسرار خادمية لـAuthenticated Gateway أو AI Gateway REST؛ لا تظهر للعميل |
+| `AI_PROVIDER_FALLBACK_ENABLED` / `AI_PROVIDER_DIRECT_FALLBACK_ENABLED` | لا | fallback صريح للأخطاء العابرة فقط؛ مغلق افتراضيًا |
 | `NEXT_PUBLIC_PUTER_ENABLED` | لا | يفعّل بطاقة ودردشة Puter من المتصفح؛ افتراضيًا `false` ولا يغيّر المزوّدات الخادمية |
 
-### Cloudflare AI Gateway
+### منصة مزوّدي Cloudflare
 
-يبقى `CLOUDFLARE_AI_GATEWAY_ENABLED=false` افتراضيًا. عند تفعيله تمر جميع طلبات
-OpenAI، بما فيها الفحص والتوليد والبث وResponses API، عبر بوابة `moataz-ai`.
-لا تُخزن Cloudflare مفاتيح المستخدمين؛ يبقى مفتاح OpenAI المفكوك لحظيًا هو
-`Authorization` الخاص بالمزود. تبقى Anthropic وGemini وOpenAI-compatible على
-مساراتها الحالية المباشرة. طبقة `LLMGateway` تضبط مهلة 60 ثانية، محاولة بديلة
-مباشرة واحدة فقط قبل بدء أي stream، وتعطل cache وتسجيل payload.
+تدعم الطبقة الحالية الاتصال المباشر، وCloudflare AI Gateway provider-native،
+وAI Gateway REST API، وWorkers AI عبر binding `AI`. تبقى مفاتيح BYOK مشفّرة
+بالآلية الحالية، بينما يحفظ Provider Key Alias كمرجع فقط وتبقى قيمة المفتاح في
+Cloudflare. لا يستخدم التنفيذ الجديد endpoint `/compat` القديم، والـfallback
+مغلق افتراضيًا ولا يسمح بتجاوز أخطاء المصادقة أو الإعداد.
 
-راجع [دليل Cloudflare AI Gateway](docs/cloudflare-ai-gateway.md).
+راجع [دليل منصة مزوّدي Cloudflare](docs/cloudflare-ai-gateway.md).
 
 توليد مفتاح التشفير:
 

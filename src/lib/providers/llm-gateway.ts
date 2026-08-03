@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
-import type { ProviderKind } from "@/lib/providers/types";
+import { gatewayControlHeaders, providerNativeGatewayBaseUrl } from "@/lib/providers/cloudflare-endpoints";
+import { normalizeUnknownProviderError } from "@/lib/providers/errors";
+import { providerErrorForHttpStatus } from "@/lib/providers/http";
+import { ProviderError, type ProviderKind, type ProviderTransportMode } from "@/lib/providers/types";
 import { validateProviderBaseUrl } from "@/lib/security/provider-network";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
-const RETRYABLE_STATUS_CODES = new Set([429, 502, 503, 504]);
-const CLOUDFLARE_GATEWAY_HOST = "gateway.ai.cloudflare.com";
+const EXPLICIT_FALLBACK_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 
 type SafeLogEntry = {
   event: "llm_gateway_request";
@@ -14,6 +16,7 @@ type SafeLogEntry = {
   statusCode: number | null;
   requestId?: string;
   route: "gateway" | "direct_fallback";
+  fallbackPolicy: "disabled" | "explicit_transient_only";
 };
 
 type GatewayDependencies = {
@@ -40,46 +43,44 @@ function normalized(value: string) {
 }
 
 function hashedOrganizationId(value: string | undefined) {
-  return value
-    ? createHash("sha256").update(value).digest("hex").slice(0, 24)
-    : undefined;
+  return value ? createHash("sha256").update(value).digest("hex").slice(0, 24) : undefined;
 }
 
 function requestUrl(input: RequestInfo | URL) {
-  if (typeof input === "string") return input;
-  if (input instanceof URL) return input.toString();
-  return input.url;
+  if (input instanceof Request) return input.url;
+  return input instanceof URL ? input.toString() : String(input);
 }
 
-function replaceBaseUrl(url: string, from: string, to: string) {
-  const normalizedFrom = normalized(from);
-  if (!url.startsWith(normalizedFrom)) {
-    throw new Error("LLM_GATEWAY_REQUEST_URL_MISMATCH");
+function replaceBaseUrl(url: string, sourceBase: string, targetBase: string) {
+  const source = normalized(sourceBase);
+  if (!url.startsWith(source)) {
+    throw new ProviderError(
+      "PROVIDER_CONFIG_INVALID",
+      "تعذر مطابقة مسار Cloudflare AI Gateway مع مسار المزود.",
+      500,
+      undefined,
+      false,
+      undefined,
+      { category: "misconfigured", technicalMessage: "Gateway request URL is outside configured base URL" },
+    );
   }
-  return `${normalized(to)}${url.slice(normalizedFrom.length)}`;
+  return `${normalized(targetBase)}${url.slice(source.length)}`;
 }
 
-function replayableBody(bytes: ArrayBuffer, method: string) {
-  return method === "GET" || method === "HEAD" || bytes.byteLength === 0
-    ? undefined
-    : bytes;
+function replayableBody(body: ArrayBuffer, method: string) {
+  return method === "GET" || method === "HEAD" ? undefined : body;
 }
 
-function gatewayHeaders(input: {
-  organizationId?: string;
-  requestId?: string;
-}) {
-  const apiToken = process.env.CLOUDFLARE_API_TOKEN?.trim();
-  const metadata = hashedOrganizationId(input.organizationId);
-  return {
-    "cf-aig-skip-cache": "true",
-    "cf-aig-collect-log": "false",
-    "cf-aig-max-attempts": "1",
-    "cf-aig-request-timeout": String(DEFAULT_TIMEOUT_MS),
-    ...(apiToken ? { "cf-aig-authorization": `Bearer ${apiToken}` } : {}),
-    ...(input.requestId ? { "cf-aig-event-id": input.requestId } : {}),
-    ...(metadata ? { "cf-aig-metadata": JSON.stringify({ organization: metadata }) } : {}),
-  };
+function gatewayToken() {
+  return process.env.CLOUDFLARE_AI_GATEWAY_TOKEN?.trim()
+    || process.env.CLOUDFLARE_API_TOKEN?.trim()
+    || undefined;
+}
+
+function removeProviderCredentialHeaders(headers: Headers, provider: ProviderKind) {
+  if (provider === "openai") headers.delete("authorization");
+  if (provider === "anthropic") headers.delete("x-api-key");
+  if (provider === "gemini") headers.delete("x-goog-api-key");
 }
 
 function removeGatewayHeaders(headers: Headers) {
@@ -88,20 +89,30 @@ function removeGatewayHeaders(headers: Headers) {
   }
 }
 
+function explicitFallbackEnabled() {
+  return enabled(process.env.AI_PROVIDER_FALLBACK_ENABLED)
+    && enabled(process.env.AI_PROVIDER_DIRECT_FALLBACK_ENABLED);
+}
+
+function fallbackAllowed(error: ProviderError) {
+  if (!error.retryable) return false;
+  if (error.category === "network" || error.category === "timeout") return true;
+  return error.providerStatus !== undefined && EXPLICIT_FALLBACK_STATUSES.has(error.providerStatus);
+}
+
 export class LLMGateway {
   constructor(private readonly dependencies: GatewayDependencies = {}) {}
 
   status() {
     const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
     const gatewayId = process.env.CLOUDFLARE_AI_GATEWAY_ID?.trim();
-    const configured = process.env.OPENAI_BASE_URL?.trim();
     return {
       enabled: enabled(process.env.CLOUDFLARE_AI_GATEWAY_ENABLED),
-      gatewayUrl: configured
-        ? normalized(configured)
-        : accountId && gatewayId
-          ? `https://${CLOUDFLARE_GATEWAY_HOST}/v1/${accountId}/${gatewayId}/compat`
-          : undefined,
+      accountIdConfigured: Boolean(accountId),
+      gatewayIdConfigured: Boolean(gatewayId),
+      authenticated: Boolean(gatewayToken()),
+      fallbackPolicy: explicitFallbackEnabled() ? "explicit_transient_only" as const : "disabled" as const,
+      gatewayId,
     };
   }
 
@@ -110,101 +121,96 @@ export class LLMGateway {
     directBaseUrl: string;
     organizationId?: string;
     requestId?: string;
+    transportMode?: ProviderTransportMode;
+    gatewayId?: string;
+    keyAlias?: string;
+    skipCache?: boolean;
+    cacheTtl?: number;
+    collectLog?: boolean;
   }): LLMGatewayTransport {
     const directBaseUrl = normalized(input.directBaseUrl);
-    if (!this.status().enabled || input.provider !== "openai") {
-      return { baseUrl: directBaseUrl, headers: {}, gateway: false };
+    const mode = input.transportMode
+      ?? (this.status().enabled && input.provider !== "openai_compatible" ? "cloudflare_ai_gateway_native" : "direct");
+    if (mode === "direct") return { baseUrl: directBaseUrl, headers: {}, gateway: false };
+    if (mode !== "cloudflare_ai_gateway_native") {
+      throw new ProviderError(
+        "PROVIDER_CONFIG_INVALID",
+        "مسار النقل المختار لا يطابق adapter المزوّد الحالي.",
+        422,
+        undefined,
+        false,
+        undefined,
+        { category: "misconfigured", provider: input.provider, requestId: input.requestId },
+      );
     }
 
-    const configuration = this.configuration();
-    const headers = gatewayHeaders(input);
+    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
+    const gatewayId = input.gatewayId?.trim() || process.env.CLOUDFLARE_AI_GATEWAY_ID?.trim();
+    if (!accountId || !gatewayId) {
+      throw new ProviderError(
+        "PROVIDER_CONFIG_INVALID",
+        "إعدادات حساب أو بوابة Cloudflare غير مكتملة.",
+        422,
+        undefined,
+        false,
+        undefined,
+        { category: "misconfigured", provider: input.provider, requestId: input.requestId },
+      );
+    }
+    const gatewayBaseUrl = providerNativeGatewayBaseUrl({ accountId, gatewayId, provider: input.provider });
+    const headers = gatewayControlHeaders({
+      gatewayToken: gatewayToken(),
+      keyAlias: input.keyAlias,
+      skipCache: input.skipCache,
+      cacheTtl: input.cacheTtl,
+      collectLog: input.collectLog,
+    });
     return {
-      baseUrl: configuration.effectiveBaseUrl,
-      configuredUrl: configuration.configuredUrl,
+      baseUrl: gatewayBaseUrl,
+      configuredUrl: gatewayBaseUrl,
       headers,
       gateway: true,
       fetch: this.createGatewayFetch({
         ...input,
         directBaseUrl,
-        gatewayBaseUrl: configuration.effectiveBaseUrl,
+        gatewayBaseUrl,
         headers,
+        useStoredProviderKey: Boolean(input.keyAlias),
       }),
     };
   }
 
-  async reachability() {
+  async reachability(provider: ProviderKind = "openai") {
     const status = this.status();
-    if (!status.enabled) {
-      return { enabled: false, reachable: false, gatewayUrl: status.gatewayUrl };
-    }
-
-    const configuration = this.configuration();
-    const headers = new Headers();
-    const apiToken = process.env.CLOUDFLARE_API_TOKEN?.trim();
-    if (apiToken) headers.set("cf-aig-authorization", `Bearer ${apiToken}`);
+    if (!status.enabled) return { enabled: false, reachable: false, reason: "disabled" as const };
     try {
-      const response = await this.fetchImpl()(`${configuration.effectiveBaseUrl}/models`, {
+      const transport = this.resolve({
+        provider,
+        directBaseUrl: provider === "anthropic"
+          ? "https://api.anthropic.com"
+          : provider === "gemini"
+            ? "https://generativelanguage.googleapis.com/v1beta"
+            : "https://api.openai.com/v1",
+        requestId: crypto.randomUUID(),
+      });
+      const response = await this.fetchImpl()(transport.baseUrl, {
         method: "HEAD",
-        headers,
+        headers: transport.headers,
         cache: "no-store",
         redirect: "error",
         signal: AbortSignal.timeout(5_000),
       });
       await response.body?.cancel().catch(() => undefined);
-      return {
-        enabled: true,
-        reachable: true,
-        gatewayUrl: configuration.configuredUrl,
-        statusCode: response.status,
-      };
-    } catch {
+      return { enabled: true, reachable: true, statusCode: response.status, gatewayUrl: transport.baseUrl };
+    } catch (error) {
+      const normalizedError = normalizeUnknownProviderError(error, { provider });
       return {
         enabled: true,
         reachable: false,
-        gatewayUrl: configuration.configuredUrl,
+        errorCode: normalizedError.code,
+        category: normalizedError.category,
       };
     }
-  }
-
-  private configuration() {
-    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
-    const gatewayId = process.env.CLOUDFLARE_AI_GATEWAY_ID?.trim();
-    const configuredUrl = process.env.OPENAI_BASE_URL?.trim();
-    if (!accountId || !gatewayId || !configuredUrl) {
-      throw new Error(
-        "Cloudflare AI Gateway requires CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_AI_GATEWAY_ID and OPENAI_BASE_URL.",
-      );
-    }
-
-    const cleanUrl = normalized(configuredUrl);
-    const parsed = new URL(cleanUrl);
-    if (
-      parsed.protocol !== "https:"
-      || parsed.hostname !== CLOUDFLARE_GATEWAY_HOST
-      || parsed.username
-      || parsed.password
-      || parsed.search
-      || parsed.hash
-    ) {
-      throw new Error("OPENAI_BASE_URL must be a clean Cloudflare AI Gateway HTTPS URL.");
-    }
-
-    const expectedPrefix = `/v1/${accountId}/${gatewayId}/`;
-    if (
-      !parsed.pathname.startsWith(expectedPrefix)
-      || (!parsed.pathname.endsWith("/compat") && !parsed.pathname.endsWith("/openai"))
-    ) {
-      throw new Error("OPENAI_BASE_URL does not match the configured Cloudflare account and gateway IDs.");
-    }
-
-    // /compat only supports the unified Chat Completions schema and provider-prefixed
-    // model IDs. The provider-native sibling preserves existing model IDs plus the
-    // OpenAI Responses API, streaming, tools and structured output.
-    const effectiveBaseUrl = cleanUrl.endsWith("/compat")
-      ? `${cleanUrl.slice(0, -"/compat".length)}/openai`
-      : cleanUrl;
-
-    return { configuredUrl: cleanUrl, effectiveBaseUrl };
   }
 
   private createGatewayFetch(input: {
@@ -214,49 +220,61 @@ export class LLMGateway {
     headers: Record<string, string>;
     organizationId?: string;
     requestId?: string;
+    useStoredProviderKey: boolean;
   }): typeof globalThis.fetch {
     return async (requestInput, requestInit) => {
       const source = new Request(requestInput, requestInit);
       const body = await source.clone().arrayBuffer();
       const gatewayUrl = requestUrl(source);
-      const directUrl = replaceBaseUrl(gatewayUrl, input.gatewayBaseUrl, input.directBaseUrl);
-      let usedFallback = false;
-      const gatewayResponse = await this.attempt({
-        url: gatewayUrl,
-        source,
-        body,
-        provider: input.provider,
-        organizationId: input.organizationId,
-        requestId: input.requestId,
-        route: "gateway",
-        gatewayHeaders: input.headers,
-      }).catch(async (error: unknown) => {
-        if (source.signal.aborted) throw error;
-        usedFallback = true;
-        return this.attempt({
-          url: directUrl,
+      try {
+        const response = await this.attempt({
+          url: gatewayUrl,
           source,
           body,
           provider: input.provider,
           organizationId: input.organizationId,
           requestId: input.requestId,
-          route: "direct_fallback",
+          route: "gateway",
+          gatewayHeaders: input.headers,
+          removeProviderCredentials: input.useStoredProviderKey,
         });
-      });
-
-      if (usedFallback || !RETRYABLE_STATUS_CODES.has(gatewayResponse.status)) return gatewayResponse;
-      await gatewayResponse.body?.cancel().catch(() => undefined);
-      if (source.signal.aborted) return gatewayResponse;
-      return this.attempt({
-        url: directUrl,
-        source,
-        body,
-        provider: input.provider,
-        organizationId: input.organizationId,
-        requestId: input.requestId,
-        route: "direct_fallback",
-      });
+        if (input.useStoredProviderKey || !explicitFallbackEnabled() || !EXPLICIT_FALLBACK_STATUSES.has(response.status)) return response;
+        const responseText = await response.clone().text().catch(() => "");
+        const gatewayError = providerErrorForHttpStatus(response.status, responseText, response.headers);
+        if (!fallbackAllowed(gatewayError)) return response;
+        await response.body?.cancel().catch(() => undefined);
+        return this.directFallback({ ...input, source, body, gatewayUrl });
+      } catch (error) {
+        const normalizedError = normalizeUnknownProviderError(error, {
+          provider: input.provider,
+          requestId: input.requestId,
+        });
+        if (input.useStoredProviderKey || !explicitFallbackEnabled() || !fallbackAllowed(normalizedError) || source.signal.aborted) throw normalizedError;
+        return this.directFallback({ ...input, source, body, gatewayUrl });
+      }
     };
+  }
+
+  private directFallback(input: {
+    provider: ProviderKind;
+    directBaseUrl: string;
+    gatewayBaseUrl: string;
+    organizationId?: string;
+    requestId?: string;
+    source: Request;
+    body: ArrayBuffer;
+    gatewayUrl: string;
+  }) {
+    const directUrl = replaceBaseUrl(input.gatewayUrl, input.gatewayBaseUrl, input.directBaseUrl);
+    return this.attempt({
+      url: directUrl,
+      source: input.source,
+      body: input.body,
+      provider: input.provider,
+      organizationId: input.organizationId,
+      requestId: input.requestId,
+      route: "direct_fallback",
+    });
   }
 
   private async attempt(input: {
@@ -268,6 +286,7 @@ export class LLMGateway {
     requestId?: string;
     route: "gateway" | "direct_fallback";
     gatewayHeaders?: Record<string, string>;
+    removeProviderCredentials?: boolean;
   }) {
     const started = this.now();
     let statusCode: number | null = null;
@@ -275,6 +294,7 @@ export class LLMGateway {
       await (this.dependencies.validateUrl ?? validateProviderBaseUrl)(input.url);
       const headers = new Headers(input.source.headers);
       if (input.gatewayHeaders) {
+        if (input.removeProviderCredentials) removeProviderCredentialHeaders(headers, input.provider);
         for (const [name, value] of Object.entries(input.gatewayHeaders)) headers.set(name, value);
       } else {
         removeGatewayHeaders(headers);
@@ -301,6 +321,7 @@ export class LLMGateway {
         statusCode,
         requestId: input.requestId,
         route: input.route,
+        fallbackPolicy: explicitFallbackEnabled() ? "explicit_transient_only" : "disabled",
       });
     }
   }
@@ -314,10 +335,7 @@ export class LLMGateway {
   }
 
   private log(entry: SafeLogEntry) {
-    if (this.dependencies.log) {
-      this.dependencies.log(entry);
-      return;
-    }
+    if (this.dependencies.log) return this.dependencies.log(entry);
     console.info(JSON.stringify(entry));
   }
 }

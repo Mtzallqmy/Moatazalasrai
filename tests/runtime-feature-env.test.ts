@@ -4,7 +4,8 @@ import { validateOptionalRuntimeEnvironment } from "../scripts/validate-runtime-
 const keys = [
   "TURNSTILE_ENABLED", "NEXT_PUBLIC_TURNSTILE_SITE_KEY", "TURNSTILE_SECRET_KEY", "TURNSTILE_EXPECTED_HOSTNAME",
   "OBJECT_STORAGE_DRIVER", "R2_ACCOUNT_ID", "R2_ENDPOINT", "R2_BUCKET_NAME", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY",
-  "CLOUDFLARE_AI_GATEWAY_ENABLED", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_AI_GATEWAY_ID", "CLOUDFLARE_API_TOKEN", "OPENAI_BASE_URL",
+  "CLOUDFLARE_AI_GATEWAY_ENABLED", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_AI_GATEWAY_ID", "CLOUDFLARE_AI_GATEWAY_TOKEN", "CLOUDFLARE_API_TOKEN",
+  "AI_PROVIDER_FALLBACK_ENABLED", "AI_PROVIDER_DIRECT_FALLBACK_ENABLED",
 ] as const;
 
 afterEach(() => { for (const key of keys) delete process.env[key]; });
@@ -25,18 +26,21 @@ describe("optional production feature configuration", () => {
     expect(() => validateOptionalRuntimeEnvironment()).toThrow("R2_BUCKET_NAME");
   });
 
-  it("fails fast when AI Gateway is enabled without its OpenAI URL", () => {
+  it("fails fast when AI Gateway is enabled without account and gateway IDs", () => {
     process.env.CLOUDFLARE_AI_GATEWAY_ENABLED = "true";
     process.env.CLOUDFLARE_ACCOUNT_ID = "account";
-    process.env.CLOUDFLARE_AI_GATEWAY_ID = "gateway";
-    expect(() => validateOptionalRuntimeEnvironment()).toThrow("OPENAI_BASE_URL");
+    expect(() => validateOptionalRuntimeEnvironment()).toThrow("CLOUDFLARE_AI_GATEWAY_ID");
   });
 
-  it("accepts complete AI Gateway settings without requiring an auth token", () => {
+  it("accepts centrally constructed provider-native settings", () => {
     process.env.CLOUDFLARE_AI_GATEWAY_ENABLED = "true";
     process.env.CLOUDFLARE_ACCOUNT_ID = "account";
     process.env.CLOUDFLARE_AI_GATEWAY_ID = "gateway";
-    process.env.OPENAI_BASE_URL = "https://gateway.ai.cloudflare.com/v1/account/gateway/compat";
     expect(() => validateOptionalRuntimeEnvironment()).not.toThrow();
+  });
+
+  it("requires the explicit provider fallback policy before direct gateway fallback", () => {
+    process.env.AI_PROVIDER_DIRECT_FALLBACK_ENABLED = "true";
+    expect(() => validateOptionalRuntimeEnvironment()).toThrow("AI_PROVIDER_FALLBACK_ENABLED");
   });
 });

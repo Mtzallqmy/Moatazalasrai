@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   isCredentialScopedProviderError,
   prioritizeProviderCandidates,
@@ -9,7 +9,9 @@ import {
 import { providerErrorForHttpStatus, providerErrorFromPayload } from "@/lib/providers/http";
 
 describe("provider failure recovery", () => {
-  it("classifies HTTP 402 as an actionable credential-scoped billing failure", () => {
+  afterEach(() => { delete process.env.AI_PROVIDER_FALLBACK_ENABLED; });
+
+  it("classifies HTTP 402 as an actionable credential-scoped billing failure without hiding it behind fallback", () => {
     const error = providerErrorForHttpStatus(402, JSON.stringify({
       error: { type: "payment_required", message: "Insufficient credits" },
     }));
@@ -18,10 +20,20 @@ describe("provider failure recovery", () => {
     expect(error.providerStatus).toBe(402);
     expect(error.retryable).toBe(false);
     expect(isCredentialScopedProviderError(error)).toBe(true);
-    expect(shouldFallbackProviderError(error)).toBe(true);
+    expect(shouldFallbackProviderError(error)).toBe(false);
     const now = new Date("2026-07-30T12:00:00.000Z");
     expect(providerCircuitOpenUntil(error, 1, now)?.toISOString())
       .toBe("2026-07-31T12:00:00.000Z");
+  });
+
+
+  it("allows fallback only for explicitly enabled transient errors", () => {
+    const transient = providerErrorForHttpStatus(503, "temporary unavailable");
+    expect(shouldFallbackProviderError(transient)).toBe(false);
+    process.env.AI_PROVIDER_FALLBACK_ENABLED = "true";
+    expect(shouldFallbackProviderError(transient)).toBe(true);
+    expect(shouldFallbackProviderError(providerErrorForHttpStatus(401, "invalid key"))).toBe(false);
+    expect(shouldFallbackProviderError(providerErrorForHttpStatus(404, "model missing"))).toBe(false);
   });
 
   it("recognizes payment failures emitted inside a successful HTTP stream", () => {

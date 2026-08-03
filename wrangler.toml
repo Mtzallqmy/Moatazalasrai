@@ -8,3 +8,7 @@ compatibility_flags = ["nodejs_compat"]
 [assets]
 directory = ".open-next/assets"
 binding = "ASSETS"
+
+# Workers AI is available to the OpenNext Worker as env.AI.
+[ai]
+binding = "AI"

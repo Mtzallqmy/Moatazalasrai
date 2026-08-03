@@ -22,16 +22,9 @@ export function validateOptionalRuntimeEnvironment() {
     requireAll("Cloudflare AI Gateway", [
       "CLOUDFLARE_ACCOUNT_ID",
       "CLOUDFLARE_AI_GATEWAY_ID",
-      "OPENAI_BASE_URL",
     ]);
-    let gatewayUrl;
-    try {
-      gatewayUrl = new URL(process.env.OPENAI_BASE_URL);
-    } catch {
-      throw new Error("Cloudflare AI Gateway is enabled but OPENAI_BASE_URL is not a valid URL.");
-    }
-    if (gatewayUrl.protocol !== "https:" || gatewayUrl.hostname !== "gateway.ai.cloudflare.com") {
-      throw new Error("Cloudflare AI Gateway requires an HTTPS OPENAI_BASE_URL on gateway.ai.cloudflare.com.");
-    }
+  }
+  if (enabled("AI_PROVIDER_DIRECT_FALLBACK_ENABLED") && !enabled("AI_PROVIDER_FALLBACK_ENABLED")) {
+    throw new Error("AI_PROVIDER_DIRECT_FALLBACK_ENABLED requires AI_PROVIDER_FALLBACK_ENABLED=true.");
   }
 }
