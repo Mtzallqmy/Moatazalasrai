@@ -28,9 +28,14 @@ describe("Workers AI provider", () => {
   });
 
   it("marks a stream interruption as a provider error instead of a completed reply", async () => {
+    let readCount = 0;
     const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode('data: {"response":"partial"}\n\n'));
+      pull(controller) {
+        if (readCount === 0) {
+          readCount += 1;
+          controller.enqueue(new TextEncoder().encode('data: {"response":"partial"}\n\n'));
+          return;
+        }
         controller.error(new Error("socket closed"));
       },
     });
