@@ -31,6 +31,31 @@ WHERE "provider_type_id" IS NULL;
 ALTER TABLE "provider_credentials"
   ALTER COLUMN "provider_type_id" SET NOT NULL;
 --> statement-breakpoint
+CREATE OR REPLACE FUNCTION "provider_credentials_fill_provider_type_id"()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF NEW."provider_type_id" IS NULL OR btrim(NEW."provider_type_id") = '' THEN
+    NEW."provider_type_id" := CASE NEW."provider"
+      WHEN 'openai' THEN 'openai'
+      WHEN 'anthropic' THEN 'anthropic'
+      WHEN 'gemini' THEN 'google-ai-studio'
+      ELSE 'custom-openai-compatible'
+    END;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+--> statement-breakpoint
+DROP TRIGGER IF EXISTS "provider_credentials_fill_provider_type_id_trigger" ON "provider_credentials";
+--> statement-breakpoint
+CREATE TRIGGER "provider_credentials_fill_provider_type_id_trigger"
+BEFORE INSERT OR UPDATE OF "provider", "provider_type_id"
+ON "provider_credentials"
+FOR EACH ROW
+EXECUTE FUNCTION "provider_credentials_fill_provider_type_id"();
+--> statement-breakpoint
 DO $$ BEGIN
   ALTER TABLE "provider_credentials" ADD CONSTRAINT "provider_credentials_transport_mode_check"
   CHECK ("transport_mode" IN ('direct', 'cloudflare_ai_gateway_native', 'cloudflare_ai_gateway_rest', 'cloudflare_workers_ai'));
@@ -126,4 +151,3 @@ WHERE "status" = 'completed' AND "completed_at" IS NULL;
 --> statement-breakpoint
 ALTER TABLE "provider_validation_sessions"
   ALTER COLUMN "provider_type_id" SET NOT NULL;
-
