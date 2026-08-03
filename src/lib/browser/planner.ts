@@ -6,7 +6,7 @@ import { browserPlanSchema, type BrowserPlan } from "@/lib/browser/contracts";
 import { createDirectLanguageModel } from "@/lib/ai-sdk/model-factory";
 import { env } from "@/lib/config/env";
 import { ApiError } from "@/lib/http/api";
-import { decryptSecret } from "@/lib/security/encryption";
+import { asProviderTypeId, asTransportMode, resolveProviderApiKey } from "@/lib/providers/provider-config";
 
 const SYSTEM_PROMPT = `أنت مخطط مهام متصفح مقيد لمنصة SaaS متعددة المؤسسات.
 حوّل تعليمات المستخدم فقط إلى خطة قصيرة قابلة للتحقق. لا تنفذ شيئًا ولا تفترض صلاحيات.
@@ -58,7 +58,15 @@ export async function createBrowserPlan(input: {
     instructions: agentVersions.instructions,
     providerCredentialId: providerCredentials.id,
     provider: providerCredentials.provider,
-    apiKey: providerCredentials.encryptedSecret,
+    encryptedSecret: providerCredentials.encryptedSecret,
+    providerTypeId: providerCredentials.providerTypeId,
+    transportMode: providerCredentials.transportMode,
+    credentialMode: providerCredentials.credentialMode,
+    gatewayId: providerCredentials.gatewayId,
+    keyAlias: providerCredentials.keyAlias,
+    gatewaySkipCache: providerCredentials.gatewaySkipCache,
+    gatewayCacheTtl: providerCredentials.gatewayCacheTtl,
+    gatewayCollectLog: providerCredentials.gatewayCollectLog,
     baseUrl: providerCredentials.baseUrl,
     model: agentVersions.model,
     enabled: providerCredentials.enabled,
@@ -78,13 +86,34 @@ export async function createBrowserPlan(input: {
     throw new ApiError(422, "BROWSER_PLANNER_UNAVAILABLE", "الوكيل أو مزود التخطيط غير متاح.");
   }
 
+  const providerTypeId = asProviderTypeId(runtime.providerTypeId, runtime.provider);
+  const transportMode = asTransportMode(runtime.transportMode);
+  if (transportMode === "cloudflare_ai_gateway_rest" || transportMode === "cloudflare_workers_ai") {
+    throw new ApiError(422, "BROWSER_PLANNER_TRANSPORT_UNSUPPORTED", "تخطيط المتصفح يحتاج مزودًا يدعم Vercel AI SDK وstructured output على الخادم.");
+  }
   const model = createDirectLanguageModel({
     provider: runtime.provider,
-    apiKey: decryptSecret(runtime.apiKey, `provider:${input.organizationId}`),
+    apiKey: resolveProviderApiKey({
+      provider: runtime.provider,
+      providerTypeId: runtime.providerTypeId,
+      transportMode: runtime.transportMode,
+      credentialMode: runtime.credentialMode,
+      encryptedSecret: runtime.encryptedSecret,
+      baseUrl: runtime.baseUrl,
+      gatewayId: runtime.gatewayId,
+      keyAlias: runtime.keyAlias,
+    }, input.organizationId),
     baseUrl: runtime.baseUrl,
     model: runtime.model,
     organizationId: input.organizationId,
     requestId: input.requestId,
+    providerTypeId,
+    transportMode,
+    gatewayId: runtime.gatewayId ?? undefined,
+    keyAlias: runtime.keyAlias ?? undefined,
+    skipCache: runtime.gatewaySkipCache,
+    cacheTtl: runtime.gatewayCacheTtl ?? undefined,
+    collectLog: runtime.gatewayCollectLog,
   });
   const prompt = [
     `الوكيل: ${runtime.agentName}`,

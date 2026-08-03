@@ -9,6 +9,7 @@ import {
 } from "@/lib/providers/types";
 import { validateProviderBaseUrl } from "@/lib/security/provider-network";
 import { llmGateway } from "@/lib/providers/llm-gateway";
+import { normalizeUnknownProviderError } from "@/lib/providers/errors";
 
 const capabilities = {
   streaming: true,
@@ -68,28 +69,36 @@ function modelIds(input: unknown, container = "data", key = "id") {
 }
 
 function normalizeError(error: unknown) {
-  if (error instanceof ProviderError) return error;
-  if (error instanceof DOMException && (error.name === "AbortError" || error.name === "TimeoutError")) {
-    return new ProviderError("PROVIDER_TIMEOUT", "انتهت مهلة الاتصال بالمزود.", 504, 408, true);
-  }
-  return new ProviderError("PROVIDER_ERROR", "تعذر إكمال طلب المزود.", 502);
+  return normalizeUnknownProviderError(error);
 }
 
 function abort() {
   return new AbortController();
 }
 
-function openAiTransport(input: {
+function providerTransport(input: {
   baseUrl: string;
   organizationId?: string;
   requestId: string;
   providerKind?: ProviderKind;
+  transportMode?: import("@/lib/providers/types").ProviderTransportMode;
+  gatewayId?: string;
+  keyAlias?: string;
+  skipCache?: boolean;
+  cacheTtl?: number;
+  collectLog?: boolean;
 }) {
   return llmGateway.resolve({
     provider: input.providerKind ?? "openai",
     directBaseUrl: input.baseUrl,
     organizationId: input.organizationId,
     requestId: input.requestId,
+    transportMode: input.transportMode,
+    gatewayId: input.gatewayId,
+    keyAlias: input.keyAlias,
+    skipCache: input.skipCache,
+    cacheTtl: input.cacheTtl,
+    collectLog: input.collectLog,
   });
 }
 
@@ -129,7 +138,7 @@ const openai: ProviderAdapter = {
   async discoverModels(input) {
     const startedAt = performance.now();
     const safe = await validateProviderBaseUrl(input.baseUrl);
-    const transport = openAiTransport(input);
+    const transport = providerTransport(input);
     const { data } = await providerJson<unknown>(joinUrl(transport.baseUrl, "models"), {
       headers: {
         authorization: `Bearer ${input.apiKey}`,
@@ -157,7 +166,7 @@ const openai: ProviderAdapter = {
     };
   },
   async generate(input) {
-    const transport = openAiTransport(input);
+    const transport = providerTransport(input);
     const { data, headers } = await providerJson<{
       output_text?: string;
       output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
@@ -190,7 +199,7 @@ const openai: ProviderAdapter = {
     return openai.generate({ ...input, messages: [{ role: "user", content: "Reply with OK." }], maxOutputTokens: 16, temperature: 0 });
   },
   async *stream(input) {
-    const transport = openAiTransport(input);
+    const transport = providerTransport(input);
     const response = await providerStream(joinUrl(transport.baseUrl, "responses"), {
       method: "POST",
       headers: {
@@ -304,22 +313,26 @@ const anthropic: ProviderAdapter = {
       outputTokens: typeof usage.output_tokens === "number" ? usage.output_tokens : null,
     };
   },
-  discoverModels(input) {
-    return discovery(
-      joinUrl(input.baseUrl, "v1/models"),
-      { "x-api-key": input.apiKey, "anthropic-version": "2023-06-01", accept: "application/json" },
-      input,
-      (data) => modelIds(data),
-    );
+  async discoverModels(input) {
+    const startedAt = performance.now();
+    const safe = await validateProviderBaseUrl(input.baseUrl);
+    const transport = providerTransport({ ...input, providerKind: "anthropic" });
+    const { data } = await providerJson<unknown>(joinUrl(transport.baseUrl, "v1/models"), {
+      headers: { "x-api-key": input.apiKey, "anthropic-version": "2023-06-01", accept: "application/json", ...transport.headers },
+    }, { signal: input.signal, retries: transport.gateway ? 0 : 1, fetch: transport.fetch });
+    const models = modelIds(data);
+    if (!models.length) throw new ProviderError("MODELS_ENDPOINT_UNSUPPORTED", "تم الاتصال بالمزود لكن مسار النماذج لم يُرجع نماذج قابلة للاستخدام.", 422);
+    return { normalizedBaseUrl: safe.normalizedUrl, models, latencyMs: Math.round(performance.now() - startedAt) };
   },
   async generate(input) {
     const system = input.messages.filter((message) => message.role === "system").map(textContent).join("\n\n");
+    const transport = providerTransport({ ...input, providerKind: "anthropic" });
     const { data, headers } = await providerJson<{
       content?: Array<{ type?: string; text?: string }>;
       usage?: unknown;
-    }>(joinUrl(input.baseUrl, "v1/messages"), {
+    }>(joinUrl(transport.baseUrl, "v1/messages"), {
       method: "POST",
-      headers: { "x-api-key": input.apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      headers: { "x-api-key": input.apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json", ...transport.headers },
       body: JSON.stringify({
         model: input.model,
         system: system || undefined,
@@ -327,7 +340,7 @@ const anthropic: ProviderAdapter = {
         temperature: input.temperature,
         max_tokens: input.maxOutputTokens,
       }),
-    }, { signal: input.signal, timeoutMs: 90_000 });
+    }, { signal: input.signal, timeoutMs: 90_000, retries: transport.gateway ? 0 : 1, fetch: transport.fetch });
     const text = data.content?.find((item) => item.type === "text")?.text;
     if (!text) throw new ProviderError("PROVIDER_EMPTY_OUTPUT", "لم يُرجع النموذج نصًا.", 502);
     return { text, ...anthropic.normalizeUsage(data.usage), providerRequestId: headers.get("request-id") ?? undefined };
@@ -337,9 +350,10 @@ const anthropic: ProviderAdapter = {
   },
   async *stream(input) {
     const system = input.messages.filter((message) => message.role === "system").map(textContent).join("\n\n");
-    const response = await providerStream(joinUrl(input.baseUrl, "v1/messages"), {
+    const transport = providerTransport({ ...input, providerKind: "anthropic" });
+    const response = await providerStream(joinUrl(transport.baseUrl, "v1/messages"), {
       method: "POST",
-      headers: { "x-api-key": input.apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      headers: { "x-api-key": input.apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json", ...transport.headers },
       body: JSON.stringify({
         model: input.model,
         system: system || undefined,
@@ -348,7 +362,7 @@ const anthropic: ProviderAdapter = {
         max_tokens: input.maxOutputTokens,
         stream: true,
       }),
-    }, { signal: input.signal, timeoutMs: 90_000 });
+    }, { signal: input.signal, timeoutMs: 90_000, fetch: transport.fetch });
     const providerRequestId = response.headers.get("request-id") ?? undefined;
     for await (const event of sseJson(response)) {
       if (event.type === "content_block_delta" && event.delta && typeof event.delta === "object") {
@@ -376,22 +390,26 @@ const gemini: ProviderAdapter = {
       outputTokens: typeof usage.candidatesTokenCount === "number" ? usage.candidatesTokenCount : null,
     };
   },
-  discoverModels(input) {
-    return discovery(
-      joinUrl(input.baseUrl, "models"),
-      { "x-goog-api-key": input.apiKey, accept: "application/json" },
-      input,
-      (data) => modelIds(data, "models", "name").map((model) => model.replace(/^models\//, "")),
-    );
+  async discoverModels(input) {
+    const startedAt = performance.now();
+    const safe = await validateProviderBaseUrl(input.baseUrl);
+    const transport = providerTransport({ ...input, providerKind: "gemini" });
+    const { data } = await providerJson<unknown>(joinUrl(transport.baseUrl, "models"), {
+      headers: { "x-goog-api-key": input.apiKey, accept: "application/json", ...transport.headers },
+    }, { signal: input.signal, retries: transport.gateway ? 0 : 1, fetch: transport.fetch });
+    const models = modelIds(data, "models", "name").map((model) => model.replace(/^models\//, ""));
+    if (!models.length) throw new ProviderError("MODELS_ENDPOINT_UNSUPPORTED", "تم الاتصال بالمزود لكن مسار النماذج لم يُرجع نماذج قابلة للاستخدام.", 422);
+    return { normalizedBaseUrl: safe.normalizedUrl, models, latencyMs: Math.round(performance.now() - startedAt) };
   },
   async generate(input) {
     const system = input.messages.filter((message) => message.role === "system").map(textContent).join("\n\n");
+    const transport = providerTransport({ ...input, providerKind: "gemini" });
     const { data, headers } = await providerJson<{
       candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
       usageMetadata?: unknown;
-    }>(joinUrl(input.baseUrl, `models/${encodeURIComponent(input.model)}:generateContent`), {
+    }>(joinUrl(transport.baseUrl, `models/${encodeURIComponent(input.model)}:generateContent`), {
       method: "POST",
-      headers: { "x-goog-api-key": input.apiKey, "content-type": "application/json" },
+      headers: { "x-goog-api-key": input.apiKey, "content-type": "application/json", ...transport.headers },
       body: JSON.stringify({
         systemInstruction: system ? { parts: [{ text: system }] } : undefined,
         contents: input.messages.filter((message) => message.role !== "system").map((message) => ({
@@ -400,7 +418,7 @@ const gemini: ProviderAdapter = {
         })),
         generationConfig: { temperature: input.temperature, maxOutputTokens: input.maxOutputTokens },
       }),
-    }, { signal: input.signal, timeoutMs: 90_000 });
+    }, { signal: input.signal, timeoutMs: 90_000, retries: transport.gateway ? 0 : 1, fetch: transport.fetch });
     const text = data.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("");
     if (!text) throw new ProviderError("PROVIDER_EMPTY_OUTPUT", "لم يُرجع النموذج نصًا.", 502);
     return { text, ...gemini.normalizeUsage(data.usageMetadata), providerRequestId: headers.get("x-request-id") ?? undefined };
@@ -410,10 +428,11 @@ const gemini: ProviderAdapter = {
   },
   async *stream(input) {
     const system = input.messages.filter((message) => message.role === "system").map(textContent).join("\n\n");
-    const url = `${joinUrl(input.baseUrl, `models/${encodeURIComponent(input.model)}:streamGenerateContent`)}?alt=sse`;
+    const transport = providerTransport({ ...input, providerKind: "gemini" });
+    const url = `${joinUrl(transport.baseUrl, `models/${encodeURIComponent(input.model)}:streamGenerateContent`)}?alt=sse`;
     const response = await providerStream(url, {
       method: "POST",
-      headers: { "x-goog-api-key": input.apiKey, "content-type": "application/json" },
+      headers: { "x-goog-api-key": input.apiKey, "content-type": "application/json", ...transport.headers },
       body: JSON.stringify({
         systemInstruction: system ? { parts: [{ text: system }] } : undefined,
         contents: input.messages.filter((message) => message.role !== "system").map((message) => ({
@@ -422,7 +441,7 @@ const gemini: ProviderAdapter = {
         })),
         generationConfig: { temperature: input.temperature, maxOutputTokens: input.maxOutputTokens },
       }),
-    }, { signal: input.signal, timeoutMs: 90_000 });
+    }, { signal: input.signal, timeoutMs: 90_000, fetch: transport.fetch });
     const providerRequestId = response.headers.get("x-request-id") ?? undefined;
     for await (const event of sseJson(response)) {
       const candidates = Array.isArray(event.candidates) ? event.candidates : [];

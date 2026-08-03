@@ -47,24 +47,25 @@ R2_SIGNED_URL_TTL_SECONDS=300
 
 يُنشأ المفتاح بالشكل `<organization UUID>/<random UUID>`، ويُفحص النوع الفعلي والـSHA-256 قبل الرفع. عند اختيار R2 لا تحفظ الملفات الجديدة في PostgreSQL؛ تبقى الملفات القديمة قابلة للقراءة عبر `storage_driver=database`. إذا كان المتغير غير موجود أصلًا يحتفظ الإصدار مؤقتًا بسلوك database القديم كي لا يكسر نشر Railway قائمًا؛ اضبط `r2` صراحة بعد migration. التنزيل الحالي يمر عبر endpoint مصادق ومقيد بالمؤسسة/المالك. الروابط الموقعة متاحة في abstraction ولكن ليست واجهة عامة افتراضيًا لأنها bearer URLs. راجع [توثيق R2 S3 والموقع](https://developers.cloudflare.com/r2/api/s3/presigned-urls/).
 
-## AI Gateway الاختياري
+## منصة مزوّدي الذكاء الاصطناعي
 
-الوضع الافتراضي اتصال مباشر ومفاتيح BYOK المشفرة كما هي. عند قرار مدير المنصة:
+الوضع الافتراضي يبقى الاتصال المباشر ومفاتيح BYOK المشفّرة. يمكن لكل اتصال خادمي اختيار أحد المسارات: direct، AI Gateway provider-native، AI Gateway REST أو Workers AI.
+
+أسماء الإعدادات الخادمية:
 
 ```dotenv
-CLOUDFLARE_AI_GATEWAY_ENABLED=true
-CLOUDFLARE_ACCOUNT_ID=3daab68819d22a2285e860c07837884f
-CLOUDFLARE_AI_GATEWAY_ID=moataz-ai
-OPENAI_BASE_URL=https://gateway.ai.cloudflare.com/v1/3daab68819d22a2285e860c07837884f/moataz-ai/compat
+CLOUDFLARE_AI_GATEWAY_ENABLED=false
+CLOUDFLARE_ACCOUNT_ID=
+CLOUDFLARE_AI_GATEWAY_ID=default
+CLOUDFLARE_AI_GATEWAY_TOKEN=
 CLOUDFLARE_API_TOKEN=
+AI_PROVIDER_FALLBACK_ENABLED=false
+AI_PROVIDER_DIRECT_FALLBACK_ENABLED=false
 ```
 
-يمر OpenAI BYOK في رأس Authorization المعتاد. `CLOUDFLARE_API_TOKEN` اختياري
-لـAuthenticated Gateway فقط ويرسل في `cf-aig-authorization`. تمر استدعاءات
-OpenAI عبر `LLMGateway`، بينما تبقى Anthropic وGemini والمزودات المتوافقة
-الأخرى مباشرة. يعطل التطبيق cache وتسجيل payload، ويضع مهلة 60 ثانية ومحاولة
-بديلة مباشرة واحدة فقط قبل بدء stream. راجع
-[الدليل التشغيلي المفصل](cloudflare-ai-gateway.md).
+لا تضبط `OPENAI_BASE_URL` خاصًا بالبوابة، ولا تستخدم `/compat`. يبني التطبيق العناوين المدعومة مركزيًا. يمكن تمرير BYOK المشفّر عبر provider-native endpoint، أو استخدام Provider Key Alias دون تخزين قيمة المفتاح في المنصة. AI Gateway REST يستخدم Cloudflare API Token، وWorkers AI يستخدم `env.AI` ولا يقبل BYOK لمزوّد خارجي.
+
+الـfallback مغلق افتراضيًا، ولا يعمل لأخطاء المصادقة أو الصلاحيات أو النموذج أو الإعداد. راجع [الدليل التشغيلي المفصل](cloudflare-ai-gateway.md).
 
 ## WAF وRate Limiting
 

@@ -73,18 +73,16 @@ export async function POST(request: Request) {
       )).limit(10)
       : [];
     const memoryText = memoryRows.length ? `\n\n[ذاكرة مصرح بها]\n${memoryRows.map((row) => row.content).join("\n")}` : "";
-    if (body.clientRequestId) {
-      const [duplicate] = await db().select({ id: messages.id }).from(messages).where(and(
-        eq(messages.conversationId, conversation.id),
-        eq(messages.clientRequestId, body.clientRequestId),
-      )).limit(1);
-      if (duplicate) throw new ApiError(409, "DUPLICATE_MESSAGE", "تم استقبال هذه الرسالة سابقًا.");
-    }
     const [userMessage] = await db().transaction(async (tx) => {
+      const createdAt = new Date();
       const [created] = await tx.insert(messages).values({
         conversationId: conversation.id,
         role: "user",
         content: body.message,
+        contentParts: [{ type: "text", text: body.message }],
+        status: "completed",
+        requestId,
+        completedAt: createdAt,
         clientRequestId: body.clientRequestId,
         providerCredentialId: body.providerCredentialId,
         model: body.model,
@@ -94,13 +92,23 @@ export async function POST(request: Request) {
           attachments: attachmentData.rows.map((file) => ({ id: file.id, filename: file.filename, mimeType: file.mimeType, sizeBytes: file.sizeBytes, processingStatus: file.processingStatus })),
           mcpReferences: mcpContext.references,
         },
-      }).returning();
-      if (created && body.attachmentIds.length > 0) {
+      }).onConflictDoNothing().returning();
+      if (!created) throw new ApiError(409, "DUPLICATE_MESSAGE", "تم استقبال هذه الرسالة سابقًا.");
+      if (body.attachmentIds.length > 0) {
         await tx.update(attachments).set({ messageId: created.id }).where(and(
           eq(attachments.organizationId, session.organizationId),
           inArray(attachments.id, body.attachmentIds),
         ));
       }
+      await tx.update(conversations).set({
+        providerCredentialId: body.providerCredentialId,
+        model: body.model,
+        lastMessageAt: createdAt,
+        updatedAt: createdAt,
+      }).where(and(
+        eq(conversations.id, conversation.id),
+        eq(conversations.organizationId, session.organizationId),
+      ));
       return [created];
     });
 

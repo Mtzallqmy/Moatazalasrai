@@ -69,7 +69,8 @@ describe("provider platform v2", () => {
     expect(migration).toContain('ADD COLUMN IF NOT EXISTS "deleted_at"');
     expect(migration).not.toMatch(/DROP TABLE|TRUNCATE/i);
     expect(dashboardRoute).toContain('"deleted_at" IS NULL');
-    expect(dashboardRoute).toContain('"deleted_at" =');
+    expect(dashboardRoute).toContain("deletedAt: now");
+    expect(dashboardRoute).toContain('healthStatus: "disabled"');
     expect(dashboardRoute).not.toContain("PROVIDER_IN_USE");
     expect(apiRoute).toContain("export async function PATCH");
     expect(apiRoute).toContain("export async function DELETE");

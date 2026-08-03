@@ -7,7 +7,7 @@ import {
 } from "ai";
 import { getProviderAdapter } from "@/lib/providers/registry";
 import { ProviderError, type ProviderMessage } from "@/lib/providers/types";
-import type { ProviderKind } from "@/lib/providers/types";
+import type { ProviderKind, ProviderTransportMode, ProviderTypeId } from "@/lib/providers/types";
 import { createDirectLanguageModel } from "@/lib/ai-sdk/model-factory";
 import { loadAgentMcpTools, type ToolRuntimeState } from "@/lib/ai-sdk/mcp-tools";
 import { maxModelStepsPerRun } from "@/lib/ai-sdk/limits";
@@ -23,6 +23,13 @@ export type AiSdkCandidate = {
   baseUrl: string;
   model: string;
   capabilities: Record<string, boolean | undefined>;
+  providerTypeId?: ProviderTypeId;
+  transportMode?: ProviderTransportMode;
+  gatewayId?: string;
+  keyAlias?: string;
+  skipCache?: boolean;
+  cacheTtl?: number;
+  collectLog?: boolean;
 };
 
 export type AiSdkExecutionState = {
@@ -278,6 +285,13 @@ export async function executeAiSdkCandidate(input: {
       model: input.candidate.model,
       organizationId: input.organizationId,
       requestId: input.requestId,
+      providerTypeId: input.candidate.providerTypeId,
+      transportMode: input.candidate.transportMode,
+      gatewayId: input.candidate.gatewayId,
+      keyAlias: input.candidate.keyAlias,
+      skipCache: input.candidate.skipCache,
+      cacheTtl: input.candidate.cacheTtl,
+      collectLog: input.candidate.collectLog,
     });
     const result = await generateText({
       model,
@@ -379,6 +393,13 @@ export async function* streamAiSdkCandidate(input: {
       model: input.candidate.model,
       organizationId: input.organizationId,
       requestId: input.requestId,
+      providerTypeId: input.candidate.providerTypeId,
+      transportMode: input.candidate.transportMode,
+      gatewayId: input.candidate.gatewayId,
+      keyAlias: input.candidate.keyAlias,
+      skipCache: input.candidate.skipCache,
+      cacheTtl: input.candidate.cacheTtl,
+      collectLog: input.candidate.collectLog,
     });
     const result = streamText({
       model,

@@ -17,7 +17,6 @@ import {
   toolApprovals,
 } from "@/db/schema";
 import { rankModels, type InputKind } from "@/server/models/router";
-import { decryptSecret } from "@/lib/security/encryption";
 import { ApiError } from "@/lib/http/api";
 import {
   isCredentialScopedProviderError,
@@ -26,12 +25,18 @@ import {
   shouldFallbackProviderError,
 } from "@/lib/providers/failure-policy";
 import { ProviderError, type ProviderContentPart, type ProviderMessage, type ProviderUsage } from "@/lib/providers/types";
+import { asProviderTypeId, asTransportMode, resolveProviderApiKey } from "@/lib/providers/provider-config";
+import { runCloudflareRestChat, streamCloudflareRestChat } from "@/lib/providers/cloudflare-rest";
+import { healthStatusForProviderError } from "@/lib/providers/errors";
+import { runWorkersAiChat, streamWorkersAiChat } from "@/lib/providers/workers-ai";
 import { safeTelemetry } from "@/ai/observability/telemetry";
 import { inferModelCapabilities, isFreeTierModel } from "@/server/models/capabilities";
 import {
   AiSdkCandidateError,
   executeAiSdkCandidate,
   streamAiSdkCandidate,
+  type AiSdkCandidate,
+  type AiSdkExecutionResult,
   type AiSdkExecutionState,
 } from "@/lib/ai-sdk/runtime";
 import { appendRunEvent, appendRunEvents } from "@/lib/ai-sdk/run-events";
@@ -67,6 +72,149 @@ function mayFallback(error: ProviderError, state?: AiSdkExecutionState) {
     && !state?.approvalPending;
 }
 
+type RuntimeCandidate = {
+  credential: typeof providerCredentials.$inferSelect;
+  model: string;
+  capabilities: Record<string, boolean | undefined>;
+};
+
+function emptyExecutionState(): AiSdkExecutionState {
+  return {
+    emittedText: false,
+    toolExecuted: false,
+    toolResultSaved: false,
+    sideEffectOccurred: false,
+    approvalPending: false,
+  };
+}
+
+function aiSdkCandidate(candidate: RuntimeCandidate, organizationId: string): AiSdkCandidate {
+  const credential = candidate.credential;
+  return {
+    providerCredentialId: credential.id,
+    provider: credential.provider,
+    providerTypeId: asProviderTypeId(credential.providerTypeId, credential.provider),
+    transportMode: asTransportMode(credential.transportMode),
+    apiKey: resolveProviderApiKey(credential, organizationId),
+    baseUrl: credential.baseUrl,
+    model: candidate.model,
+    capabilities: candidate.capabilities,
+    gatewayId: credential.gatewayId ?? undefined,
+    keyAlias: credential.keyAlias ?? undefined,
+    skipCache: credential.gatewaySkipCache,
+    cacheTtl: credential.gatewayCacheTtl ?? undefined,
+    collectLog: credential.gatewayCollectLog,
+  };
+}
+
+function adapterRuntimeInput(input: {
+  organizationId: string;
+  requestId: string;
+  candidate: RuntimeCandidate;
+  context: ProviderMessage[];
+  temperature: number;
+  maxOutputTokens: number;
+  signal?: AbortSignal;
+}) {
+  const credential = input.candidate.credential;
+  return {
+    model: input.candidate.model,
+    providerKind: credential.provider,
+    messages: input.context,
+    temperature: input.temperature,
+    maxOutputTokens: input.maxOutputTokens,
+    gatewayId: credential.gatewayId ?? undefined,
+    skipCache: credential.gatewaySkipCache,
+    cacheTtl: credential.gatewayCacheTtl ?? undefined,
+    collectLog: credential.gatewayCollectLog,
+    requestId: input.requestId,
+    signal: input.signal,
+  };
+}
+
+async function executeRuntimeCandidate(input: Omit<Parameters<typeof executeAiSdkCandidate>[0], "candidate"> & { candidateRecord: RuntimeCandidate }): Promise<AiSdkExecutionResult> {
+  const mode = asTransportMode(input.candidateRecord.credential.transportMode);
+  if (mode === "direct" || mode === "cloudflare_ai_gateway_native") {
+    return executeAiSdkCandidate({ ...input, candidate: aiSdkCandidate(input.candidateRecord, input.organizationId) });
+  }
+  const state = emptyExecutionState();
+  try {
+    const request = adapterRuntimeInput({
+      organizationId: input.organizationId,
+      requestId: input.requestId,
+      candidate: input.candidateRecord,
+      context: input.context ?? [],
+      temperature: input.temperature,
+      maxOutputTokens: input.maxOutputTokens,
+      signal: input.abortSignal,
+    });
+    const result = mode === "cloudflare_workers_ai"
+      ? await runWorkersAiChat(request)
+      : await runCloudflareRestChat(request);
+    return {
+      status: "completed",
+      text: result.text,
+      usage: { inputTokens: result.inputTokens, outputTokens: result.outputTokens },
+      providerRequestId: "providerRequestId" in result && typeof result.providerRequestId === "string"
+        ? result.providerRequestId
+        : undefined,
+      state,
+    };
+  } catch (error) {
+    throw new AiSdkCandidateError(safeProviderError(error), state);
+  }
+}
+
+async function* streamRuntimeCandidate(input: Omit<Parameters<typeof streamAiSdkCandidate>[0], "candidate"> & { candidateRecord: RuntimeCandidate }): AsyncGenerator<{ type: "delta"; text: string } | { type: "result"; result: AiSdkExecutionResult }> {
+  const mode = asTransportMode(input.candidateRecord.credential.transportMode);
+  if (mode === "direct" || mode === "cloudflare_ai_gateway_native") {
+    yield* streamAiSdkCandidate({ ...input, candidate: aiSdkCandidate(input.candidateRecord, input.organizationId) });
+    return;
+  }
+  const state = emptyExecutionState();
+  let text = "";
+  let usage: ProviderUsage = { inputTokens: null, outputTokens: null };
+  let providerRequestId: string | undefined;
+  try {
+    const request = adapterRuntimeInput({
+      organizationId: input.organizationId,
+      requestId: input.requestId,
+      candidate: input.candidateRecord,
+      context: input.context,
+      temperature: input.temperature,
+      maxOutputTokens: input.maxOutputTokens,
+      signal: input.abortSignal,
+    });
+    const source = mode === "cloudflare_workers_ai"
+      ? streamWorkersAiChat(request)
+      : streamCloudflareRestChat(request);
+    for await (const chunk of source) {
+      if (chunk.type === "delta") {
+        state.emittedText = true;
+        text += chunk.text;
+        yield { type: "delta", text: chunk.text };
+      } else if (chunk.type === "usage") {
+        usage = chunk.usage;
+        providerRequestId = chunk.providerRequestId ?? providerRequestId;
+      } else {
+        providerRequestId = chunk.providerRequestId ?? providerRequestId;
+      }
+    }
+    yield {
+      type: "result",
+      result: { status: "completed", text, usage, providerRequestId, state },
+    };
+  } catch (error) {
+    throw new AiSdkCandidateError(safeProviderError(error), state);
+  }
+}
+
+function titleFromFirstMessage(value: string) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) return null;
+  return normalized.length <= 72 ? normalized : `${normalized.slice(0, 69).trimEnd()}…`;
+}
+
 async function contextMessages(
   conversationId: string,
   instructions: string,
@@ -77,7 +225,11 @@ async function contextMessages(
     role: messages.role,
     content: messages.content,
   }).from(messages)
-    .where(and(eq(messages.conversationId, conversationId), isNull(messages.deletedAt)))
+    .where(and(
+      eq(messages.conversationId, conversationId),
+      eq(messages.status, "completed"),
+      isNull(messages.deletedAt),
+    ))
     .orderBy(desc(messages.createdAt))
     .limit(MAX_CONTEXT_MESSAGES);
 
@@ -202,8 +354,14 @@ export async function prepareAgentRun(input: {
   }));
 
   const inputKind = input.inputKind ?? "text";
-  const ranked = rankModels(routable, inputKind).filter((candidate) =>
-    !toolsEnabled || candidate.capabilities.tools === true || candidate.capabilities.toolCalling === true);
+  const ranked = rankModels(routable, inputKind).filter((candidate) => {
+    if (!toolsEnabled) return true;
+    const credential = credentialById.get(candidate.providerCredentialId);
+    if (!credential) return false;
+    const mode = asTransportMode(credential.transportMode);
+    if (mode === "cloudflare_ai_gateway_rest" || mode === "cloudflare_workers_ai") return false;
+    return candidate.capabilities.tools === true || candidate.capabilities.toolCalling === true;
+  });
   const preferredCredentialId = input.providerCredentialId
     ?? agent.defaultProviderCredentialId
     ?? version.providerCredentialId;
@@ -325,12 +483,17 @@ async function recordCredentialFailure(input: {
       const circuitOpenUntil = providerCircuitOpenUntil(input.error, failures);
       const invalidCredential = input.error.code === "PROVIDER_UNAUTHORIZED"
         || input.error.code === "PROVIDER_FORBIDDEN";
+      const failedAt = new Date();
       await tx.update(providerCredentials).set({
         consecutiveFailures: failures,
         lastErrorCode: input.error.code,
+        lastErrorCategory: input.error.category,
+        lastCheckedAt: failedAt,
+        lastFailureAt: failedAt,
+        healthStatus: healthStatusForProviderError(input.error),
         circuitOpenUntil,
         ...(invalidCredential ? { validationStatus: "failed" as const } : {}),
-        updatedAt: new Date(),
+        updatedAt: failedAt,
       }).where(and(
         eq(providerCredentials.id, input.providerCredentialId),
         eq(providerCredentials.organizationId, input.organizationId),
@@ -349,6 +512,9 @@ async function recordCredentialFailure(input: {
         outcome: "failed",
         model: input.model,
         errorCode: input.error.code,
+        errorCategory: input.error.category,
+        requestId: input.error.requestId,
+        providerRequestId: input.error.providerRequestId,
         providerStatus: input.error.providerStatus,
         retryable: input.error.retryable,
         circuitOpenUntil,
@@ -390,6 +556,18 @@ export async function completeAgentRun(input: {
     status: "ok",
   })));
   const result = await db().transaction(async (tx) => {
+    const [runRecord] = await tx.select({
+      id: runs.id,
+      requestId: runs.requestId,
+      startedAt: runs.startedAt,
+    }).from(runs).where(and(
+      eq(runs.id, input.runId),
+      eq(runs.organizationId, input.organizationId),
+    )).limit(1);
+    if (!runRecord) throw new ApiError(404, "RUN_NOT_FOUND", "عملية التشغيل غير موجودة.");
+    const latencyMs = runRecord.startedAt
+      ? Math.max(0, completedAt.getTime() - runRecord.startedAt.getTime())
+      : null;
     const routing = {
       attemptCount: input.attemptCount,
       fallbackUsed,
@@ -398,14 +576,34 @@ export async function completeAgentRun(input: {
       providerCredentialId: input.providerCredentialId,
       model: input.model,
     };
-    const [assistantMessage] = await tx.insert(messages).values({
-      conversationId: input.conversationId,
-      role: "assistant",
+    const assistantValues = {
       content: input.text,
+      contentParts: [{ type: "text", text: input.text }],
+      status: "completed" as const,
+      requestId: runRecord.requestId,
+      inputTokens: input.usage.inputTokens,
+      outputTokens: input.usage.outputTokens,
+      latencyMs,
+      errorCode: null,
+      completedAt,
       providerCredentialId: input.providerCredentialId,
       model: input.model,
       metadata: { runId: input.runId, model: input.model, routing },
-    }).returning();
+    };
+    const [existingAssistant] = await tx.select({ id: messages.id }).from(messages).where(and(
+      eq(messages.conversationId, input.conversationId),
+      eq(messages.clientRequestId, input.runId),
+      eq(messages.role, "assistant"),
+      isNull(messages.deletedAt),
+    )).limit(1);
+    const [assistantMessage] = existingAssistant
+      ? await tx.update(messages).set(assistantValues).where(eq(messages.id, existingAssistant.id)).returning()
+      : await tx.insert(messages).values({
+          conversationId: input.conversationId,
+          role: "assistant",
+          clientRequestId: input.runId,
+          ...assistantValues,
+        }).returning();
     const [completed] = await tx.update(runs).set({
       status: "completed",
       output: input.text,
@@ -416,14 +614,39 @@ export async function completeAgentRun(input: {
       errorCode: null,
       completedAt,
     }).where(and(eq(runs.id, input.runId), eq(runs.organizationId, input.organizationId))).returning();
-    await tx.update(conversations).set({ updatedAt: completedAt }).where(and(
+
+    const [conversation] = await tx.select({ title: conversations.title }).from(conversations).where(and(
+      eq(conversations.id, input.conversationId),
+      eq(conversations.organizationId, input.organizationId),
+    )).limit(1);
+    let generatedTitle: string | null = null;
+    if (!conversation?.title || conversation.title.startsWith("محادثة مع ")) {
+      const [firstUserMessage] = await tx.select({ content: messages.content }).from(messages).where(and(
+        eq(messages.conversationId, input.conversationId),
+        eq(messages.role, "user"),
+        isNull(messages.deletedAt),
+      )).orderBy(asc(messages.createdAt)).limit(1);
+      generatedTitle = firstUserMessage ? titleFromFirstMessage(firstUserMessage.content) : null;
+    }
+    await tx.update(conversations).set({
+      ...(generatedTitle ? { title: generatedTitle } : {}),
+      status: "active",
+      providerCredentialId: input.providerCredentialId,
+      model: input.model,
+      lastMessageAt: completedAt,
+      updatedAt: completedAt,
+    }).where(and(
       eq(conversations.id, input.conversationId),
       eq(conversations.organizationId, input.organizationId),
     ));
     await tx.update(providerCredentials).set({
       validationStatus: "verified",
+      healthStatus: "healthy",
       consecutiveFailures: 0,
+      lastCheckedAt: completedAt,
+      lastSuccessfulAt: completedAt,
       lastErrorCode: null,
+      lastErrorCategory: null,
       circuitOpenUntil: null,
       updatedAt: completedAt,
     }).where(and(
@@ -445,6 +668,9 @@ export async function completeAgentRun(input: {
       runId: input.runId,
       outcome: "completed",
       model: input.model,
+      requestId: runRecord.requestId,
+      providerRequestId: input.providerRequestId,
+      latencyMs,
       retryable: false,
     });
     return { run: completed, assistantMessage };
@@ -462,11 +688,53 @@ export async function completeAgentRun(input: {
           fallbackUsed,
         },
       },
-      { type: "run.completed", payload: { fallbackUsed } },
+      { type: "run.completed", payload: { fallbackUsed, userNotified: fallbackUsed } },
     ],
   });
   await deleteRunCheckpoints(input.organizationId, input.runId);
   return result;
+}
+
+async function ensureStreamingAssistantMessage(input: {
+  conversationId: string;
+  runId: string;
+  requestId: string;
+  providerCredentialId: string;
+  model: string;
+}) {
+  await db().insert(messages).values({
+    conversationId: input.conversationId,
+    role: "assistant",
+    content: "",
+    contentParts: [],
+    status: "streaming",
+    requestId: input.requestId,
+    clientRequestId: input.runId,
+    providerCredentialId: input.providerCredentialId,
+    model: input.model,
+    metadata: { runId: input.runId, streaming: true },
+  }).onConflictDoNothing();
+}
+
+async function persistStreamingAssistantProgress(input: {
+  conversationId: string;
+  runId: string;
+  text: string;
+  status?: "streaming" | "interrupted";
+  errorCode?: string | null;
+}) {
+  await db().update(messages).set({
+    content: input.text,
+    contentParts: input.text ? [{ type: "text", text: input.text }] : [],
+    status: input.status ?? "streaming",
+    errorCode: input.errorCode ?? null,
+    ...(input.status === "interrupted" ? { completedAt: new Date() } : {}),
+  }).where(and(
+    eq(messages.conversationId, input.conversationId),
+    eq(messages.clientRequestId, input.runId),
+    eq(messages.role, "assistant"),
+    isNull(messages.deletedAt),
+  ));
 }
 
 export async function failAgentRun(
@@ -474,6 +742,7 @@ export async function failAgentRun(
   runId: string,
   error: ProviderError,
   execution?: AiSdkExecutionState,
+  partialText = "",
 ) {
   const errorCode = execution?.sideEffectOccurred || execution?.toolResultSaved
     ? "PROVIDER_FAILURE_AFTER_SIDE_EFFECT"
@@ -481,20 +750,86 @@ export async function failAgentRun(
   const message = errorCode === "PROVIDER_FAILURE_AFTER_SIDE_EFFECT"
     ? "فشل المزود بعد تنفيذ أداة أو تغيير حالة خارجية؛ أوقف التشغيل للمراجعة ولم تتم إعادة التنفيذ تلقائيًا."
     : error.message;
+  const completedAt = new Date();
+  const messageStatus = error.code === "PROVIDER_CANCELLED"
+    ? "cancelled" as const
+    : partialText.trim() ? "interrupted" as const : "failed" as const;
   console.error(JSON.stringify(safeTelemetry({ operation: "agent.run", runId, status: "error", errorCode })));
-  await db().update(runs).set({
-    status: error.code === "PROVIDER_CANCELLED" ? "cancelled" : "failed",
-    error: message,
-    errorCode,
-    completedAt: new Date(),
-  }).where(and(eq(runs.id, runId), eq(runs.organizationId, organizationId)));
+  await db().transaction(async (tx) => {
+    const [run] = await tx.select({
+      id: runs.id,
+      conversationId: runs.conversationId,
+      requestId: runs.requestId,
+      model: runs.model,
+    }).from(runs).where(and(eq(runs.id, runId), eq(runs.organizationId, organizationId))).limit(1);
+    if (!run) return;
+    await tx.update(runs).set({
+      status: error.code === "PROVIDER_CANCELLED" ? "cancelled" : "failed",
+      error: message,
+      errorCode,
+      completedAt,
+    }).where(and(eq(runs.id, runId), eq(runs.organizationId, organizationId)));
+    if (run.conversationId) {
+      const assistantValues = {
+        content: partialText,
+        contentParts: partialText ? [{ type: "text", text: partialText }] : [],
+        status: messageStatus,
+        requestId: run.requestId,
+        errorCode,
+        completedAt,
+        model: run.model,
+        metadata: {
+          runId,
+          diagnostic: {
+            category: error.category,
+            code: errorCode,
+            httpStatus: error.httpStatus,
+            providerStatus: error.providerStatus,
+            requestId: error.requestId,
+            providerRequestId: error.providerRequestId,
+            timestamp: error.timestamp,
+          },
+          incomplete: true,
+        },
+      };
+      const [existing] = await tx.select({ id: messages.id }).from(messages).where(and(
+        eq(messages.conversationId, run.conversationId),
+        eq(messages.clientRequestId, runId),
+        eq(messages.role, "assistant"),
+        isNull(messages.deletedAt),
+      )).limit(1);
+      if (existing) {
+        await tx.update(messages).set(assistantValues).where(eq(messages.id, existing.id));
+      } else {
+        await tx.insert(messages).values({
+          conversationId: run.conversationId,
+          role: "assistant",
+          clientRequestId: runId,
+          ...assistantValues,
+        });
+      }
+      await tx.update(conversations).set({
+        lastMessageAt: completedAt,
+        updatedAt: completedAt,
+      }).where(and(
+        eq(conversations.id, run.conversationId),
+        eq(conversations.organizationId, organizationId),
+      ));
+    }
+  });
   await appendRunEvents({
     organizationId,
     runId,
     events: [
       {
         type: error.code === "PROVIDER_CANCELLED" ? "run.cancelled" : "provider.request.failed",
-        payload: { code: errorCode, providerStatus: error.providerStatus },
+        payload: {
+          code: errorCode,
+          category: error.category,
+          providerStatus: error.providerStatus,
+          providerRequestId: error.providerRequestId,
+          partialOutputSaved: Boolean(partialText),
+        },
       },
       ...(error.code === "PROVIDER_CANCELLED" ? [] : [{ type: "run.failed", payload: { code: errorCode } }]),
     ],
@@ -549,7 +884,7 @@ export async function executeAgentRun(input: {
         }).where(and(eq(runs.id, prepared.run.id), eq(runs.organizationId, input.organizationId)));
       }
       try {
-        const result = await executeAiSdkCandidate({
+        const result = await executeRuntimeCandidate({
           organizationId: input.organizationId,
           userId: input.userId,
           agentId: input.agentId,
@@ -557,14 +892,7 @@ export async function executeAgentRun(input: {
           conversationId: input.conversationId,
           requestId,
           candidateIndex,
-          candidate: {
-            providerCredentialId: candidate.credential.id,
-            provider: candidate.credential.provider,
-            apiKey: decryptSecret(candidate.credential.encryptedSecret, `provider:${input.organizationId}`),
-            baseUrl: candidate.credential.baseUrl,
-            model: candidate.model,
-            capabilities: candidate.capabilities,
-          },
+          candidateRecord: candidate,
           context: prepared.context,
           temperature: prepared.version.temperatureMilli / 1000,
           maxOutputTokens: prepared.version.maxOutputTokens,
@@ -643,7 +971,15 @@ export async function executeAgentRun(input: {
           organizationId: input.organizationId,
           runId: prepared.run.id,
           type: "provider.fallback.started",
-          payload: { attempt: attemptCount + 1, previousErrorCode: safe.code },
+          payload: {
+            attempt: attemptCount + 1,
+            previousErrorCode: safe.code,
+            previousProviderCredentialId: candidate.credential.id,
+            previousModel: candidate.model,
+            nextProviderCredentialId: prepared.candidates[candidateIndex + 1]?.credential.id ?? null,
+            nextModel: prepared.candidates[candidateIndex + 1]?.model ?? null,
+            userNotified: false,
+          },
         });
       }
     }
@@ -680,6 +1016,7 @@ export async function* streamAgentRun(input: {
   const allocateStep = await createRunStepAllocator(input.organizationId, prepared.run.id);
   yield { type: "run" as const, runId: prepared.run.id };
   let accumulatedText = "";
+  let streamingMessageCreated = false;
   let activeCandidate = prepared.candidates[0]!;
   let attemptCount = 0;
   let lastError: ProviderError | undefined;
@@ -698,7 +1035,7 @@ export async function* streamAgentRun(input: {
       }
       try {
         let candidateResult: Awaited<ReturnType<typeof executeAiSdkCandidate>> | undefined;
-        for await (const event of streamAiSdkCandidate({
+        for await (const event of streamRuntimeCandidate({
           organizationId: input.organizationId,
           userId: input.userId,
           agentId: input.agentId,
@@ -706,14 +1043,7 @@ export async function* streamAgentRun(input: {
           conversationId: input.conversationId,
           requestId: input.requestId,
           candidateIndex,
-          candidate: {
-            providerCredentialId: candidate.credential.id,
-            provider: candidate.credential.provider,
-            apiKey: decryptSecret(candidate.credential.encryptedSecret, `provider:${input.organizationId}`),
-            baseUrl: candidate.credential.baseUrl,
-            model: candidate.model,
-            capabilities: candidate.capabilities,
-          },
+          candidateRecord: candidate,
           context: prepared.context,
           temperature: prepared.version.temperatureMilli / 1000,
           maxOutputTokens: prepared.version.maxOutputTokens,
@@ -721,6 +1051,16 @@ export async function* streamAgentRun(input: {
           allocateStep,
         })) {
           if (event.type === "delta") {
+            if (!streamingMessageCreated) {
+              await ensureStreamingAssistantMessage({
+                conversationId: input.conversationId,
+                runId: prepared.run.id,
+                requestId: input.requestId,
+                providerCredentialId: candidate.credential.id,
+                model: candidate.model,
+              });
+              streamingMessageCreated = true;
+            }
             accumulatedText += event.text;
             yield { type: "delta" as const, text: event.text };
           } else {
@@ -729,6 +1069,13 @@ export async function* streamAgentRun(input: {
         }
         if (!candidateResult) throw new ProviderError("PROVIDER_EMPTY_OUTPUT", "لم يُرجع النموذج نتيجة.", 502);
         if (candidateResult.status === "waiting_approval") {
+          if (streamingMessageCreated) {
+            await persistStreamingAssistantProgress({
+              conversationId: input.conversationId,
+              runId: prepared.run.id,
+              text: accumulatedText,
+            });
+          }
           yield {
             type: "approval" as const,
             runId: prepared.run.id,
@@ -778,12 +1125,20 @@ export async function* streamAgentRun(input: {
           organizationId: input.organizationId,
           runId: prepared.run.id,
           type: "provider.fallback.started",
-          payload: { attempt: attemptCount + 1, previousErrorCode: safe.code },
+          payload: {
+            attempt: attemptCount + 1,
+            previousErrorCode: safe.code,
+            previousProviderCredentialId: candidate.credential.id,
+            previousModel: candidate.model,
+            nextProviderCredentialId: prepared.candidates[candidateIndex + 1]?.credential.id ?? null,
+            nextModel: prepared.candidates[candidateIndex + 1]?.model ?? null,
+            userNotified: false,
+          },
         });
       }
     }
     const safe = lastError ?? new ProviderError("RUN_FAILED", "تعذر إكمال تشغيل الوكيل.", 502);
-    await failAgentRun(input.organizationId, prepared.run.id, safe, lastState);
+    await failAgentRun(input.organizationId, prepared.run.id, safe, lastState, accumulatedText);
     throw new ApiError(safe.httpStatus, safe.code, safe.message, {
       runId: prepared.run.id,
       providerStatus: safe.providerStatus,
@@ -796,7 +1151,7 @@ export async function* streamAgentRun(input: {
 }
 
 export async function cancelAgentRun(organizationId: string, runId: string) {
-  const [run] = await db().select({ id: runs.id, status: runs.status })
+  const [run] = await db().select({ id: runs.id, status: runs.status, conversationId: runs.conversationId })
     .from(runs)
     .where(and(eq(runs.id, runId), eq(runs.organizationId, organizationId)))
     .limit(1);
@@ -812,6 +1167,14 @@ export async function cancelAgentRun(organizationId: string, runId: string) {
       ...(run.status === "waiting_approval" ? { status: "cancelled" as const, completedAt: now } : {}),
     }).where(and(eq(runs.id, runId), eq(runs.organizationId, organizationId)));
     if (run.status === "waiting_approval") {
+      if (run.conversationId) {
+        await tx.update(messages).set({ status: "cancelled", errorCode: "PROVIDER_CANCELLED", completedAt: now }).where(and(
+          eq(messages.conversationId, run.conversationId),
+          eq(messages.clientRequestId, runId),
+          eq(messages.role, "assistant"),
+          isNull(messages.deletedAt),
+        ));
+      }
       await tx.update(toolApprovals).set({ status: "expired", decidedAt: now })
         .where(and(eq(toolApprovals.organizationId, organizationId), eq(toolApprovals.runId, runId), eq(toolApprovals.status, "pending")));
     }

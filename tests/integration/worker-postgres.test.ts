@@ -76,10 +76,10 @@ describeDatabase("Graphile Worker and PostgreSQL runtime", () => {
     const credentialId = randomUUID();
     await sql`
       INSERT INTO provider_credentials (
-        id, organization_id, provider, name, base_url, encrypted_secret,
+        id, organization_id, provider, provider_type_id, transport_mode, credential_mode, name, base_url, encrypted_secret,
         secret_hint, discovered_models, validation_status, enabled
       ) VALUES (
-        ${credentialId}, ${organizationId}, 'openai', 'Test Provider',
+        ${credentialId}, ${organizationId}, 'openai', 'openai', 'direct', 'encrypted_byok', 'Test Provider',
         'https://api.openai.com/v1', 'unused-in-mcp-test', 'test',
         ${sql.json(["test-model"])}, 'verified', true
       )

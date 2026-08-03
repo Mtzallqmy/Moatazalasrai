@@ -2,6 +2,25 @@ import { z } from "zod";
 
 export const uuidSchema = z.uuid();
 export const providerKindSchema = z.enum(["openai", "anthropic", "gemini", "openai_compatible"]);
+export const providerTypeIdSchema = z.enum([
+  "cloudflare-workers-ai",
+  "cloudflare-ai-gateway",
+  "openai",
+  "anthropic",
+  "google-ai-studio",
+  "custom-openai-compatible",
+]);
+export const providerTransportModeSchema = z.enum([
+  "direct",
+  "cloudflare_ai_gateway_native",
+  "cloudflare_ai_gateway_rest",
+  "cloudflare_workers_ai",
+]);
+export const providerCredentialModeSchema = z.enum(["encrypted_byok", "cloudflare_provider_key", "cloudflare_binding"]);
+export const providerHealthStatusSchema = z.enum([
+  "unconfigured", "validating", "healthy", "degraded", "rate_limited", "unauthorized",
+  "model_unavailable", "network_error", "misconfigured", "disabled", "unknown",
+]);
 export const providerSlugSchema = z.string().trim().toLowerCase().regex(/^[a-z0-9-]{2,80}$/);
 export const agentStatusSchema = z.enum(["draft", "published", "archived"]);
 export const roleSchema = z.enum(["owner", "admin", "developer", "operator", "viewer", "member"]);
@@ -27,35 +46,94 @@ export const loginSchema = z.object({
 
 export const switchOrganizationSchema = z.object({ organizationId: uuidSchema }).strict();
 
-export const providerInputSchema = z.object({
+const providerInputBaseSchema = z.object({
   provider: providerKindSchema,
+  providerTypeId: providerTypeIdSchema.optional(),
   providerSlug: providerSlugSchema.optional(),
   name: z.string().trim().min(2).max(80),
-  apiKey: z.string().trim().min(8).max(4000),
+  apiKey: z.string().trim().min(8).max(4000).optional(),
   baseUrl: z.url().max(2048).optional(),
+  transportMode: providerTransportModeSchema.default("direct"),
+  credentialMode: providerCredentialModeSchema.default("encrypted_byok"),
+  gatewayId: z.string().trim().regex(/^[a-zA-Z0-9_-]{1,96}$/).optional(),
+  keyAlias: z.string().trim().regex(/^[a-zA-Z0-9_-]{1,96}$/).optional(),
+  defaultModel: z.string().trim().min(1).max(300).optional(),
+  allowedModels: z.array(z.string().trim().min(1).max(300)).max(200).default([]),
   testModel: z.string().trim().min(1).max(300).optional(),
   manualModel: z.string().trim().min(1).max(300).optional(),
+  isDefault: z.boolean().default(false),
+  saveInvalid: z.boolean().default(false),
+  skipCache: z.boolean().default(true),
+  cacheTtl: z.number().int().min(0).max(31_536_000).optional(),
+  collectLog: z.boolean().default(false),
 }).strict();
 
-export const providerValidationSchema = providerInputSchema.pick({
-  provider: true,
-  providerSlug: true,
-  apiKey: true,
-  baseUrl: true,
-  testModel: true,
-  manualModel: true,
+type ProviderConfigForValidation = z.infer<typeof providerInputBaseSchema>;
+
+function validateProviderRouting(value: ProviderConfigForValidation, context: z.RefinementCtx) {
+  if (value.transportMode === "direct" && (!value.apiKey || value.credentialMode !== "encrypted_byok")) {
+    context.addIssue({ code: "custom", path: ["apiKey"], message: "المزوّد المباشر يتطلب مفتاح API." });
+  }
+  if (value.transportMode === "cloudflare_ai_gateway_native") {
+    if (!value.gatewayId) context.addIssue({ code: "custom", path: ["gatewayId"], message: "Gateway ID مطلوب." });
+    if (value.credentialMode === "cloudflare_provider_key" && !value.keyAlias) {
+      context.addIssue({ code: "custom", path: ["keyAlias"], message: "Provider Key Alias مطلوب." });
+    }
+    if (value.credentialMode === "encrypted_byok" && !value.apiKey) {
+      context.addIssue({ code: "custom", path: ["apiKey"], message: "أدخل مفتاح المزود أو استخدم Provider Key Alias." });
+    }
+  }
+  if ((value.transportMode === "cloudflare_ai_gateway_rest" || value.transportMode === "cloudflare_workers_ai")
+    && value.credentialMode !== "cloudflare_binding") {
+    context.addIssue({ code: "custom", path: ["credentialMode"], message: "هذا المسار يستخدم سر Cloudflare أو binding ولا يقبل مفتاح مزود من العميل." });
+  }
+  if (value.transportMode === "cloudflare_workers_ai" && value.providerTypeId !== "cloudflare-workers-ai") {
+    context.addIssue({ code: "custom", path: ["providerTypeId"], message: "معرف Workers AI غير مطابق." });
+  }
+}
+
+export const providerInputSchema = providerInputBaseSchema.superRefine(validateProviderRouting);
+
+const providerValidationBaseSchema = providerInputBaseSchema.omit({
+  name: true,
+  isDefault: true,
+  saveInvalid: true,
 });
+
+export const providerValidationSchema = providerValidationBaseSchema.superRefine((value, context) => {
+  validateProviderRouting({
+    ...value,
+    name: "validation",
+    isDefault: false,
+    saveInvalid: false,
+  }, context);
+});
+
+export const providerVerifiedSaveSchema = providerInputBaseSchema.extend({
+  validationId: uuidSchema,
+}).superRefine(validateProviderRouting);
 
 export const providerUpdateSchema = z.object({
   id: uuidSchema,
+  providerTypeId: providerTypeIdSchema.optional(),
   providerSlug: providerSlugSchema.optional(),
   name: z.string().trim().min(2).max(80).optional(),
   baseUrl: z.url().max(2048).optional(),
   apiKey: z.string().trim().min(8).max(4000).optional(),
+  transportMode: providerTransportModeSchema.optional(),
+  credentialMode: providerCredentialModeSchema.optional(),
+  gatewayId: z.string().trim().regex(/^[a-zA-Z0-9_-]{1,96}$/).nullable().optional(),
+  keyAlias: z.string().trim().regex(/^[a-zA-Z0-9_-]{1,96}$/).nullable().optional(),
+  defaultModel: z.string().trim().min(1).max(300).nullable().optional(),
+  allowedModels: z.array(z.string().trim().min(1).max(300)).max(200).optional(),
   enabled: z.boolean().optional(),
+  isDefault: z.boolean().optional(),
   revalidate: z.boolean().optional(),
   testModel: z.string().trim().min(1).max(300).optional(),
   manualModel: z.string().trim().min(1).max(300).optional(),
+  skipCache: z.boolean().optional(),
+  cacheTtl: z.number().int().min(0).max(31_536_000).nullable().optional(),
+  collectLog: z.boolean().optional(),
 }).strict().refine((value) => Object.keys(value).length > 1, "No provider changes supplied.");
 
 export const providerDeleteSchema = z.object({ id: uuidSchema }).strict();

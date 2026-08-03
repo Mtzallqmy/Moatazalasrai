@@ -7,7 +7,11 @@ import {
   resolveProviderPreset,
 } from "@/lib/providers/catalog";
 import { validateProviderBaseUrl } from "@/lib/security/provider-network";
-import { ProviderError, type ProviderKind, type ProviderRequest } from "@/lib/providers/types";
+import { runCloudflareRestChat, validateCloudflareRestModel } from "@/lib/providers/cloudflare-rest";
+import { defaultProviderTypeId, validateCredentialTransport } from "@/lib/providers/provider-config";
+import { providerRegistry } from "@/lib/providers/platform-registry";
+import { runWorkersAiChat, validateWorkersAiModel } from "@/lib/providers/workers-ai";
+import { providerCapabilitiesRecord, ProviderError, type ProviderCredentialMode, type ProviderKind, type ProviderRequest, type ProviderTransportMode, type ProviderTypeId } from "@/lib/providers/types";
 
 function normalized(value: string) {
   return value.trim().replace(/\/+$/, "");
@@ -50,15 +54,126 @@ function canUseManualModel(error: unknown) {
 
 export async function validateProvider(input: {
   provider: ProviderKind;
+  providerTypeId?: ProviderTypeId;
   providerSlug?: string;
-  apiKey: string;
+  apiKey?: string;
   baseUrl?: string;
+  transportMode?: ProviderTransportMode;
+  credentialMode?: ProviderCredentialMode;
+  gatewayId?: string;
+  keyAlias?: string;
+  allowedModels?: string[];
+  defaultModel?: string;
+  skipCache?: boolean;
+  cacheTtl?: number;
+  collectLog?: boolean;
   testModel?: string;
   manualModel?: string;
   requestId: string;
   organizationId?: string;
   signal?: AbortSignal;
 }) {
+  const providerTypeId = input.providerTypeId ?? defaultProviderTypeId(input.provider);
+  const transportMode = input.transportMode ?? "direct";
+  const credentialMode = input.credentialMode ?? "encrypted_byok";
+  validateCredentialTransport({
+    provider: input.provider,
+    providerTypeId,
+    transportMode,
+    credentialMode,
+    apiKey: input.apiKey,
+    gatewayId: input.gatewayId,
+    keyAlias: input.keyAlias,
+  });
+  providerRegistry.get(providerTypeId).validateConfig({
+    providerTypeId,
+    providerKind: input.provider,
+    transportMode,
+    baseUrl: input.baseUrl,
+    gatewayId: input.gatewayId,
+    keyAlias: input.keyAlias,
+    defaultModel: input.defaultModel,
+    allowedModels: input.allowedModels,
+  });
+
+  const selectedModel = input.testModel?.trim() || input.defaultModel?.trim() || input.manualModel?.trim();
+  const configuredModels = [...new Set([
+    ...(input.allowedModels ?? []),
+    ...(input.manualModel ? [input.manualModel] : []),
+    ...(input.defaultModel ? [input.defaultModel] : []),
+    ...(input.testModel ? [input.testModel] : []),
+  ].map((model) => model.trim()).filter(Boolean))];
+  const stages: Array<{ stage: string; status: "passed" | "manual"; latencyMs?: number }> = [];
+  const startedAt = performance.now();
+
+  if (transportMode === "cloudflare_workers_ai") {
+    if (!selectedModel) throw new ProviderError("MODEL_TEST_REQUIRED", "اختر نموذج Workers AI لاختبار الاتصال.", 400);
+    configuredModels.forEach(validateWorkersAiModel);
+    const testStartedAt = performance.now();
+    await runWorkersAiChat({
+      model: selectedModel,
+      messages: [{ role: "user", content: "Reply with OK." }],
+      temperature: 0,
+      maxOutputTokens: 16,
+      gatewayId: input.gatewayId,
+      skipCache: input.skipCache,
+      cacheTtl: input.cacheTtl,
+      collectLog: input.collectLog,
+      requestId: input.requestId,
+    });
+    const latencyMs = Math.round(performance.now() - testStartedAt);
+    stages.push({ stage: "workers_ai_binding_generation", status: "passed", latencyMs });
+    return {
+      providerSlug: "cloudflare-workers-ai",
+      providerTypeId,
+      transportMode,
+      credentialMode,
+      apiStyle: "workers_ai_binding",
+      normalizedBaseUrl: "cloudflare:workers-ai",
+      models: configuredModels,
+      latencyMs: Math.round(performance.now() - startedAt),
+      stages,
+      modelTest: { model: selectedModel, latencyMs },
+      capabilities: providerCapabilitiesRecord(providerRegistry.get(providerTypeId).getCapabilities()),
+      baseUrlAdjusted: false,
+    };
+  }
+
+  if (transportMode === "cloudflare_ai_gateway_rest") {
+    if (!selectedModel) throw new ProviderError("MODEL_TEST_REQUIRED", "اختر نموذجًا لاختبار AI Gateway REST.", 400);
+    validateCloudflareRestModel(input.provider, selectedModel);
+    const testStartedAt = performance.now();
+    await runCloudflareRestChat({
+      gatewayId: input.gatewayId,
+      model: selectedModel,
+      providerKind: input.provider,
+      messages: [{ role: "user", content: "Reply with OK." }],
+      temperature: 0,
+      maxOutputTokens: 16,
+      skipCache: input.skipCache,
+      cacheTtl: input.cacheTtl,
+      collectLog: input.collectLog,
+      requestId: input.requestId,
+      signal: input.signal,
+    });
+    const latencyMs = Math.round(performance.now() - testStartedAt);
+    stages.push({ stage: "cloudflare_rest_generation", status: "passed", latencyMs });
+    return {
+      providerSlug: "cloudflare-ai-gateway",
+      providerTypeId,
+      transportMode,
+      credentialMode,
+      apiStyle: "cloudflare_rest_chat",
+      normalizedBaseUrl: input.baseUrl?.trim() || "https://api.cloudflare.com/client/v4/accounts/managed/ai/v1",
+      models: configuredModels,
+      latencyMs: Math.round(performance.now() - startedAt),
+      stages,
+      modelTest: { model: selectedModel, latencyMs },
+      capabilities: providerCapabilitiesRecord(providerRegistry.get(providerTypeId).getCapabilities()),
+      baseUrlAdjusted: false,
+    };
+  }
+
   const preset = resolveProviderPreset(input);
   const adapter = getProviderAdapter(input.provider, preset.slug);
   const requestedBaseUrl = input.baseUrl?.trim() || preset.defaultBaseUrl || adapter.defaultBaseUrl;
@@ -67,18 +182,26 @@ export async function validateProvider(input: {
   }
   const baseUrl = canonicalizeProviderBaseUrl(input.provider, requestedBaseUrl);
   const manualModel = input.manualModel?.trim();
-  const stages: Array<{ stage: string; status: "passed" | "manual"; latencyMs?: number }> = [];
-  const startedAt = performance.now();
+  const apiKey = credentialMode === "cloudflare_provider_key"
+    ? "cloudflare-managed-provider-key"
+    : input.apiKey?.trim() ?? "";
 
   let discovery: { normalizedBaseUrl: string; models: string[]; latencyMs: number };
   try {
     discovery = await adapter.discoverModels({
-      apiKey: input.apiKey,
+      apiKey,
       baseUrl,
       signal: input.signal,
       requestId: input.requestId,
       organizationId: input.organizationId,
       providerKind: input.provider,
+      providerTypeId,
+      transportMode,
+      gatewayId: input.gatewayId,
+      keyAlias: input.keyAlias,
+      skipCache: input.skipCache,
+      cacheTtl: input.cacheTtl,
+      collectLog: input.collectLog,
     });
     stages.push({ stage: "url_dns_tls_credentials_models", status: "passed", latencyMs: discovery.latencyMs });
   } catch (error) {
@@ -92,21 +215,30 @@ export async function validateProvider(input: {
     stages.push({ stage: "url_dns_tls_manual_model", status: "manual", latencyMs: discovery.latencyMs });
   }
 
-  if (manualModel && !discovery.models.includes(manualModel)) {
-    discovery.models = [...new Set([manualModel, ...discovery.models])];
-  }
-
-  const selectedModel = input.testModel?.trim() || manualModel;
+  const mergedModels = [...new Set([...configuredModels, ...discovery.models])];
+  discovery.models = mergedModels;
   let modelTest: { model: string; latencyMs: number } | undefined;
   if (selectedModel) {
     if (!discovery.models.includes(selectedModel)) {
-      throw new ProviderError("MODEL_UNAVAILABLE", "النموذج المحدد غير موجود ضمن النماذج المتاحة للمفتاح.", 422);
+      throw new ProviderError("MODEL_UNAVAILABLE", "النموذج المحدد غير موجود ضمن النماذج المتاحة للمفتاح.", 422, 404, false, undefined, {
+        category: "model_unavailable",
+        provider: providerTypeId,
+        model: selectedModel,
+        requestId: input.requestId,
+      });
     }
     const testStartedAt = performance.now();
     await adapter.testModel({
-      apiKey: input.apiKey,
+      apiKey,
       baseUrl: discovery.normalizedBaseUrl,
       providerSlug: preset.slug,
+      providerTypeId,
+      transportMode,
+      gatewayId: input.gatewayId,
+      keyAlias: input.keyAlias,
+      skipCache: input.skipCache,
+      cacheTtl: input.cacheTtl,
+      collectLog: input.collectLog,
       model: selectedModel,
       messages: [{ role: "user", content: "Reply with OK." }],
       temperature: 0,
@@ -122,12 +254,16 @@ export async function validateProvider(input: {
 
   return {
     providerSlug: preset.slug,
+    providerTypeId,
+    transportMode,
+    credentialMode,
     apiStyle: preset.apiStyle,
     normalizedBaseUrl: discovery.normalizedBaseUrl,
     models: discovery.models,
     latencyMs: Math.round(performance.now() - startedAt),
     stages,
     modelTest,
+    capabilities: adapter.capabilities,
     baseUrlAdjusted: normalized(requestedBaseUrl) !== normalized(discovery.normalizedBaseUrl),
   };
 }

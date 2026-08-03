@@ -7,8 +7,8 @@ import {
 } from "@/db/agent-runtime-schema";
 import { agentVersions, modelCatalog, providerCredentials, runs } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
-import { decryptSecret } from "@/lib/security/encryption";
 import { inferModelCapabilities } from "@/server/models/capabilities";
+import { asProviderTypeId, asTransportMode, resolveProviderApiKey } from "@/lib/providers/provider-config";
 import { executeAiSdkCandidate, AiSdkCandidateError } from "@/lib/ai-sdk/runtime";
 import { createRunStepAllocator, persistRunStep } from "@/lib/ai-sdk/run-steps";
 import { loadRunCheckpoint } from "@/lib/ai-sdk/checkpoints";
@@ -94,6 +94,14 @@ export async function resumeAgentRunAfterApproval(input: {
     )).limit(1).then((rows) => rows[0]),
   ]);
   if (!version) throw new ApiError(409, "AGENT_VERSION_MISSING", "إصدار الوكيل المرتبط بالتشغيل غير متاح.");
+  const transportMode = asTransportMode(credential.transportMode);
+  if (transportMode === "cloudflare_ai_gateway_rest" || transportMode === "cloudflare_workers_ai") {
+    throw new ApiError(
+      422,
+      "PROVIDER_APPROVAL_RESUME_UNSUPPORTED",
+      "هذا المزود لا يدعم استئناف أدوات الخادم بعد الموافقة. استخدم مزودًا مباشرًا أو AI Gateway provider-native.",
+    );
+  }
 
   const approved = approval.status === "approved";
   const approvalResponse: ToolApprovalResponse = {
@@ -140,8 +148,15 @@ export async function resumeAgentRunAfterApproval(input: {
       candidate: {
         providerCredentialId: credential.id,
         provider: credential.provider,
-        apiKey: decryptSecret(credential.encryptedSecret, `provider:${input.organizationId}`),
+        providerTypeId: asProviderTypeId(credential.providerTypeId, credential.provider),
+        transportMode,
+        apiKey: resolveProviderApiKey(credential, input.organizationId),
         baseUrl: credential.baseUrl,
+        gatewayId: credential.gatewayId ?? undefined,
+        keyAlias: credential.keyAlias ?? undefined,
+        skipCache: credential.gatewaySkipCache,
+        cacheTtl: credential.gatewayCacheTtl ?? undefined,
+        collectLog: credential.gatewayCollectLog,
         model: state.model,
         capabilities: {
           ...inferModelCapabilities(credential.provider, state.model),

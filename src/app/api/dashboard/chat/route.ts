@@ -1,4 +1,4 @@
-import { and, count, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, count, desc, eq, ilike, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import { db } from "@/db";
 import { agents, attachments, conversations, messages } from "@/db/schema";
 import { requireSession } from "@/lib/auth/authorization";
@@ -28,9 +28,17 @@ export async function GET(request: Request) {
           id: messages.id,
           role: messages.role,
           content: messages.content,
+          contentParts: messages.contentParts,
+          status: messages.status,
+          requestId: messages.requestId,
           metadata: messages.metadata,
           createdAt: messages.createdAt,
+          completedAt: messages.completedAt,
           model: messages.model,
+          inputTokens: messages.inputTokens,
+          outputTokens: messages.outputTokens,
+          latencyMs: messages.latencyMs,
+          errorCode: messages.errorCode,
           editedAt: messages.editedAt,
         }).from(messages)
           .where(and(eq(messages.conversationId, id), isNull(messages.deletedAt)))
@@ -60,11 +68,37 @@ export async function GET(request: Request) {
     }
 
     const archived = url.searchParams.get("archived") === "true";
+    const deleted = url.searchParams.get("deleted") === "true";
+    const search = url.searchParams.get("q")?.trim().slice(0, 120) ?? "";
+    const pattern = search ? `%${search}%` : "";
+    const matchingMessageConversations = search
+      ? await db().selectDistinct({ id: messages.conversationId }).from(messages)
+          .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+          .where(and(
+            eq(conversations.organizationId, session.organizationId),
+            session.role === "member" ? eq(conversations.createdByUserId, session.userId) : undefined,
+            isNull(messages.deletedAt),
+            ilike(messages.content, pattern),
+          ))
+          .limit(200)
+      : [];
+    const matchingIds = matchingMessageConversations.map((row) => row.id);
+    const searchFilter = search
+      ? matchingIds.length
+        ? or(ilike(conversations.title, pattern), inArray(conversations.id, matchingIds))
+        : ilike(conversations.title, pattern)
+      : undefined;
+    const archiveFilter = deleted
+      ? undefined
+      : archived
+        ? isNotNull(conversations.archivedAt)
+        : isNull(conversations.archivedAt);
     const where = and(
       eq(conversations.organizationId, session.organizationId),
       session.role === "member" ? eq(conversations.createdByUserId, session.userId) : undefined,
-      archived ? isNotNull(conversations.archivedAt) : isNull(conversations.archivedAt),
-      isNull(conversations.deletedAt),
+      archiveFilter,
+      deleted ? isNotNull(conversations.deletedAt) : isNull(conversations.deletedAt),
+      searchFilter,
     );
     const [rows, totals] = await Promise.all([
       db().select({
@@ -72,12 +106,20 @@ export async function GET(request: Request) {
         title: conversations.title,
         agentId: conversations.agentId,
         agentName: agents.name,
+        summary: conversations.summary,
+        status: conversations.status,
         archivedAt: conversations.archivedAt,
+        deletedAt: conversations.deletedAt,
+        pinnedAt: conversations.pinnedAt,
+        providerCredentialId: conversations.providerCredentialId,
+        model: conversations.model,
+        lastMessageAt: conversations.lastMessageAt,
+        createdAt: conversations.createdAt,
         updatedAt: conversations.updatedAt,
       }).from(conversations)
         .innerJoin(agents, eq(agents.id, conversations.agentId))
         .where(where)
-        .orderBy(desc(conversations.updatedAt))
+        .orderBy(desc(conversations.pinnedAt), desc(conversations.lastMessageAt), desc(conversations.updatedAt), desc(conversations.id))
         .limit(query.limit)
         .offset((query.page - 1) * query.limit),
       db().select({ value: count() }).from(conversations).where(where),
@@ -111,7 +153,8 @@ export async function POST(request: Request) {
         organizationId: session.organizationId,
         agentId: agent.id,
         createdByUserId: session.userId,
-        title: `محادثة مع ${agent.name}`,
+        title: null,
+        status: "active",
       }).returning();
       return apiSuccess(conversation, requestId, 201);
     }
@@ -122,13 +165,13 @@ export async function POST(request: Request) {
       session.role === "member" ? eq(conversations.createdByUserId, session.userId) : undefined,
     );
     if (body.action === "delete") {
-      const [deleted] = await db().update(conversations).set({ deletedAt: new Date(), updatedAt: new Date() })
+      const [deleted] = await db().update(conversations).set({ status: "deleted", deletedAt: new Date(), updatedAt: new Date() })
         .where(ownedWhere).returning({ id: conversations.id });
       if (!deleted) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة.");
       return apiSuccess({ deleted: true, id: deleted.id }, requestId);
     }
     if (body.action === "restore") {
-      const [restored] = await db().update(conversations).set({ deletedAt: null, archivedAt: null, updatedAt: new Date() })
+      const [restored] = await db().update(conversations).set({ status: "active", deletedAt: null, archivedAt: null, updatedAt: new Date() })
         .where(ownedWhere).returning();
       if (!restored) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة.");
       return apiSuccess(restored, requestId);
@@ -148,7 +191,7 @@ export async function POST(request: Request) {
     const [updated] = await db().update(conversations).set(
       body.action === "rename"
         ? { title: body.title, updatedAt: new Date() }
-        : { archivedAt: body.archived ? new Date() : null, updatedAt: new Date() },
+        : { status: body.archived ? "archived" : "active", archivedAt: body.archived ? new Date() : null, updatedAt: new Date() },
     ).where(ownedWhere).returning();
     if (!updated) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة.");
     return apiSuccess(updated, requestId);
