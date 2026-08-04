@@ -16,6 +16,10 @@ function expiresIn(ms: number) {
   return new Date(Date.now() + ms);
 }
 
+function refreshTokenReused() {
+  return new ApiError(401, "REFRESH_TOKEN_REUSED", "استُخدم رمز تحديث مستبدل. سجّل الدخول مجددًا لحماية الجهاز.");
+}
+
 export async function issueMobileSession(input: {
   userId: string;
   organizationId: string;
@@ -44,6 +48,7 @@ export async function issueMobileSession(input: {
       accessTokenHash: hashApiKey(accessToken),
       accessExpiresAt,
       refreshTokenHash: hashApiKey(refreshToken),
+      previousRefreshTokenHash: null,
       refreshExpiresAt,
       deviceName: input.deviceName,
       revokedAt: null,
@@ -63,12 +68,19 @@ export async function issueMobileSession(input: {
 }
 
 export async function rotateMobileSession(refreshToken: string) {
+  const refreshTokenHash = hashApiKey(refreshToken);
   const [current] = await db().select().from(mobileSessions).where(and(
-    eq(mobileSessions.refreshTokenHash, hashApiKey(refreshToken)),
+    eq(mobileSessions.refreshTokenHash, refreshTokenHash),
     isNull(mobileSessions.revokedAt),
     gt(mobileSessions.refreshExpiresAt, new Date()),
   )).limit(1);
-  if (!current) throw new ApiError(401, "REFRESH_TOKEN_INVALID", "انتهت جلسة التطبيق أو أُبطلت.");
+  if (!current) {
+    const [reused] = await db().select({ id: mobileSessions.id }).from(mobileSessions).where(
+      eq(mobileSessions.previousRefreshTokenHash, refreshTokenHash),
+    ).limit(1);
+    if (reused) throw refreshTokenReused();
+    throw new ApiError(401, "REFRESH_TOKEN_INVALID", "انتهت جلسة التطبيق أو أُبطلت.");
+  }
 
   const accessToken = token("mat");
   const nextRefreshToken = token("mrt");
@@ -77,18 +89,17 @@ export async function rotateMobileSession(refreshToken: string) {
   const [rotated] = await db().update(mobileSessions).set({
     accessTokenHash: hashApiKey(accessToken),
     accessExpiresAt,
+    previousRefreshTokenHash: refreshTokenHash,
     refreshTokenHash: hashApiKey(nextRefreshToken),
     refreshExpiresAt,
     lastUsedAt: new Date(),
     updatedAt: new Date(),
   }).where(and(
     eq(mobileSessions.id, current.id),
-    eq(mobileSessions.refreshTokenHash, hashApiKey(refreshToken)),
+    eq(mobileSessions.refreshTokenHash, refreshTokenHash),
     isNull(mobileSessions.revokedAt),
   )).returning({ id: mobileSessions.id });
-  if (!rotated) {
-    throw new ApiError(401, "REFRESH_TOKEN_REUSED", "استُخدم رمز تحديث مستبدل. سجّل الدخول مجددًا لحماية الجهاز.");
-  }
+  if (!rotated) throw refreshTokenReused();
   return {
     sessionId: current.id,
     accessToken,
