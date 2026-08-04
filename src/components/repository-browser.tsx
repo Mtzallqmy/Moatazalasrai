@@ -82,15 +82,21 @@ export function RepositoryBrowser() {
 
   useEffect(() => {
     const controller = new AbortController();
-    void loadRepositories(controller.signal);
-    return () => controller.abort();
+    const timer = window.setTimeout(() => void loadRepositories(controller.signal), 0);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
   }, [loadRepositories]);
 
   useEffect(() => {
     if (!selected) return;
     const controller = new AbortController();
-    void loadContents(selected, "", controller.signal);
-    return () => controller.abort();
+    const timer = window.setTimeout(() => void loadContents(selected, "", controller.signal), 0);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
   }, [selected, loadContents]);
 
   const visibleRepositories = useMemo(() => {
