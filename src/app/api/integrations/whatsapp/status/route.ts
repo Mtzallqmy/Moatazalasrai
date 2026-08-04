@@ -2,7 +2,7 @@ import { requireSession } from "@/lib/auth/authorization";
 import { apiSuccess, getRequestId, handleApiError } from "@/lib/http/api";
 import { isWhatsAppIntegrationEnabled } from "@/lib/integrations/whatsapp/config";
 import { whatsappConnectionStatus } from "@/lib/integrations/whatsapp/linking";
-import { hydrateRuntimeControlPlane } from "@/lib/platform/runtime-control";
+import { hydrateRuntimeForRequest } from "@/lib/platform/runtime-hydration";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,11 +11,11 @@ export async function GET(request: Request) {
   const requestId = getRequestId(request);
   try {
     const session = await requireSession();
-    const runtimeState = await hydrateRuntimeControlPlane();
+    const runtimeState = await hydrateRuntimeForRequest();
     if (!isWhatsAppIntegrationEnabled()) {
       return apiSuccess({
         enabled: false,
-        configured: runtimeState.whatsapp.configured,
+        configured: runtimeState?.whatsapp.configured ?? false,
         connected: false,
         connectedAt: null,
         phoneNumberMasked: null,
