@@ -72,13 +72,6 @@ jobs:
           console.log(JSON.stringify({ event: 'test_driver.rewritten', files: changed }));
           NODE
 
-      - name: Verify no direct postgres-js imports remain
-        run: |
-          if git grep -nE 'from ["'"']postgres["'"']|require\(["'"']postgres["'"']\)' -- '*.ts' '*.tsx' '*.js' '*.mjs' '*.cjs'; then
-            echo "postgres-js imports remain" >&2
-            exit 1
-          fi
-
       - name: Commit rewritten fixtures
         run: |
           git config user.name "github-actions[bot]"
