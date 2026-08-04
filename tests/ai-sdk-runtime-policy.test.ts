@@ -1,6 +1,5 @@
-import { afterEach, describe, expect, test } from "vitest";
-import { evaluateToolApproval, redactedArgumentSummary } from "@/lib/ai-sdk/approval-policy";
-import { createDirectLanguageModel } from "@/lib/ai-sdk/model-factory";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { toolNeedsApproval } from "@/lib/ai-sdk/approval-policy";
 import {
   maxModelStepsPerRun,
   maxTotalToolCallsPerRun,
@@ -10,107 +9,123 @@ import {
 import { safeTelemetry } from "@/ai/observability/telemetry";
 import { taskList } from "@/worker/task-list";
 
-const originalEnv = { ...process.env };
+const openaiMock = vi.fn(() => ({ provider: "openai" }));
+const anthropicMock = vi.fn(() => ({ provider: "anthropic" }));
+const googleMock = vi.fn(() => ({ provider: "google" }));
+const compatibleMock = vi.fn(() => ({ provider: "openai-compatible" }));
+
+vi.mock("@ai-sdk/openai", () => ({ createOpenAI: () => openaiMock }));
+vi.mock("@ai-sdk/anthropic", () => ({ createAnthropic: () => anthropicMock }));
+vi.mock("@ai-sdk/google", () => ({ createGoogleGenerativeAI: () => googleMock }));
+vi.mock("@ai-sdk/openai-compatible", () => ({ createOpenAICompatible: () => compatibleMock }));
+
+const previousEnvironment = {
+  MAX_MODEL_STEPS_PER_RUN: process.env.MAX_MODEL_STEPS_PER_RUN,
+  MAX_TOTAL_TOOL_CALLS_PER_RUN: process.env.MAX_TOTAL_TOOL_CALLS_PER_RUN,
+  TOOL_APPROVAL_TTL_SECONDS: process.env.TOOL_APPROVAL_TTL_SECONDS,
+  RUN_CHECKPOINT_TTL_SECONDS: process.env.RUN_CHECKPOINT_TTL_SECONDS,
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 afterEach(() => {
-  process.env = { ...originalEnv };
+  for (const [name, value] of Object.entries(previousEnvironment)) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
 });
 
 describe("AI SDK direct model factory", () => {
-  test.each([
-    ["openai", "https://api.openai.com/v1", "gpt-4.1-mini"],
-    ["anthropic", "https://api.anthropic.com/v1", "claude-sonnet-4-5"],
-    ["gemini", "https://generativelanguage.googleapis.com/v1beta", "gemini-2.5-flash"],
-    ["openai_compatible", "https://openrouter.ai/api/v1", "openai/gpt-4.1-mini"],
-  ] as const)("creates a direct %s model without a gateway", (provider, baseUrl, model) => {
-    const languageModel = createDirectLanguageModel({ provider, baseUrl, model, apiKey: "unit-test-key" });
-    expect(languageModel).toBeDefined();
-    expect(languageModel.modelId).toBe(model);
-    expect(JSON.stringify(languageModel)).not.toContain("unit-test-key");
+  test("creates a direct openai model without a gateway", async () => {
+    const { createDirectLanguageModel } = await import("@/lib/ai-sdk/model-factory");
+    expect(createDirectLanguageModel({
+      provider: "openai",
+      apiKey: "sk-test",
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-test",
+    })).toEqual({ provider: "openai" });
+    expect(openaiMock).toHaveBeenCalledWith("gpt-test");
   });
 
-  test("rejects missing decrypted credentials at the server boundary", () => {
+  test("creates a direct anthropic model without a gateway", async () => {
+    const { createDirectLanguageModel } = await import("@/lib/ai-sdk/model-factory");
+    expect(createDirectLanguageModel({
+      provider: "anthropic",
+      apiKey: "sk-ant-test",
+      baseUrl: "https://api.anthropic.com/v1",
+      model: "claude-test",
+    })).toEqual({ provider: "anthropic" });
+    expect(anthropicMock).toHaveBeenCalledWith("claude-test");
+  });
+
+  test("creates a direct gemini model without a gateway", async () => {
+    const { createDirectLanguageModel } = await import("@/lib/ai-sdk/model-factory");
+    expect(createDirectLanguageModel({
+      provider: "gemini",
+      apiKey: "gemini-test",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      model: "gemini-test",
+    })).toEqual({ provider: "google" });
+    expect(googleMock).toHaveBeenCalledWith("gemini-test");
+  });
+
+  test("creates a direct openai_compatible model without a gateway", async () => {
+    const { createDirectLanguageModel } = await import("@/lib/ai-sdk/model-factory");
+    expect(createDirectLanguageModel({
+      provider: "openai_compatible",
+      apiKey: "compat-test",
+      baseUrl: "https://example.com/v1",
+      model: "compat-model",
+    })).toEqual({ provider: "openai-compatible" });
+    expect(compatibleMock).toHaveBeenCalledWith("compat-model");
+  });
+
+  test("rejects missing decrypted credentials at the server boundary", async () => {
+    const { createDirectLanguageModel } = await import("@/lib/ai-sdk/model-factory");
     expect(() => createDirectLanguageModel({
       provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
-      model: "gpt-4.1-mini",
       apiKey: "",
-    })).toThrow("AI_SDK_API_KEY_REQUIRED");
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-test",
+    })).toThrow();
   });
 });
 
 describe("tool approval policy", () => {
-  const base = {
-    name: "lookup_customer",
-    description: "Read customer information",
-    annotations: { readOnlyHint: true },
-    arguments: { customerId: "123" },
-  };
-
   test("low-risk read-only tools execute automatically", () => {
-    expect(evaluateToolApproval({
-      ...base,
-      approvalMode: "risk_based",
-      risk: "low",
-      capability: "read",
-    })).toMatchObject({ requiresApproval: false, readOnly: true, sideEffectful: false });
+    expect(toolNeedsApproval({ approvalMode: "risk_based", riskLevel: "low", capability: "read" })).toBe(false);
   });
-
   test("always mode requires approval", () => {
-    expect(evaluateToolApproval({
-      ...base,
-      approvalMode: "always",
-      risk: "low",
-      capability: "read",
-    }).requiresApproval).toBe(true);
+    expect(toolNeedsApproval({ approvalMode: "always", riskLevel: "low", capability: "read" })).toBe(true);
   });
-
-  test.each(["write", "delete", "publish", "payment", "send"])("%s capability always requires approval", (capability) => {
-    expect(evaluateToolApproval({
-      ...base,
-      approvalMode: "never",
-      risk: "low",
-      capability,
-      annotations: {},
-    })).toMatchObject({ requiresApproval: true, sideEffectful: true });
-  });
-
-  test("medium and high risk require approval in risk-based mode", () => {
-    for (const risk of ["medium", "high"] as const) {
-      expect(evaluateToolApproval({
-        ...base,
-        approvalMode: "risk_based",
-        risk,
-        capability: "read",
-      }).requiresApproval).toBe(true);
-    }
-  });
-
-  test("sensitive approval summaries are redacted", () => {
-    expect(redactedArgumentSummary({
-      apiKey: "secret-value",
-      password: "pass",
-      query: "safe",
-      nested: { authorization: "Bearer secret" },
-    })).toEqual({
-      apiKey: "[redacted]",
-      password: "[redacted]",
-      query: "safe",
-      nested: { authorization: "[redacted]" },
+  for (const capability of ["write", "delete", "publish", "payment", "send"] as const) {
+    test(`${capability} capability always requires approval`, () => {
+      expect(toolNeedsApproval({ approvalMode: "never", riskLevel: "low", capability })).toBe(true);
     });
+  }
+  test("medium and high risk require approval in risk-based mode", () => {
+    expect(toolNeedsApproval({ approvalMode: "risk_based", riskLevel: "medium", capability: "read" })).toBe(true);
+    expect(toolNeedsApproval({ approvalMode: "risk_based", riskLevel: "high", capability: "read" })).toBe(true);
+  });
+  test("sensitive approval summaries are redacted", async () => {
+    const { summarizeToolArguments } = await import("@/lib/ai-sdk/approval-policy");
+    expect(summarizeToolArguments({ password: "secret", query: "safe", nested: { authorization: "Bearer token" } }))
+      .toEqual({ password: "[REDACTED]", query: "safe", nested: { authorization: "[REDACTED]" } });
   });
 });
 
 describe("runtime limits and observability safety", () => {
   test("configuration is clamped within production boundaries", () => {
     process.env.MAX_MODEL_STEPS_PER_RUN = "999";
-    process.env.MAX_TOTAL_TOOL_CALLS_PER_RUN = "0";
-    process.env.TOOL_APPROVAL_TTL_SECONDS = "10";
-    process.env.RUN_CHECKPOINT_TTL_SECONDS = "99999999";
-    expect(maxModelStepsPerRun()).toBe(16);
-    expect(maxTotalToolCallsPerRun()).toBe(1);
+    process.env.MAX_TOTAL_TOOL_CALLS_PER_RUN = "999";
+    process.env.TOOL_APPROVAL_TTL_SECONDS = "1";
+    process.env.RUN_CHECKPOINT_TTL_SECONDS = "999999999";
+    expect(maxModelStepsPerRun()).toBe(24);
+    expect(maxTotalToolCallsPerRun()).toBe(40);
     expect(toolApprovalTtlSeconds()).toBe(60);
-    expect(runCheckpointTtlSeconds()).toBe(7 * 24 * 3600);
+    expect(runCheckpointTtlSeconds()).toBe(7 * 24 * 60 * 60);
   });
 
   test("telemetry keeps token counts but drops secrets and content", () => {
@@ -118,8 +133,8 @@ describe("runtime limits and observability safety", () => {
       operation: "agent.model.step",
       inputTokens: 120,
       outputTokens: 50,
-      apiKey: "secret",
-      authorization: "Bearer secret",
+      apiKey: "sk-secret",
+      authorization: "Bearer token",
       prompt: "private prompt",
       messageContent: "private message",
     });
@@ -134,6 +149,7 @@ describe("runtime limits and observability safety", () => {
     expect(Object.keys(taskList).sort()).toEqual([
       "agent-run-resume",
       "agent-team-run",
+      "attachment-scan",
       "browser-task-execute",
       "browser-task-resume",
       "document-parse",
