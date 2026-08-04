@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { auditLogs, whatsappConnections } from "@/db/schema";
 import { requireSession } from "@/lib/auth/authorization";
 import {
+  ApiError,
   apiSuccess,
   assertSameOrigin,
   getRequestId,
@@ -11,7 +12,6 @@ import {
   parseJson,
 } from "@/lib/http/api";
 import { sendTextMessage } from "@/lib/integrations/whatsapp/client";
-import { ApiError } from "@/lib/http/api";
 import { initializeWhatsAppFromEnvironment } from "@/lib/platform/whatsapp-environment";
 import { enforceRateLimit, requestClientKey } from "@/lib/security/rate-limit";
 
