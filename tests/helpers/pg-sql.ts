@@ -63,12 +63,13 @@ function createSqlExecutor(
 }
 
 function transactionSql(client: PoolClient): Sql {
-  let transaction!: Sql;
-  transaction = createSqlExecutor(
+  const reference: { current?: Sql } = {};
+  const transaction = createSqlExecutor(
     (text, values) => client.query(text, values),
-    async (callback) => callback(transaction),
+    async (callback) => callback(reference.current!),
     async () => undefined,
   );
+  reference.current = transaction;
   return transaction;
 }
 
