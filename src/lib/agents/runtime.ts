@@ -42,6 +42,8 @@ import {
 import { appendRunEvent, appendRunEvents } from "@/lib/ai-sdk/run-events";
 import { createRunStepAllocator, persistRunStep } from "@/lib/ai-sdk/run-steps";
 import { deleteRunCheckpoints } from "@/lib/ai-sdk/checkpoints";
+import { conversationAccessFilter } from "@/lib/chat/access";
+import type { Role } from "@/lib/auth/permissions";
 
 const activeControllers = new Map<string, AbortController>();
 const MAX_CONTEXT_TOKENS_ESTIMATE = 24_000;
@@ -288,6 +290,7 @@ async function hasEnabledAgentTools(organizationId: string, agentId: string) {
 export async function prepareAgentRun(input: {
   organizationId: string;
   userId?: string;
+  conversationAuthorized?: boolean;
   agentId: string;
   conversationId: string;
   message: string;
@@ -400,7 +403,7 @@ export async function prepareAgentRun(input: {
       eq(conversations.id, input.conversationId),
       eq(conversations.organizationId, input.organizationId),
       eq(conversations.agentId, agent.id),
-      input.userId ? eq(conversations.createdByUserId, input.userId) : undefined,
+      input.userId && !input.conversationAuthorized ? eq(conversations.createdByUserId, input.userId) : undefined,
       isNull(conversations.archivedAt),
       isNull(conversations.deletedAt),
     ))
@@ -848,6 +851,7 @@ async function waitingResult(organizationId: string, runId: string, approvalId?:
 export async function executeAgentRun(input: {
   organizationId: string;
   userId?: string;
+  conversationAuthorized?: boolean;
   agentId: string;
   message: string;
   conversationId: string;
@@ -997,6 +1001,7 @@ export async function executeAgentRun(input: {
 export async function* streamAgentRun(input: {
   organizationId: string;
   userId?: string;
+  conversationAuthorized?: boolean;
   agentId: string;
   message: string;
   conversationId: string;
@@ -1186,6 +1191,7 @@ export async function cancelAgentRun(organizationId: string, runId: string) {
 export async function listOrganizationRuns(input: {
   organizationId: string;
   userId?: string;
+  role?: Role;
   page: number;
   limit: number;
   status?: RunStatusFilter;
@@ -1193,7 +1199,9 @@ export async function listOrganizationRuns(input: {
   const where = and(
     eq(runs.organizationId, input.organizationId),
     input.status ? eq(runs.status, input.status) : undefined,
-    input.userId ? eq(conversations.createdByUserId, input.userId) : undefined,
+    input.userId && input.role
+      ? conversationAccessFilter({ role: input.role, userId: input.userId, access: "read" })
+      : input.userId ? eq(conversations.createdByUserId, input.userId) : undefined,
   );
   const [rows, totalRows] = await Promise.all([
     db().select({

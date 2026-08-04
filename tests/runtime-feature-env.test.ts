@@ -6,6 +6,10 @@ const keys = [
   "OBJECT_STORAGE_DRIVER", "R2_ACCOUNT_ID", "R2_ENDPOINT", "R2_BUCKET_NAME", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY",
   "CLOUDFLARE_AI_GATEWAY_ENABLED", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_AI_GATEWAY_ID", "CLOUDFLARE_AI_GATEWAY_TOKEN", "CLOUDFLARE_API_TOKEN",
   "AI_PROVIDER_FALLBACK_ENABLED", "AI_PROVIDER_DIRECT_FALLBACK_ENABLED",
+  "WHATSAPP_INTEGRATION_ENABLED", "META_APP_ID", "META_APP_SECRET", "META_GRAPH_API_VERSION",
+  "WHATSAPP_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID", "WHATSAPP_BUSINESS_ACCOUNT_ID",
+  "WHATSAPP_DISPLAY_PHONE_NUMBER", "WHATSAPP_WEBHOOK_VERIFY_TOKEN", "WHATSAPP_CONNECT_TOKEN_SECRET",
+  "WHATSAPP_CONNECT_TOKEN_TTL_MINUTES", "PUBLIC_APP_URL", "APP_URL",
 ] as const;
 
 afterEach(() => { for (const key of keys) delete process.env[key]; });
@@ -36,6 +40,29 @@ describe("optional production feature configuration", () => {
     process.env.CLOUDFLARE_AI_GATEWAY_ENABLED = "true";
     process.env.CLOUDFLARE_ACCOUNT_ID = "account";
     process.env.CLOUDFLARE_AI_GATEWAY_ID = "gateway";
+    expect(() => validateOptionalRuntimeEnvironment()).not.toThrow();
+  });
+
+  it("fails closed when WhatsApp is enabled without Meta credentials", () => {
+    process.env.WHATSAPP_INTEGRATION_ENABLED = "true";
+    expect(() => validateOptionalRuntimeEnvironment()).toThrow("META_APP_ID");
+  });
+
+  it("accepts a complete WhatsApp Cloud API configuration", () => {
+    Object.assign(process.env, {
+      WHATSAPP_INTEGRATION_ENABLED: "true",
+      META_APP_ID: "123456",
+      META_APP_SECRET: "0123456789abcdef0123456789abcdef",
+      META_GRAPH_API_VERSION: "v23.0",
+      WHATSAPP_ACCESS_TOKEN: "test-access-token-that-is-long-enough",
+      WHATSAPP_PHONE_NUMBER_ID: "1234567890",
+      WHATSAPP_BUSINESS_ACCOUNT_ID: "9876543210",
+      WHATSAPP_DISPLAY_PHONE_NUMBER: "967700000000",
+      WHATSAPP_WEBHOOK_VERIFY_TOKEN: "verify-token-123456",
+      WHATSAPP_CONNECT_TOKEN_SECRET: "connect-token-secret-32-characters-minimum",
+      WHATSAPP_CONNECT_TOKEN_TTL_MINUTES: "10",
+      PUBLIC_APP_URL: "https://app.example",
+    });
     expect(() => validateOptionalRuntimeEnvironment()).not.toThrow();
   });
 

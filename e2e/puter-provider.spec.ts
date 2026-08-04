@@ -84,9 +84,13 @@ test.describe("Puter browser provider", () => {
     await page.goto("/dashboard/providers");
     const card = page.getByLabel("مزوّد Puter");
     await expect(card).toBeVisible();
+    await expect(card).toHaveAttribute("data-puter-ready", "true");
     await expect(card.getByLabel("مفتاح API")).toHaveCount(0);
+    const connectButton = card.getByRole("button", { name: "الاتصال بحساب Puter" });
+    await expect(connectButton).toBeEnabled();
     await page.evaluate(() => localStorage.setItem("moataz:puter:e2e-auth-fail", "true"));
-    await card.getByRole("button", { name: "الاتصال بحساب Puter" }).click();
+    await connectButton.click();
+    await expect(card).toHaveAttribute("data-puter-state", "error");
     await expect(card.getByRole("alert")).toContainText("تعذر الاتصال");
     await page.evaluate(() => localStorage.removeItem("moataz:puter:e2e-auth-fail"));
     await card.getByRole("button", { name: "الاتصال بحساب Puter" }).click();

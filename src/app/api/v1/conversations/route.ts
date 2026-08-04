@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
-import { agents, auditLogs, attachments, conversationFolders, conversations, messages } from "@/db/schema";
+import { agents, auditLogs, attachments, conversationFolders, conversationMembers, conversations, messages } from "@/db/schema";
 import { authenticateApiKey, requireApiScope } from "@/lib/auth/api-key";
 import { ApiError, apiFailure, apiSuccess, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { uuidSchema } from "@/lib/http/contracts";
@@ -97,12 +97,25 @@ export async function POST(request: Request) {
       eq(agents.status, "published"),
     )).limit(1);
     if (!agent) throw new ApiError(422, "AGENT_UNAVAILABLE", "الوكيل غير منشور أو غير موجود.");
-    const [created] = await db().insert(conversations).values({
-      organizationId: principal.organizationId,
-      agentId: agent.id,
-      title: body.title ?? `محادثة مع ${agent.name}`,
-      createdByUserId: principal.userId,
-    }).returning();
+    const created = await db().transaction(async (tx) => {
+      const [conversation] = await tx.insert(conversations).values({
+        organizationId: principal.organizationId,
+        agentId: agent.id,
+        title: body.title ?? `محادثة مع ${agent.name}`,
+        createdByUserId: principal.userId,
+      }).returning();
+      if (!conversation) throw new Error("CONVERSATION_CREATE_FAILED");
+      if (principal.userId) {
+        await tx.insert(conversationMembers).values({
+          organizationId: principal.organizationId,
+          conversationId: conversation.id,
+          userId: principal.userId,
+          role: "manager",
+          addedByUserId: principal.userId,
+        });
+      }
+      return conversation;
+    });
     return apiSuccess({ conversation: created }, requestId, 201);
   } catch (error) {
     return handleApiError(error, requestId, "/api/v1/conversations");

@@ -194,6 +194,11 @@ export const chatStreamSchema = z.object({
   mcpPrompt: mcpPromptSelectionSchema.optional(),
 }).strict();
 
+export const conversationDraftSchema = z.object({
+  conversationId: uuidSchema,
+  content: z.string().max(30_000),
+}).strict();
+
 export const runCancelSchema = z.object({ runId: uuidSchema }).strict();
 
 export const platformBootstrapSchema = z.object({

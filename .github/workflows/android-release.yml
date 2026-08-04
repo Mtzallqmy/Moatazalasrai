@@ -104,6 +104,8 @@ jobs:
             --connect-timeout 10 --max-time 30 \
             "${{ steps.release.outputs.api_base_url }}/api/health" >/dev/null
 
+      - name: Ensure Android Gradle wrapper
+        run: ./tool/ensure_android_wrapper.sh
       - name: Install dependencies
         run: flutter pub get
 

@@ -6,6 +6,7 @@ import { buildMcpChatContext } from "@/ai/mcp/context";
 import { retrieveKnowledge } from "@/ai/rag/retriever";
 import { streamAgentRun } from "@/lib/agents/runtime";
 import { requireSession } from "@/lib/auth/authorization";
+import { conversationAccessFilter } from "@/lib/chat/access";
 import { ApiError, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { chatStreamSchema } from "@/lib/http/contracts";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
@@ -36,7 +37,7 @@ export async function POST(request: Request) {
       .where(and(
         eq(conversations.id, body.conversationId),
         eq(conversations.organizationId, session.organizationId),
-        session.role === "member" ? eq(conversations.createdByUserId, session.userId) : undefined,
+        conversationAccessFilter({ role: session.role, userId: session.userId, access: "write" }),
         isNull(conversations.archivedAt),
         isNull(conversations.deletedAt),
         eq(agents.status, "published"),
@@ -78,6 +79,7 @@ export async function POST(request: Request) {
       const [created] = await tx.insert(messages).values({
         conversationId: conversation.id,
         role: "user",
+        authorUserId: session.userId,
         content: body.message,
         contentParts: [{ type: "text", text: body.message }],
         status: "completed",
@@ -116,7 +118,7 @@ export async function POST(request: Request) {
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         controller.enqueue(encoder.encode(sse("message", {
-          userMessage: { ...userMessage, attachments: attachmentData.rows.map((file) => ({
+          userMessage: { ...userMessage, authorName: session.name, authorEmail: session.email, attachments: attachmentData.rows.map((file) => ({
             id: file.id, filename: file.filename, mimeType: file.mimeType, sizeBytes: file.sizeBytes, processingStatus: file.processingStatus,
           })) },
           requestId,
@@ -127,6 +129,7 @@ export async function POST(request: Request) {
           for await (const event of streamAgentRun({
             organizationId: session.organizationId,
             userId: session.userId,
+            conversationAuthorized: true,
             agentId: conversation.agentId,
             conversationId: conversation.id,
             message: `${body.message}${attachmentData.text}${mcpContext.text}${memoryText}${knowledge.text ? `\n\n[سياق معرفة موثق]\n${knowledge.text}` : ""}`,

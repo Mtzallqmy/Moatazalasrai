@@ -114,6 +114,10 @@ npm run db:studio
 
 جداول التوسعة: `agent_memories`, `knowledge_bases`, `knowledge_documents`, `knowledge_chunks`, `background_jobs`, `tool_approvals`.
 
+## WhatsApp Business Platform
+
+يمكن لكل مستخدم ربط حسابه برقم WhatsApp عبر رمز HMAC قصير العمر ورسالة `CONNECT` يرسلها بنفسه. يستخدم التنفيذ WhatsApp Cloud API الرسمي، ويتحقق من توقيع Meta، ويمنع replay وربط الرقم بأكثر من حساب. راجع [دليل WhatsApp Business](docs/WHATSAPP_BUSINESS.md).
+
 ## Telegram وGitHub
 
 من لوحة التحكم افتح **التكاملات والأدوات**. أدخل Bot Token أو GitHub fine-grained token؛ يتحقق الخادم منه قبل تشفيره ولا يعيده إلى الواجهة. يتطلب Telegram أن يكون `APP_URL` مضبوطًا على رابط HTTPS العام في Railway، ثم يُفعّل Webhook تلقائيًا.
@@ -173,6 +177,7 @@ npm run test:e2e
 - [المصادقة والمؤسسات](docs/AUTHENTICATION.md)
 - [واجهات API](docs/API.md)
 - [خريطة الواجهة إلى الباكند](docs/UI_BACKEND_MAP.md)
+- [تقرير إعادة بناء واجهة الإنتاج](docs/PRODUCTION_UI_REBUILD.md)
 - [التدقيق والقيود](docs/CURRENT_STATE_AUDIT.md)
 - [تقرير التسليم والتحقق](docs/DELIVERY_REPORT.md)
 - [سجل التدقيق الشامل](docs/FULL_PLATFORM_AUDIT.md)
@@ -182,6 +187,7 @@ npm run test:e2e
 - [نموذج التهديد](docs/THREAT_MODEL.md)
 - [Cloudflare AI Gateway](docs/cloudflare-ai-gateway.md)
 - [مزوّد Puter الاختياري](docs/PUTER_PROVIDER.md)
+- [تكامل WhatsApp Business Platform](docs/WHATSAPP_BUSINESS.md)
 
 ## قيود حقيقية
 
