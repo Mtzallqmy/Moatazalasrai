@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowUp, BookOpen, ChevronLeft, FileCode2, Folder, Github, Loader2, Lock, RefreshCw, Search } from "lucide-react";
+import { ArrowUp, BookOpen, ChevronLeft, FileCode2, Folder, GitBranch, Loader2, Lock, RefreshCw, Search } from "lucide-react";
 import { Alert, Button, EmptyState, IconButton, Input, Skeleton, StatusBadge, buttonClass } from "@/components/ui";
 import { apiErrorMessage, apiRequest, ApiClientError } from "@/lib/http/client";
 import { humanFileSize } from "@/lib/files/validation";
@@ -106,7 +106,7 @@ export function RepositoryBrowser() {
   }, [query, repositories]);
 
   if (notConfigured) {
-    return <EmptyState icon={<Github size={24} />} title="GitHub غير مهيأ" description="أضف تكامل GitHub صالحًا واختبر الاتصال. لن تُعرض المستودعات قبل نجاح التحقق الحقيقي." action={<Link className={buttonClass()} href="/dashboard/integrations">فتح التكاملات</Link>} />;
+    return <EmptyState icon={<GitBranch size={24} />} title="GitHub غير مهيأ" description="أضف تكامل GitHub صالحًا واختبر الاتصال. لن تُعرض المستودعات قبل نجاح التحقق الحقيقي." action={<Link className={buttonClass()} href="/dashboard/integrations">فتح التكاملات</Link>} />;
   }
 
   return (
@@ -117,10 +117,10 @@ export function RepositoryBrowser() {
           <label className="file-search"><Search size={16} /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="بحث بالمستودع أو اللغة" aria-label="بحث المستودعات" /></label>
           {loading ? <div className="grid gap-2"><Skeleton className="h-16" /><Skeleton className="h-16" /><Skeleton className="h-16" /></div> : visibleRepositories.length ? <div className="repository-list">
             {visibleRepositories.map((repo) => <button type="button" key={repo.id} className={selected?.id === repo.id ? "repository-active" : undefined} onClick={() => setSelected(repo)}>
-              <span className="repository-list-title">{repo.private ? <Lock size={13} /> : <Github size={14} />}<bdi dir="ltr">{repo.fullName}</bdi></span>
+              <span className="repository-list-title">{repo.private ? <Lock size={13} /> : <GitBranch size={14} />}<bdi dir="ltr">{repo.fullName}</bdi></span>
               <small>{repo.description || repo.language || "دون وصف"}</small>
             </button>)}
-          </div> : <EmptyState icon={<Github size={20} />} title="لا توجد مستودعات" description="لم يُرجع GitHub مستودعات يمكن للحساب المتصل قراءتها." />}
+          </div> : <EmptyState icon={<GitBranch size={20} />} title="لا توجد مستودعات" description="لم يُرجع GitHub مستودعات يمكن للحساب المتصل قراءتها." />}
         </div>
       </aside>
 
@@ -145,7 +145,7 @@ export function RepositoryBrowser() {
               {entry.type === "dir" ? <Folder size={19} /> : <FileCode2 size={19} />}
               <span><bdi dir="ltr">{entry.name}</bdi><small>{entry.type === "dir" ? "مجلد" : entry.size == null ? "ملف" : humanFileSize(entry.size)}</small></span>
             </button>)}
-          </div> : selected ? <EmptyState icon={<Folder size={22} />} title="المجلد فارغ" description="لا توجد عناصر قابلة للعرض في هذا المسار." /> : <EmptyState icon={<Github size={22} />} title="اختر مستودعًا" description="ستظهر شجرة الملفات الحقيقية هنا بعد اختيار مستودع." />}
+          </div> : selected ? <EmptyState icon={<Folder size={22} />} title="المجلد فارغ" description="لا توجد عناصر قابلة للعرض في هذا المسار." /> : <EmptyState icon={<GitBranch size={22} />} title="اختر مستودعًا" description="ستظهر شجرة الملفات الحقيقية هنا بعد اختيار مستودع." />}
           <Alert tone="info" title="نطاق هذه الصفحة">التصفح والمعاينة يعملان مباشرة عبر التكامل المشفر. الفهرسة، checkpoints، citations على مستوى السطر، والمزامنة الخلفية ليست ممثلة كجاهزة لأن المشروع لا يملك لها عقود تخزين أو jobs مكتملة بعد.</Alert>
         </div>
       </section>
