@@ -1,0 +1,48 @@
+# Temporary one-shot workflow: keeps the Drizzle schema aligned with refresh-token reuse detection.
+name: Phase 0 Mobile Refresh Schema
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.head_ref == 'feat/phase0-platform-foundation'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: feat/phase0-platform-foundation
+          fetch-depth: 0
+
+      - name: Add previous refresh-token hash to Drizzle schema
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = 'src/db/schema.ts';
+          let source = fs.readFileSync(file, 'utf8');
+          const columnAnchor = '  refreshTokenHash: text("refresh_token_hash").notNull().unique(),\n';
+          const indexAnchor = '  index("mobile_sessions_refresh_expiry_idx").on(table.refreshExpiresAt),\n';
+          if (!source.includes('previousRefreshTokenHash: text("previous_refresh_token_hash")')) {
+            if (!source.includes(columnAnchor)) throw new Error('mobile session column anchor not found');
+            source = source.replace(columnAnchor, `${columnAnchor}  previousRefreshTokenHash: text("previous_refresh_token_hash"),\n`);
+          }
+          if (!source.includes('mobile_sessions_previous_refresh_hash_idx')) {
+            if (!source.includes(indexAnchor)) throw new Error('mobile session index anchor not found');
+            source = source.replace(indexAnchor, `${indexAnchor}  uniqueIndex("mobile_sessions_previous_refresh_hash_idx").on(table.previousRefreshTokenHash),\n`);
+          }
+          fs.writeFileSync(file, source);
+          NODE
+
+      - name: Remove temporary workflow and commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/phase0-mobile-refresh-schema.yml
+          git add src/db/schema.ts
+          git commit -m "fix(auth): model refresh token reuse history"
+          git push origin HEAD:feat/phase0-platform-foundation
