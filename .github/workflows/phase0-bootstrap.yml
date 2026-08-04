@@ -1,0 +1,63 @@
+# Temporary one-shot workflow: refreshes the lockfile and validates the Phase 0 branch.
+name: Phase 0 Bootstrap
+
+on:
+  push:
+    branches: [feat/phase0-platform-foundation]
+    paths:
+      - .github/workflows/phase0-bootstrap.yml
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://user:password@example.invalid/database?sslmode=require
+      CREDENTIAL_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      CREDENTIAL_ENCRYPTION_KEY_ID: bootstrap
+      BOOTSTRAP_ADMIN_TOKEN: phase0-bootstrap-token
+      AI_WORKER_ENABLED: "true"
+      AI_OTEL_ENABLED: "false"
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: feat/phase0-platform-foundation
+          fetch-depth: 0
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Refresh npm lockfile
+        run: npm install --package-lock-only --include=optional --ignore-scripts --no-audit --no-fund
+
+      - name: Remove bootstrap workflow and push lockfile
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/phase0-bootstrap.yml
+          git add package-lock.json
+          git commit -m "chore(deps): refresh lockfile after PostgreSQL driver consolidation"
+          git push origin HEAD:feat/phase0-platform-foundation
+
+      - name: Reject postgres-js imports
+        run: |
+          if git grep -nE 'from ["'"']postgres["'"']|require\(["'"']postgres["'"']\)' -- '*.ts' '*.tsx' '*.js' '*.mjs' '*.cjs'; then
+            echo "postgres-js imports remain after driver consolidation" >&2
+            exit 1
+          fi
+
+      - name: Install and validate
+        run: |
+          node scripts/verify-lockfile.mjs
+          npm ci --no-audit --no-fund
+          npm run lint
+          npm run typecheck
+          npm test
+          npm run build
