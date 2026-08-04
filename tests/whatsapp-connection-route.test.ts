@@ -1,26 +1,26 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  currentSession: vi.fn(),
+  requireSession: vi.fn(),
   disconnect: vi.fn(),
   sendText: vi.fn(async () => ({ messageId: "wamid.confirm" })),
 }));
 
-vi.mock("@/lib/auth/session", () => ({ currentSession: mocks.currentSession }));
+vi.mock("@/lib/auth/authorization", () => ({ requireSession: mocks.requireSession }));
 vi.mock("@/lib/integrations/whatsapp/config", () => ({ requireWhatsAppConfig: vi.fn(() => ({})) }));
 vi.mock("@/lib/integrations/whatsapp/linking", () => ({ disconnectWhatsAppForUser: mocks.disconnect }));
 vi.mock("@/lib/integrations/whatsapp/client", () => ({ sendTextMessage: mocks.sendText }));
 vi.mock("@/lib/security/rate-limit", () => ({ enforceRateLimit: vi.fn(async () => undefined) }));
 
 afterEach(() => {
-  mocks.currentSession.mockReset();
+  mocks.requireSession.mockReset();
   mocks.disconnect.mockReset();
   mocks.sendText.mockClear();
 });
 
 describe("WhatsApp disconnect endpoint", () => {
   it("disconnects the session user, sends best-effort confirmation, and never exposes wa_id", async () => {
-    mocks.currentSession.mockResolvedValue({
+    mocks.requireSession.mockResolvedValue({
       sessionId: "session",
       userId: "00000000-0000-4000-8000-000000000001",
       organizationId: "00000000-0000-4000-8000-000000000002",
