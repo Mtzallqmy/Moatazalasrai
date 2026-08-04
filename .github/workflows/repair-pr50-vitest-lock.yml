@@ -1,0 +1,65 @@
+name: Repair PR 50 Vitest Lockfile
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-pr50-vitest-lock
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: >-
+      github.event.issue.pull_request &&
+      github.event.issue.number == 50 &&
+      github.event.comment.body == '/repair-vitest-lock' &&
+      (github.event.comment.author_association == 'OWNER' ||
+       github.event.comment.author_association == 'MEMBER' ||
+       github.event.comment.author_association == 'COLLABORATOR')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Dependabot branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: dependabot/npm_and_yarn/vitest-4.1.10
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.18.0
+          cache: npm
+
+      - name: Merge current main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git merge --no-edit origin/main
+
+      - name: Regenerate lockfile
+        run: npm install --package-lock-only --include=optional --ignore-scripts --no-audit --no-fund
+
+      - name: Verify clean install
+        run: |
+          node scripts/verify-lockfile.mjs
+          npm ci --include=optional --no-audit --no-fund
+
+      - name: Verify Vitest upgrade
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Commit and push repair
+        run: |
+          git add package.json package-lock.json
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(deps): refresh Vitest 4 lockfile"
+          fi
+          git push origin HEAD:dependabot/npm_and_yarn/vitest-4.1.10
