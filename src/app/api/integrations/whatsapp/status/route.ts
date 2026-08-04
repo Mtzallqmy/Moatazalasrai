@@ -11,11 +11,10 @@ export async function GET(request: Request) {
   const requestId = getRequestId(request);
   try {
     const session = await requireSession();
-    const runtimeState = await hydrateRuntimeForRequest();
+    await hydrateRuntimeForRequest();
     if (!isWhatsAppIntegrationEnabled()) {
       return apiSuccess({
         enabled: false,
-        configured: runtimeState?.whatsapp.configured ?? false,
         connected: false,
         connectedAt: null,
         phoneNumberMasked: null,
@@ -24,7 +23,6 @@ export async function GET(request: Request) {
     const status = await whatsappConnectionStatus(session.userId);
     return apiSuccess({
       enabled: true,
-      configured: true,
       connected: status.connected,
       connectedAt: status.connectedAt?.toISOString() ?? null,
       lastInteractionAt: status.lastInteractionAt?.toISOString() ?? null,
