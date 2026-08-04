@@ -63,7 +63,7 @@ afterEach(() => {
   for (const key of managed) {
     const value = original.get(key);
     if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
+    else Reflect.set(process.env, key, value);
   }
   original.clear();
   resetEnvForTests();
