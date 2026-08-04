@@ -1,11 +1,11 @@
-import { boolean, index, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { bigint, boolean, index, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { mobileSessions, sessions, users } from "@/db/schema";
 
 export const userTotpFactors = pgTable("user_totp_factors", {
   userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
   encryptedSecret: text("encrypted_secret").notNull(),
   verifiedAt: timestamp("verified_at", { withTimezone: true }),
-  lastUsedCounter: text("last_used_counter").$type<string | null>(),
+  lastUsedCounter: bigint("last_used_counter", { mode: "number" }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
