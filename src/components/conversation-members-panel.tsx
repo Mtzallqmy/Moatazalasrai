@@ -68,7 +68,7 @@ export function ConversationMembersPanel({ conversationId, open, onClose }: {
 
   useEffect(() => {
     if (!open) return;
-    void load();
+    const loadTimer = window.setTimeout(() => void load(), 0);
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         onClose();
@@ -90,7 +90,10 @@ export function ConversationMembersPanel({ conversationId, open, onClose }: {
       }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.clearTimeout(loadTimer);
+      window.removeEventListener("keydown", onKey);
+    };
   }, [load, onClose, open]);
 
   const candidates = useMemo(() => {
@@ -98,11 +101,9 @@ export function ConversationMembersPanel({ conversationId, open, onClose }: {
     return (data?.availableMembers ?? []).filter((member) => !existing.has(member.userId));
   }, [data]);
 
-  useEffect(() => {
-    if (!candidates.some((member) => member.userId === selectedUserId)) {
-      setSelectedUserId(candidates[0]?.userId ?? "");
-    }
-  }, [candidates, selectedUserId]);
+  const effectiveSelectedUserId = candidates.some((member) => member.userId === selectedUserId)
+    ? selectedUserId
+    : candidates[0]?.userId ?? "";
 
   async function saveMember(userId: string, role: MemberRole) {
     setSaving(true);
@@ -158,9 +159,9 @@ export function ConversationMembersPanel({ conversationId, open, onClose }: {
         {data?.canManage ? (
           <form className="mt-5 grid gap-3 rounded-2xl border border-[var(--border)] bg-[var(--surface-soft)] p-4 sm:grid-cols-[minmax(0,1fr)_150px_auto]" onSubmit={(event) => {
             event.preventDefault();
-            if (selectedUserId) void saveMember(selectedUserId, selectedRole);
+            if (effectiveSelectedUserId) void saveMember(effectiveSelectedUserId, selectedRole);
           }}>
-            <Select aria-label="عضو مساحة العمل" value={selectedUserId} onChange={(event) => setSelectedUserId(event.target.value)} disabled={saving || candidates.length === 0}>
+            <Select aria-label="عضو مساحة العمل" value={effectiveSelectedUserId} onChange={(event) => setSelectedUserId(event.target.value)} disabled={saving || candidates.length === 0}>
               {candidates.length === 0 ? <option value="">لا يوجد عضو متاح للإضافة</option> : candidates.map((member) => <option key={member.userId} value={member.userId}>{member.name || member.email} — {member.organizationRole}</option>)}
             </Select>
             <Select aria-label="صلاحية المحادثة" value={selectedRole} onChange={(event) => setSelectedRole(event.target.value as MemberRole)} disabled={saving}>
@@ -168,7 +169,7 @@ export function ConversationMembersPanel({ conversationId, open, onClose }: {
               <option value="writer">كاتب</option>
               <option value="manager">مدير</option>
             </Select>
-            <Button type="submit" disabled={saving || !selectedUserId}><UserPlus size={16} /> إضافة</Button>
+            <Button type="submit" disabled={saving || !effectiveSelectedUserId}><UserPlus size={16} /> إضافة</Button>
           </form>
         ) : null}
 
