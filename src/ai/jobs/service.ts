@@ -1,5 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
+import { databaseRows } from "@/db/result";
 import { attachments, backgroundJobs, knowledgeChunks, knowledgeDocuments } from "@/db/schema";
 import { chunkText } from "@/ai/rag/chunk";
 import { retryDelayMs } from "./backoff";
@@ -13,7 +14,7 @@ export async function enqueueJob(input: { organizationId: string; type: JobType;
 }
 
 export async function claimJobs(workerId: string, batchSize: number, lockTimeoutMs: number) {
-  const rows = await db().execute(sql`
+  const result = await db().execute(sql`
     WITH candidates AS (
       SELECT id FROM background_jobs
       WHERE status = 'queued' AND available_at <= now()
@@ -27,7 +28,7 @@ export async function claimJobs(workerId: string, batchSize: number, lockTimeout
     FROM candidates WHERE jobs.id = candidates.id
     RETURNING jobs.*
   `);
-  return [...rows] as unknown as Array<{ id: string; organization_id: string; type: JobType; payload: Record<string, unknown>; attempts: number; max_attempts: number }>;
+  return databaseRows(result) as unknown as Array<{ id: string; organization_id: string; type: JobType; payload: Record<string, unknown>; attempts: number; max_attempts: number }>;
 }
 
 async function processDocument(job: { organization_id: string; payload: Record<string, unknown> }) {
