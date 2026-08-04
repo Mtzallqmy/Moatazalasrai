@@ -100,9 +100,9 @@ jobs:
           docker compose exec -T worker node scripts/healthcheck-worker.mjs
 
       - name: Docker Compose diagnostics
-        if: failure()
+        if: failure() && hashFiles('.env') != ''
         run: docker compose logs --no-color
 
       - name: Docker Compose cleanup
-        if: always()
+        if: always() && hashFiles('.env') != ''
         run: docker compose down --volumes --remove-orphans
