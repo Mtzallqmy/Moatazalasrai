@@ -37,27 +37,39 @@ describe("Railway deployment configuration", () => {
     expect(config.deploy?.healthcheckTimeout).toBeGreaterThanOrEqual(120);
   });
 
-  it("uses a Railway-compatible PostgreSQL TCP driver", async () => {
+  it("uses one Railway-compatible node-postgres driver and shared pools", async () => {
     const packageJson = JSON.parse(await readFile("package.json", "utf8")) as {
       dependencies?: Record<string, string>;
     };
-    const databaseSource = await readFile("src/db/index.ts", "utf8");
-    const migrationSource = await readFile("scripts/migrate.mjs", "utf8");
+    const [databaseSource, poolSource, workerSource, queueSource, migrationSource] = await Promise.all([
+      readFile("src/db/index.ts", "utf8"),
+      readFile("src/db/pool.ts", "utf8"),
+      readFile("src/worker/index.ts", "utf8"),
+      readFile("src/worker/queue.ts", "utf8"),
+      readFile("scripts/migrate.mjs", "utf8"),
+    ]);
 
-    expect(packageJson.dependencies?.postgres).toBeTruthy();
+    expect(packageJson.dependencies?.pg).toBeTruthy();
+    expect(packageJson.dependencies?.postgres).toBeUndefined();
     expect(packageJson.dependencies?.["graphile-worker"]).toBeTruthy();
-    expect(databaseSource).toContain('from "drizzle-orm/postgres-js"');
-    expect(migrationSource).toContain('from "postgres"');
+    expect(databaseSource).toContain('from "drizzle-orm/node-postgres"');
+    expect(poolSource).toContain('from "pg"');
+    expect(workerSource).toContain("pgPool: getPostgresPool()");
+    expect(queueSource).toContain("pgPool: getPostgresPool()");
+    expect(migrationSource).toContain('import pg from "pg"');
   });
 
-  it("creates and records the required schema before every Railway release", async () => {
+  it("creates and records the required schema in an explicit transaction", async () => {
     const migrationSource = await readFile("scripts/migrate.mjs", "utf8");
     const workerMigrationSource = await readFile("scripts/migrate-worker.mjs", "utf8");
 
     expect(migrationSource).toContain('CREATE TABLE IF NOT EXISTS "_platform_migrations"');
     expect(migrationSource).toContain('INSERT INTO "_platform_migrations"');
-    expect(migrationSource).toContain("sql.begin");
+    expect(migrationSource).toContain('client.query("BEGIN")');
+    expect(migrationSource).toContain('client.query("COMMIT")');
+    expect(migrationSource).toContain('client.query("ROLLBACK")');
     expect(workerMigrationSource).toContain("runMigrations");
+    expect(workerMigrationSource).toContain("pgPool: pool");
   });
 
   it("pins the same Node runtime across local, package, CI, and Docker", async () => {
@@ -70,7 +82,7 @@ describe("Railway deployment configuration", () => {
     expect(packageJson.engines?.node).toBe("22.18.0");
     expect(nvmrc.trim()).toBe("22.18.0");
     expect(docker).toContain("ARG NODE_VERSION=22.18.0");
-    expect(ci).toContain("node-version: 22.18.0");
+    expect(ci).toContain("node-version-file: .nvmrc");
   });
 
   it("pins actions and refuses an unsigned production Android release", async () => {
