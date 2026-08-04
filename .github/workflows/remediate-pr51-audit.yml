@@ -3,7 +3,7 @@ name: Remediate PR 51 production audit
 on:
   pull_request:
     branches: [main]
-    types: [ready_for_review]
+    types: [synchronize]
 
 permissions:
   contents: write
@@ -26,7 +26,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm audit fix --package-lock-only --omit=dev
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
           node scripts/verify-lockfile.mjs
           npm ci --no-audit --no-fund
           npm audit --omit=dev --audit-level=high
