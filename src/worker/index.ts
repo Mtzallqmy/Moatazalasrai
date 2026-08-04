@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { run, type Runner } from "graphile-worker";
 import { db } from "@/db";
+import { closePostgresPool, getPostgresPool } from "@/db/pool";
 import { workerHeartbeats } from "@/db/agent-runtime-schema";
-import { env } from "@/lib/config/env";
 import { hydrateRuntimeControlPlane } from "@/lib/platform/runtime-control";
 import { startNodeTelemetry } from "@/ai/observability/node-otel";
 import { safeTelemetry } from "@/ai/observability/telemetry";
@@ -56,6 +56,7 @@ async function shutdown(signal: string) {
   await heartbeat(new Date()).catch(() => undefined);
   await runner?.stop();
   await telemetryShutdown?.().catch(() => undefined);
+  await closePostgresPool().catch(() => undefined);
   console.info(JSON.stringify(safeTelemetry({ event: "worker.stopped", workerId, signal })));
 }
 
@@ -89,12 +90,13 @@ async function main() {
     tasks: Object.keys(taskList),
   })));
   runner = await run({
-    connectionString: env().databaseUrl,
+    pgPool: getPostgresPool(),
     concurrency: workerConcurrency(),
     taskList,
     noHandleSignals: true,
   });
   await runner.promise;
+  if (!stopping) await shutdown("runner-complete");
 }
 
 void main().catch(async (error) => {
