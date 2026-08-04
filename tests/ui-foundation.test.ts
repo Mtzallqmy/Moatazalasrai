@@ -32,7 +32,7 @@ describe("unified API client", () => {
   });
 
   it("serializes plain objects but preserves FormData", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ success: true, data: null }), { status: 200 }));
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ success: true, data: null }), { status: 200 }));
     await apiRequest("https://app.example/api/test", { method: "POST", body: { name: "agent" }, redirectOnUnauthorized: false });
     expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ name: "agent" }));
     expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("content-type")).toBe("application/json");
@@ -67,7 +67,7 @@ describe("file validation", () => {
 
 describe("safe message formatting", () => {
   it("parses code blocks and lists without rendering HTML", () => {
-    expect(parseMessageBlocks("نتيجة\n\n- واحد\n- اثنان\n\n```ts\nconst ok = true;\n```")).toEqual([
+    expect(parseMessageBlocks("نتيجة\n\n- واحد\n- اثنان\n\n```ts\nconst ok = true;\n```" )).toEqual([
       { type: "paragraph", content: "نتيجة" },
       { type: "list", ordered: false, items: ["واحد", "اثنان"] },
       { type: "code", language: "ts", content: "const ok = true;" },
@@ -75,12 +75,12 @@ describe("safe message formatting", () => {
   });
 
   it("accepts only explicit http links in inline markdown", () => {
-    expect(parseInlineParts("[موقع](https://example.com) و `code`")).toEqual([
+    expect(parseInlineParts("[موقع](https://example.com) و `code`" )).toEqual([
       { type: "link", content: "موقع", href: "https://example.com" },
       { type: "text", content: " و " },
       { type: "code", content: "code" },
     ]);
-    expect(parseInlineParts("[خطر](javascript:alert(1))")).toEqual([{ type: "text", content: "[خطر](javascript:alert(1))" }]);
+    expect(parseInlineParts("[خطر](javascript:alert(1))" )).toEqual([{ type: "text", content: "[خطر](javascript:alert(1))" }]);
   });
 });
 
