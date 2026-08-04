@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "@/lib/http/api";
 
 const mocks = vi.hoisted(() => ({
-  currentSession: vi.fn(),
+  requireSession: vi.fn(),
   createLink: vi.fn(),
 }));
 
-vi.mock("@/lib/auth/session", () => ({ currentSession: mocks.currentSession }));
+vi.mock("@/lib/auth/authorization", () => ({ requireSession: mocks.requireSession }));
 vi.mock("@/lib/integrations/whatsapp/linking", () => ({ createWhatsAppConnectLink: mocks.createLink }));
 vi.mock("@/lib/security/rate-limit", () => ({
   enforceRateLimit: vi.fn(async () => undefined),
@@ -13,13 +14,13 @@ vi.mock("@/lib/security/rate-limit", () => ({
 }));
 
 afterEach(() => {
-  mocks.currentSession.mockReset();
+  mocks.requireSession.mockReset();
   mocks.createLink.mockReset();
 });
 
 describe("WhatsApp connect endpoint", () => {
   it("rejects an unauthenticated user", async () => {
-    mocks.currentSession.mockResolvedValue(null);
+    mocks.requireSession.mockRejectedValue(new ApiError(401, "UNAUTHORIZED", "يجب تسجيل الدخول."));
     const { POST } = await import("@/app/api/integrations/whatsapp/connect/route");
     const response = await POST(new Request("https://app.example/api/integrations/whatsapp/connect", {
       method: "POST",
@@ -30,7 +31,7 @@ describe("WhatsApp connect endpoint", () => {
   });
 
   it("uses the authenticated session identity and returns only URL and expiry", async () => {
-    mocks.currentSession.mockResolvedValue({
+    mocks.requireSession.mockResolvedValue({
       sessionId: "session", userId: "00000000-0000-4000-8000-000000000001",
       organizationId: "00000000-0000-4000-8000-000000000002", role: "member",
     });
