@@ -39,7 +39,7 @@ function compile(strings: TemplateStringsArray, values: unknown[]) {
 
 function createSqlExecutor(
   query: <T extends QueryResultRow>(text: string, values?: unknown[]) => Promise<{ rows: T[] }>,
-  begin: <T>(callback: (client: PoolClient) => Promise<T>) => Promise<T>,
+  begin: <T>(callback: (transaction: Sql) => Promise<T>) => Promise<T>,
   end: () => Promise<void>,
 ): Sql {
   const sql = async <T extends QueryResultRow[] = QueryResultRow[]>(
@@ -63,11 +63,13 @@ function createSqlExecutor(
 }
 
 function transactionSql(client: PoolClient): Sql {
-  return createSqlExecutor(
+  let transaction!: Sql;
+  transaction = createSqlExecutor(
     (text, values) => client.query(text, values),
-    async (callback) => callback(client),
+    async (callback) => callback(transaction),
     async () => undefined,
   );
+  return transaction;
 }
 
 export function createTestSqlClient(connectionString: string, max = 3): Sql {
@@ -83,7 +85,7 @@ export function createTestSqlClient(connectionString: string, max = 3): Sql {
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
-        const value = await callback(client);
+        const value = await callback(transactionSql(client));
         await client.query("COMMIT");
         return value;
       } catch (error) {
