@@ -1,0 +1,103 @@
+# Local development stack: web, worker, and PostgreSQL share one isolated network.
+services:
+  web:
+    build:
+      context: .
+      target: development
+    init: true
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: development
+      PORT: "3000"
+      APP_URL: http://localhost:${WEB_PORT:-3000}
+      PUBLIC_APP_URL: http://localhost:${WEB_PORT:-3000}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-moatazalasrai}
+      TEST_DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-moatazalasrai}
+      NEXT_TELEMETRY_DISABLED: "1"
+    command: ["sh", "-c", "npm run db:migrate:all && npm run dev -- --hostname 0.0.0.0"]
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    volumes:
+      - .:/app
+      - app_node_modules:/app/node_modules
+      - next_cache:/app/.next
+      - attachment_data:/app/.data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3000/api/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - moataz-network
+
+  worker:
+    build:
+      context: .
+      target: development
+    init: true
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-moatazalasrai}
+      TEST_DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-moatazalasrai}
+      AI_WORKER_ENABLED: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+    command: ["npm", "run", "worker"]
+    volumes:
+      - .:/app
+      - app_node_modules:/app/node_modules
+      - attachment_data:/app/.data
+    depends_on:
+      web:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "scripts/healthcheck-worker.mjs"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - moataz-network
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-moatazalasrai}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    networks:
+      - moataz-network
+
+volumes:
+  postgres_data:
+  app_node_modules:
+  next_cache:
+  attachment_data:
+
+networks:
+  moataz-network:
+    driver: bridge
