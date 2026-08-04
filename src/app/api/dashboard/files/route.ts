@@ -103,7 +103,7 @@ export async function PATCH(request: Request) {
   const requestId = getRequestId(request);
   try {
     assertSameOrigin(request);
-    const session = await requireSession();
+    const session = await requireSession("files:manage");
     if (!can(session.role, "files:manage")) throw new ApiError(403, "FORBIDDEN", "لا تملك صلاحية أرشفة الملفات.");
     const body = await parseJson(request, fileActionSchema, 4 * 1024);
     const fileId = body.id;
@@ -136,7 +136,7 @@ export async function DELETE(request: Request) {
   const requestId = getRequestId(request);
   try {
     assertSameOrigin(request);
-    const session = await requireSession();
+    const session = await requireSession("files:upload");
     const body = await parseJson(request, fileDeleteSchema, 4 * 1024);
     const fileId = body.id;
     const [target] = await db().select().from(attachments).where(and(
