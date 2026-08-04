@@ -1,85 +1,108 @@
+# Phase 0 quality gate: every step is intentionally sequential and fail-fast.
 name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    env:
-      NODE_ENV: test
-      DATABASE_URL: postgresql://user:password@example.invalid/database?sslmode=require
-      CREDENTIAL_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
-      BOOTSTRAP_ADMIN_TOKEN: ci-only-bootstrap-token
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: 22.18.0
-          cache: npm
-      - name: Verify package lock consistency
-        run: node scripts/verify-lockfile.mjs
-      - run: npm ci --no-audit --no-fund
-      - name: Audit production dependencies (high or critical)
-        run: npm audit --omit=dev --audit-level=high
-      - run: npm run lint
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run test:e2e
-      - run: npm run build
-
-  postgres-integration:
-    needs: validate
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    name: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:16-alpine
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: moataz_test
+          POSTGRES_DB: moataz_migration_ci
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d moataz_test"
+          --health-cmd "pg_isready -U postgres -d moataz_migration_ci"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
     env:
       NODE_ENV: test
-      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/moataz_test
-      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/moataz_test
+      DATABASE_URL: postgresql://user:password@example.invalid/database?sslmode=require
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/moataz_migration_ci
       CREDENTIAL_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      CREDENTIAL_ENCRYPTION_KEY_ID: ci
       BOOTSTRAP_ADMIN_TOKEN: ci-only-bootstrap-token
       AI_WORKER_ENABLED: "true"
       AI_OTEL_ENABLED: "false"
+      NEXT_TELEMETRY_DISABLED: "1"
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Setup Node.js from .nvmrc
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: 22.18.0
+          node-version-file: .nvmrc
           cache: npm
-      - run: npm ci --no-audit --no-fund
-      - name: Apply platform and Graphile migrations
+
+      - name: Install dependencies
+        run: |
+          node scripts/verify-lockfile.mjs
+          npm ci --no-audit --no-fund
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: End-to-end tests
+        run: npm run test:e2e
+
+      - name: Build
+        run: npm run build
+
+      - name: Migration dry-run on clean PostgreSQL
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
         run: npm run db:migrate:all
-      - name: Run PostgreSQL integration tests
-        run: npm run test:integration -- --reporter=verbose 2>&1 | tee postgres-integration.log
-      - name: Upload PostgreSQL integration diagnostics
+
+      - name: Docker Compose smoke test
+        env:
+          POSTGRES_PORT: "55432"
+          WEB_PORT: "3001"
+        run: |
+          cp .env.example .env
+          cat >> .env <<'EOF'
+          CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          CREDENTIAL_ENCRYPTION_KEY_ID=compose-ci
+          BOOTSTRAP_ADMIN_TOKEN=compose-ci-bootstrap-token
+          AI_WORKER_ENABLED=true
+          AI_OTEL_ENABLED=false
+          EOF
+          docker compose up -d --build
+          timeout 240 sh -c 'until curl --fail --silent http://127.0.0.1:3001/api/ready >/dev/null; do sleep 5; done'
+          docker compose ps
+          docker compose exec -T worker node scripts/healthcheck-worker.mjs
+
+      - name: Docker Compose diagnostics
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: postgres-integration-${{ github.run_id }}
-          path: postgres-integration.log
-          if-no-files-found: ignore
-          retention-days: 3
+        run: docker compose logs --no-color
+
+      - name: Docker Compose cleanup
+        if: always()
+        run: docker compose down --volumes --remove-orphans
