@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { auditLogs } from "@/db/schema";
 import { requireSession } from "@/lib/auth/authorization";
 import {
+  ApiError,
   apiSuccess,
   assertSameOrigin,
   getRequestId,
@@ -15,6 +16,10 @@ import {
   saveRuntimeControl,
   testCurrentRuntimeFeature,
 } from "@/lib/platform/runtime-control";
+import {
+  initializeWhatsAppFromEnvironment,
+  inspectWhatsAppEnvironment,
+} from "@/lib/platform/whatsapp-environment";
 import { enforceRateLimit, requestClientKey } from "@/lib/security/rate-limit";
 
 export const runtime = "nodejs";
@@ -28,6 +33,7 @@ export async function GET(request: Request) {
   const requestId = getRequestId(request);
   try {
     await requireSession("organization:manage");
+    await initializeWhatsAppFromEnvironment();
     const snapshot = await hydrateRuntimeControlPlane(true);
     return apiSuccess(snapshot, requestId);
   } catch (error) {
@@ -47,6 +53,13 @@ export async function PUT(request: Request) {
       windowMs: 15 * 60_000,
     });
     const body = await parseJson(request, runtimeControlUpdateSchema, 48 * 1024);
+    if (body.feature === "whatsapp" && inspectWhatsAppEnvironment().authoritative) {
+      throw new ApiError(
+        409,
+        "WHATSAPP_ENVIRONMENT_MANAGED",
+        "إعدادات WhatsApp تُدار تلقائيًا من Environment Variables في Railway ولا يمكن استبدالها من الواجهة.",
+      );
+    }
     const snapshot = await saveRuntimeControl(body, session.userId);
     await db().insert(auditLogs).values({
       organizationId: session.organizationId,
@@ -79,6 +92,16 @@ export async function POST(request: Request) {
       windowMs: 15 * 60_000,
     });
     const body = await parseJson(request, testSchema, 4 * 1024);
+    if (body.feature === "whatsapp" && inspectWhatsAppEnvironment().authoritative) {
+      const report = await initializeWhatsAppFromEnvironment({ force: true });
+      const result = report.health ?? {
+        status: "invalid_configuration",
+        checkedAt: report.checkedAt,
+        latencyMs: 0,
+        details: "متغيرات WhatsApp غير مكتملة داخل بيئة التشغيل.",
+      };
+      return apiSuccess(result, requestId, result.status === "healthy" ? 200 : 503);
+    }
     const result = await testCurrentRuntimeFeature(body.feature);
     return apiSuccess(result, requestId, result.status === "healthy" ? 200 : 503);
   } catch (error) {
