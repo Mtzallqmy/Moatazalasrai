@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { and, eq, isNull, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
+import { databaseRows } from "@/db/result";
 import {
   auditLogs,
   users,
@@ -50,7 +51,7 @@ export async function createWhatsAppConnectLink(input: {
     const userLock = await tx.execute(sql`
       SELECT "id" FROM "users" WHERE "id" = ${input.userId} FOR UPDATE
     `);
-    if (userLock.length === 0) {
+    if (databaseRows(userLock).length === 0) {
       throw new ApiError(404, "USER_NOT_FOUND", "تعذر إنشاء رابط WhatsApp لهذا الحساب.");
     }
     await tx.update(whatsappLinkTokens).set({ revokedAt: now }).where(and(
@@ -109,14 +110,14 @@ export async function consumeWhatsAppConnectToken(input: {
       const userLock = await tx.execute(sql`
         SELECT "id" FROM "users" WHERE "id" = ${candidate.userId} FOR UPDATE
       `);
-      if (userLock.length === 0) return { ok: false as const, reason: "invalid" as const };
+      if (databaseRows(userLock).length === 0) return { ok: false as const, reason: "invalid" as const };
 
       const tokenLock = await tx.execute(sql`
         SELECT "id" FROM "whatsapp_link_tokens"
         WHERE "token_hash" = ${tokenHash}
         FOR UPDATE
       `);
-      if (tokenLock.length === 0) return { ok: false as const, reason: "invalid" as const };
+      if (databaseRows(tokenLock).length === 0) return { ok: false as const, reason: "invalid" as const };
 
       const [token] = await tx.select().from(whatsappLinkTokens)
         .where(eq(whatsappLinkTokens.tokenHash, tokenHash)).limit(1);
@@ -129,7 +130,7 @@ export async function consumeWhatsAppConnectToken(input: {
         WHERE "whatsapp_wa_id" = ${waId}
         FOR UPDATE
       `);
-      if (waLock.length > 0) {
+      if (databaseRows(waLock).length > 0) {
         const [owner] = await tx.select({ userId: whatsappConnections.userId })
           .from(whatsappConnections)
           .where(eq(whatsappConnections.whatsappWaId, waId))
@@ -258,7 +259,7 @@ export async function disconnectWhatsAppByWaId(input: { waId: string; messageId:
       WHERE "whatsapp_wa_id" = ${waId}
       FOR UPDATE
     `);
-    if (lock.length === 0) return { disconnected: false };
+    if (databaseRows(lock).length === 0) return { disconnected: false };
     const [connection] = await tx.select().from(whatsappConnections)
       .where(eq(whatsappConnections.whatsappWaId, waId)).limit(1);
     if (!connection || connection.connectionStatus !== "connected") return { disconnected: false };
