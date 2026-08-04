@@ -7,6 +7,7 @@ import { requireWhatsAppConfig } from "@/lib/integrations/whatsapp/config";
 import { processWhatsAppMessage } from "@/lib/integrations/whatsapp/commands";
 import { secureStringEquals, verifyMetaWebhookSignature } from "@/lib/integrations/whatsapp/crypto";
 import { extractWhatsAppMessages, type WhatsAppIncomingMessage } from "@/lib/integrations/whatsapp/webhook";
+import { hydrateRuntimeForRequest } from "@/lib/platform/runtime-hydration";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
 
 export const runtime = "nodejs";
@@ -53,7 +54,10 @@ async function processAcceptedEvent(eventId: string, message: WhatsAppIncomingMe
 
 export async function GET(request: Request) {
   let config: ReturnType<typeof requireWhatsAppConfig>;
-  try { config = requireWhatsAppConfig(); } catch {
+  try {
+    await hydrateRuntimeForRequest();
+    config = requireWhatsAppConfig();
+  } catch {
     return new Response(null, { status: 404, headers: { "cache-control": "no-store" } });
   }
   const url = new URL(request.url);
@@ -72,6 +76,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const requestId = getRequestId(request);
   try {
+    await hydrateRuntimeForRequest();
     const config = requireWhatsAppConfig();
     const contentLength = Number(request.headers.get("content-length") ?? 0);
     if (Number.isFinite(contentLength) && contentLength > MAX_WEBHOOK_BYTES) {

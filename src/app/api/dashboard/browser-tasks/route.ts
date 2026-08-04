@@ -17,6 +17,7 @@ import {
   handleApiError,
   parseJson,
 } from "@/lib/http/api";
+import { hydrateRuntimeControlPlane } from "@/lib/platform/runtime-control";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
 
 export const runtime = "nodejs";
@@ -24,6 +25,7 @@ export const runtime = "nodejs";
 export async function GET(request: Request) {
   const requestId = getRequestId(request);
   try {
+    await hydrateRuntimeControlPlane();
     const session = await requireSession("browser_tasks:read");
     const url = new URL(request.url);
     const id = url.searchParams.get("id");
@@ -51,6 +53,7 @@ export async function POST(request: Request) {
   const requestId = getRequestId(request);
   try {
     assertSameOrigin(request);
+    await hydrateRuntimeControlPlane();
     const session = await requireSession("browser_tasks:run");
     await enforceRateLimit({
       scope: "browser-tasks:create",
@@ -75,6 +78,7 @@ export async function DELETE(request: Request) {
   const requestId = getRequestId(request);
   try {
     assertSameOrigin(request);
+    await hydrateRuntimeControlPlane();
     const session = await requireSession("browser_tasks:run");
     const body = await parseJson(request, browserTaskCancelSchema, 4 * 1024);
     const result = await cancelBrowserTask({

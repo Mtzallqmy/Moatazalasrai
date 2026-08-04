@@ -75,6 +75,7 @@ const requiredTables = [
   "sandbox_events",
   "sandbox_files",
   "sandbox_artifacts",
+  "platform_runtime_settings",
 ] as const;
 
 export async function checkDatabase(): Promise<{
@@ -135,7 +136,8 @@ export async function checkDatabase(): Promise<{
       to_regclass('public.sandbox_executions')::text AS sandbox_executions,
       to_regclass('public.sandbox_events')::text AS sandbox_events,
       to_regclass('public.sandbox_files')::text AS sandbox_files,
-      to_regclass('public.sandbox_artifacts')::text AS sandbox_artifacts
+      to_regclass('public.sandbox_artifacts')::text AS sandbox_artifacts,
+      to_regclass('public.platform_runtime_settings')::text AS platform_runtime_settings
   `;
   const state = rows[0] as Record<string, string | null> | undefined;
   const missingTables = requiredTables.filter((table) => !state?.[table]);

@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { sandboxExecutions } from "@/db/sandbox-schema";
 import { requireSession } from "@/lib/auth/authorization";
 import { apiSuccess, getRequestId, handleApiError } from "@/lib/http/api";
+import { hydrateRuntimeControlPlane } from "@/lib/platform/runtime-control";
 import { sandboxEventsQuerySchema } from "@/lib/sandbox/contracts";
 import { listSandboxEvents } from "@/lib/sandbox/events";
 import { assertSandboxEnabled } from "@/lib/sandbox/service";
@@ -33,6 +34,7 @@ async function assertExecutionAccess(input: {
 export async function GET(request: Request) {
   const requestId = getRequestId(request);
   try {
+    await hydrateRuntimeControlPlane();
     const session = await requireSession("sandbox:read");
     assertSandboxEnabled();
     const url = new URL(request.url);

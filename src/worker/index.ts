@@ -3,6 +3,7 @@ import { run, type Runner } from "graphile-worker";
 import { db } from "@/db";
 import { workerHeartbeats } from "@/db/agent-runtime-schema";
 import { env } from "@/lib/config/env";
+import { hydrateRuntimeControlPlane } from "@/lib/platform/runtime-control";
 import { startNodeTelemetry } from "@/ai/observability/node-otel";
 import { safeTelemetry } from "@/ai/observability/telemetry";
 import { taskList } from "@/worker/task-list";
@@ -17,6 +18,7 @@ const workerId = `moataz-${randomUUID()}`;
 let runner: Runner | undefined;
 let stopping = false;
 let heartbeatTimer: NodeJS.Timeout | undefined;
+let runtimeControlTimer: NodeJS.Timeout | undefined;
 let telemetryShutdown: (() => Promise<void>) | undefined;
 
 async function heartbeat(stoppingAt?: Date) {
@@ -35,10 +37,21 @@ async function heartbeat(stoppingAt?: Date) {
   });
 }
 
+async function refreshRuntimeControl() {
+  await hydrateRuntimeControlPlane(true).catch((error) => {
+    console.error(JSON.stringify(safeTelemetry({
+      event: "worker.runtime_control.refresh_failed",
+      workerId,
+      errorCode: error instanceof Error ? error.name : "UNKNOWN",
+    })));
+  });
+}
+
 async function shutdown(signal: string) {
   if (stopping) return;
   stopping = true;
   if (heartbeatTimer) clearInterval(heartbeatTimer);
+  if (runtimeControlTimer) clearInterval(runtimeControlTimer);
   console.info(JSON.stringify(safeTelemetry({ event: "worker.stopping", workerId, signal })));
   await heartbeat(new Date()).catch(() => undefined);
   await runner?.stop();
@@ -50,6 +63,7 @@ async function main() {
   if (process.env.AI_WORKER_ENABLED === "false") {
     throw new Error("AI_WORKER_ENABLED must not be false for the worker service.");
   }
+  await refreshRuntimeControl();
   telemetryShutdown = await startNodeTelemetry("moataz-worker");
   await heartbeat();
   heartbeatTimer = setInterval(() => {
@@ -62,6 +76,8 @@ async function main() {
     });
   }, 30_000);
   heartbeatTimer.unref();
+  runtimeControlTimer = setInterval(() => { void refreshRuntimeControl(); }, 5_000);
+  runtimeControlTimer.unref();
 
   process.once("SIGTERM", () => { void shutdown("SIGTERM"); });
   process.once("SIGINT", () => { void shutdown("SIGINT"); });

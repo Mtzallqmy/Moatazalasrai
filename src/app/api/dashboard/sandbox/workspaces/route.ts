@@ -16,6 +16,7 @@ import {
   handleApiError,
   parseJson,
 } from "@/lib/http/api";
+import { hydrateRuntimeControlPlane } from "@/lib/platform/runtime-control";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
 
 export const runtime = "nodejs";
@@ -23,6 +24,7 @@ export const runtime = "nodejs";
 export async function GET(request: Request) {
   const requestId = getRequestId(request);
   try {
+    await hydrateRuntimeControlPlane();
     const session = await requireSession("sandbox:read");
     const conversationId = new URL(request.url).searchParams.get("conversationId") ?? undefined;
     const rows = await listSandboxWorkspaces({
@@ -39,6 +41,7 @@ export async function POST(request: Request) {
   const requestId = getRequestId(request);
   try {
     assertSameOrigin(request);
+    await hydrateRuntimeControlPlane();
     const session = await requireSession("sandbox:use");
     await enforceRateLimit({
       scope: "sandbox-workspaces:create",
@@ -62,6 +65,7 @@ export async function PATCH(request: Request) {
   const requestId = getRequestId(request);
   try {
     assertSameOrigin(request);
+    await hydrateRuntimeControlPlane();
     const session = await requireSession("sandbox:manage");
     const body = await parseJson(request, sandboxWorkspaceActionSchema, 4 * 1024);
     const actor = { organizationId: session.organizationId, userId: session.userId, role: session.role };
@@ -78,6 +82,7 @@ export async function DELETE(request: Request) {
   const requestId = getRequestId(request);
   try {
     assertSameOrigin(request);
+    await hydrateRuntimeControlPlane();
     const session = await requireSession("sandbox:manage");
     const body = await parseJson(request, sandboxWorkspaceActionSchema, 4 * 1024);
     const result = await terminateSandboxWorkspace({
