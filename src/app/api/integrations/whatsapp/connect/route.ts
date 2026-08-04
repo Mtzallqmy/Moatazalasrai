@@ -1,6 +1,7 @@
 import { requireSession } from "@/lib/auth/authorization";
 import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError } from "@/lib/http/api";
 import { createWhatsAppConnectLink } from "@/lib/integrations/whatsapp/linking";
+import { hydrateRuntimeControlPlane } from "@/lib/platform/runtime-control";
 import { requestClientKey, enforceRateLimit } from "@/lib/security/rate-limit";
 
 export const runtime = "nodejs";
@@ -9,6 +10,7 @@ export async function POST(request: Request) {
   const requestId = getRequestId(request);
   try {
     assertSameOrigin(request);
+    await hydrateRuntimeControlPlane();
     const session = await requireSession();
     await Promise.all([
       enforceRateLimit({
