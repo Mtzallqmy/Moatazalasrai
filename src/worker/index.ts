@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { workerHeartbeats } from "@/db/agent-runtime-schema";
 import { env } from "@/lib/config/env";
 import { hydrateRuntimeControlPlane } from "@/lib/platform/runtime-control";
+import { initializeWhatsAppFromEnvironment } from "@/lib/platform/whatsapp-environment";
 import { startNodeTelemetry } from "@/ai/observability/node-otel";
 import { safeTelemetry } from "@/ai/observability/telemetry";
 import { taskList } from "@/worker/task-list";
@@ -38,6 +39,13 @@ async function heartbeat(stoppingAt?: Date) {
 }
 
 async function refreshRuntimeControl() {
+  await initializeWhatsAppFromEnvironment().catch((error) => {
+    console.error(JSON.stringify(safeTelemetry({
+      event: "worker.whatsapp_environment.refresh_failed",
+      workerId,
+      errorCode: error instanceof Error ? error.name : "UNKNOWN",
+    })));
+  });
   await hydrateRuntimeControlPlane(true).catch((error) => {
     console.error(JSON.stringify(safeTelemetry({
       event: "worker.runtime_control.refresh_failed",
@@ -63,6 +71,7 @@ async function main() {
   if (process.env.AI_WORKER_ENABLED === "false") {
     throw new Error("AI_WORKER_ENABLED must not be false for the worker service.");
   }
+  await initializeWhatsAppFromEnvironment({ force: true });
   await refreshRuntimeControl();
   telemetryShutdown = await startNodeTelemetry("moataz-worker");
   await heartbeat();
