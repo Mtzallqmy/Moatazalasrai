@@ -18,7 +18,7 @@ describeDatabase("WhatsApp Business Platform persistence", () => {
   const userIds = new Set<string>();
 
   beforeAll(() => {
-    process.env.NODE_ENV = "test";
+    Object.assign(process.env, { NODE_ENV: "test" });
     process.env.DATABASE_URL = databaseUrl!;
     process.env.CREDENTIAL_ENCRYPTION_KEY ??= "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
     process.env.APP_URL = "https://app.example";
