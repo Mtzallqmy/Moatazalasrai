@@ -21,6 +21,7 @@ permissions:
 
 jobs:
   apply:
+    # Runs only for a user-authored synchronization; the generated commit removes this workflow.
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 10
