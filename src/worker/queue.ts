@@ -3,6 +3,7 @@ import { getPostgresPool } from "@/db/pool";
 import type {
   AgentRunResumePayload,
   AgentTeamRunPayload,
+  AttachmentScanPayload,
   BrowserResumePayload,
   BrowserTaskPayload,
   DocumentParsePayload,
@@ -59,6 +60,15 @@ export function enqueueDocumentParse(payload: DocumentParsePayload) {
   return addJob("document-parse", payload, {
     queueName: "rag",
     jobKey: `document-parse:${payload.documentId}`,
+    jobKeyMode: "replace",
+  });
+}
+
+export function enqueueAttachmentScan(payload: AttachmentScanPayload) {
+  return addJob("attachment-scan", payload, {
+    queueName: `attachment-scan:${payload.organizationId}`,
+    maxAttempts: 5,
+    jobKey: `attachment-scan:${payload.attachmentId}`,
     jobKeyMode: "replace",
   });
 }

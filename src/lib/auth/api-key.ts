@@ -1,8 +1,9 @@
 import { and, eq, gt, isNull, lt, or } from "drizzle-orm";
 import { db } from "@/db";
 import { mobileSessions, organizationMembers, platformApiKeys } from "@/db/schema";
+import { apiScopeRequiresMfa, freshMobileSessionMfa, privilegedRole } from "@/lib/auth/mfa";
 import { ApiError } from "@/lib/http/api";
-import { hashApiKey, secureHashEquals } from "@/lib/security/encryption";
+import { hashApiKey } from "@/lib/security/encryption";
 
 export type ApiScope =
   | "agents:read" | "agents:write"
@@ -37,6 +38,7 @@ export type ApiPrincipal = {
   userId: string | null;
   role: string | null;
   scopes: ApiScope[];
+  mfaVerifiedAt: Date | null;
 };
 
 export async function authenticateApiKey(request: Request): Promise<ApiPrincipal | null> {
@@ -65,6 +67,7 @@ export async function authenticateApiKey(request: Request): Promise<ApiPrincipal
       userId: key.createdByUserId,
       role: null,
       scopes: normalizeApiScopes(key.scopes),
+      mfaVerifiedAt: null,
     };
   }
 
@@ -103,6 +106,9 @@ export async function authenticateApiKey(request: Request): Promise<ApiPrincipal
     userId: mobile.userId,
     role: mobile.role,
     scopes: mobileScopes as ApiScope[],
+    mfaVerifiedAt: privilegedRole(mobile.role)
+      ? await freshMobileSessionMfa(mobile.id, mobile.userId)
+      : null,
   };
 }
 
@@ -110,10 +116,8 @@ export function requireApiScope(principal: ApiPrincipal, scope: ApiScope) {
   if (!principal.scopes.includes(scope)) {
     throw new ApiError(403, "API_SCOPE_FORBIDDEN", "لا يملك هذا الرمز الصلاحية المطلوبة.");
   }
-}
-
-export function bootstrapAuthorized(request: Request): boolean {
-  const configured = process.env.BOOTSTRAP_ADMIN_TOKEN;
-  const supplied = request.headers.get("x-bootstrap-token");
-  return Boolean(configured && supplied && secureHashEquals(hashApiKey(configured), supplied));
+  if (principal.kind === "mobile_session" && privilegedRole(principal.role)
+    && apiScopeRequiresMfa(scope) && !principal.mfaVerifiedAt) {
+    throw new ApiError(403, "MFA_REQUIRED", "أكمل التحقق الثنائي قبل تنفيذ هذه العملية الحساسة.");
+  }
 }

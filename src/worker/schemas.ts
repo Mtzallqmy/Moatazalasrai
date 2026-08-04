@@ -12,6 +12,11 @@ export const documentParsePayloadSchema = z.object({
   documentId: uuid,
 }).strict();
 
+export const attachmentScanPayloadSchema = z.object({
+  organizationId: uuid,
+  attachmentId: uuid,
+}).strict();
+
 export const agentRunResumePayloadSchema = z.object({
   organizationId: uuid,
   approvalId: z.string().min(1).max(200),
@@ -50,6 +55,7 @@ export const browserResumePayloadSchema = z.object({
 
 export type AgentTeamRunPayload = z.infer<typeof agentTeamRunPayloadSchema>;
 export type DocumentParsePayload = z.infer<typeof documentParsePayloadSchema>;
+export type AttachmentScanPayload = z.infer<typeof attachmentScanPayloadSchema>;
 export type AgentRunResumePayload = z.infer<typeof agentRunResumePayloadSchema>;
 export type SandboxWorkspacePayload = z.infer<typeof sandboxWorkspacePayloadSchema>;
 export type SandboxExecutionPayload = z.infer<typeof sandboxExecutionPayloadSchema>;
@@ -61,6 +67,7 @@ export type BrowserResumePayload = z.infer<typeof browserResumePayloadSchema>;
 export const supportedWorkerTasks = [
   "agent-team-run",
   "document-parse",
+  "attachment-scan",
   "agent-run-resume",
   "sandbox-create",
   "sandbox-execute",

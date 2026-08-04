@@ -3,8 +3,8 @@ import { and, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { attachments, conversations } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
-import { processFile } from "@/server/files/processor";
 import { objectStorage } from "@/lib/storage/object-storage";
+import { enqueueAttachmentScan } from "@/worker/queue";
 
 const configuredMaxBytes = Number(process.env.MAX_ATTACHMENT_BYTES ?? 10 * 1024 * 1024);
 export const MAX_ATTACHMENT_BYTES = Number.isFinite(configuredMaxBytes)
@@ -98,7 +98,6 @@ export async function storeAttachment(input: {
     throw new ApiError(413, "FILE_TOO_LARGE", "الحد الأقصى للملف 10 ميجابايت.");
   }
   const declaredMime = validateDeclaredMime(input.filename, input.mimeType);
-  const processed = processFile(input.filename, declaredMime, input.content);
   if (input.conversationId) {
     const [conversation] = await db().select({ id: conversations.id }).from(conversations).where(and(
       eq(conversations.id, input.conversationId),
@@ -111,12 +110,11 @@ export async function storeAttachment(input: {
   const sha256 = createHash("sha256").update(input.content).digest("hex");
   const id = crypto.randomUUID();
   const configuredDriver = process.env.OBJECT_STORAGE_DRIVER?.trim().toLowerCase();
-  // Unset means the legacy database driver so an existing Railway deployment
-  // remains backward compatible until R2/local is enabled deliberately.
   const legacyDatabase = !configuredDriver || configuredDriver === "database";
   const storage = legacyDatabase ? null : objectStorage();
   const objectKey = storage ? `${input.organizationId}/${id}` : null;
   if (storage && objectKey) await storage.put({ key: objectKey, body: input.content, contentType: declaredMime, sha256 });
+  let persisted = false;
   try {
     const [created] = await db().insert(attachments).values({
       id,
@@ -132,10 +130,8 @@ export async function storeAttachment(input: {
       storageDriver: storage?.driver ?? "database",
       objectKey,
       telegramFileId: input.telegramFileId,
-      detectedType: processed.detectedType,
-      processingStatus: "ready",
-      extractedText: processed.extractedText,
-      archiveEntryCount: processed.archiveEntryCount,
+      processingStatus: "quarantined",
+      processingErrorCode: null,
     }).returning({
       id: attachments.id,
       filename: attachments.filename,
@@ -148,9 +144,28 @@ export async function storeAttachment(input: {
       createdAt: attachments.createdAt,
     });
     if (!created) throw new Error("ATTACHMENT_CREATE_FAILED");
-    return created;
+    persisted = true;
+    try {
+      const queued = await enqueueAttachmentScan({
+        organizationId: input.organizationId,
+        attachmentId: created.id,
+      });
+      return { ...created, workerJobId: queued.jobId };
+    } catch (error) {
+      await db().update(attachments).set({
+        processingStatus: "failed",
+        processingErrorCode: "ATTACHMENT_SCAN_QUEUE_FAILED",
+        updatedAt: new Date(),
+      }).where(and(
+        eq(attachments.id, created.id),
+        eq(attachments.organizationId, input.organizationId),
+      ));
+      throw new ApiError(503, "ATTACHMENT_SCAN_QUEUE_FAILED", "تعذر إضافة الملف إلى قائمة الفحص الأمني.", {
+        cause: error instanceof Error ? error.name : "UNKNOWN",
+      });
+    }
   } catch (error) {
-    if (storage && objectKey) await storage.delete(objectKey).catch(() => undefined);
+    if (!persisted && storage && objectKey) await storage.delete(objectKey).catch(() => undefined);
     throw error;
   }
 }
@@ -162,15 +177,37 @@ export async function readAttachmentContent(file: { content: Buffer | null; stor
   }
   if (!file.objectKey) throw new ApiError(500, "ATTACHMENT_OBJECT_MISSING", "مرجع تخزين الملف غير متاح.");
   if (file.storageDriver !== "local" && file.storageDriver !== "r2") throw new ApiError(500, "ATTACHMENT_STORAGE_INVALID", "مرجع تخزين الملف غير صالح.");
-  const storage = objectStorage(file.storageDriver);
-  return storage.get(file.objectKey);
+  return objectStorage(file.storageDriver).get(file.objectKey);
 }
 
 export async function deleteAttachmentContent(file: { content: Buffer | null; storageDriver: string; objectKey: string | null }) {
   if (file.storageDriver === "database" || !file.objectKey) return;
   if (file.storageDriver !== "local" && file.storageDriver !== "r2") throw new ApiError(500, "ATTACHMENT_STORAGE_INVALID", "مرجع تخزين الملف غير صالح.");
-  const storage = objectStorage(file.storageDriver);
-  await storage.delete(file.objectKey);
+  await objectStorage(file.storageDriver).delete(file.objectKey);
+}
+
+export async function waitForAttachmentReady(organizationId: string, attachmentId: string, timeoutMs = 30_000) {
+  const deadline = Date.now() + Math.min(Math.max(timeoutMs, 1_000), 60_000);
+  while (Date.now() < deadline) {
+    const [file] = await db().select({
+      processingStatus: attachments.processingStatus,
+      processingErrorCode: attachments.processingErrorCode,
+    }).from(attachments).where(and(
+      eq(attachments.id, attachmentId),
+      eq(attachments.organizationId, organizationId),
+      isNull(attachments.deletedAt),
+    )).limit(1);
+    if (!file) throw new ApiError(404, "ATTACHMENT_NOT_FOUND", "الملف غير موجود.");
+    if (file.processingStatus === "ready") return;
+    if (file.processingStatus === "failed") {
+      throw new ApiError(422, file.processingErrorCode ?? "ATTACHMENT_SCAN_FAILED", "فشل الفحص الأمني للملف.");
+    }
+    if (file.processingStatus === "quarantined" && file.processingErrorCode === "MALWARE_DETECTED") {
+      throw new ApiError(422, "MALWARE_DETECTED", "رفض الملف بعد اكتشاف محتوى ضار.");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new ApiError(409, "ATTACHMENT_SCAN_PENDING", "ما زال الملف قيد الفحص الأمني.");
 }
 
 export async function attachmentContext(organizationId: string, conversationId: string, ids: string[]) {

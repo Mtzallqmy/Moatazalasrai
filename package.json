@@ -22,6 +22,7 @@
     "db:migrate:all": "npm run db:migrate && npm run worker:migrate",
     "db:studio": "drizzle-kit studio",
     "bootstrap:owner": "node scripts/bootstrap-owner.mjs",
+    "bootstrap:disable": "node scripts/disable-bootstrap-admin-token.mjs",
     "worker": "node --import tsx src/worker/index.ts",
     "worker:dev": "node --import tsx --watch src/worker/index.ts",
     "verify:deployment": "node scripts/verify-deployment.mjs",

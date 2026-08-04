@@ -17,6 +17,7 @@ export interface ObjectStorage {
 }
 
 const SAFE_KEY = /^[0-9a-f-]{36}\/[0-9a-f-]{36}$/i;
+const MAX_SIGNED_URL_SECONDS = 300;
 
 function assertKey(key: string) {
   if (!SAFE_KEY.test(key)) throw new Error("OBJECT_STORAGE_KEY_INVALID");
@@ -96,7 +97,8 @@ export class R2ObjectStorage implements ObjectStorage {
       Key: input.key,
       Body: input.body,
       ContentType: input.contentType,
-      Metadata: { sha256: input.sha256 },
+      CacheControl: "private, no-store, max-age=0",
+      Metadata: { sha256: input.sha256, visibility: "private" },
     }));
     return { key: input.key, sizeBytes: input.body.byteLength, driver: this.driver };
   }
@@ -112,8 +114,12 @@ export class R2ObjectStorage implements ObjectStorage {
   }
   async createSignedDownloadUrl(key: string, expiresInSeconds: number) {
     assertKey(key);
-    return getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.config.bucket, Key: key }), {
-      expiresIn: Math.min(Math.max(Math.floor(expiresInSeconds), 30), 900),
+    return getSignedUrl(this.client, new GetObjectCommand({
+      Bucket: this.config.bucket,
+      Key: key,
+      ResponseCacheControl: "private, no-store, max-age=0",
+    }), {
+      expiresIn: Math.min(Math.max(Math.floor(expiresInSeconds), 30), MAX_SIGNED_URL_SECONDS),
     });
   }
 }

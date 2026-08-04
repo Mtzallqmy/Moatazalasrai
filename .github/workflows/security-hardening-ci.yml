@@ -1,0 +1,95 @@
+name: Security Hardening CI
+
+on:
+  pull_request:
+    branches: [feat/phase0-platform-foundation]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-hardening-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    if: github.head_ref == 'feat/security-hardening-mfa-attachments'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: security_hardening_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d security_hardening_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://user:password@example.invalid/database?sslmode=require
+      MIGRATION_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/security_hardening_ci
+      CREDENTIAL_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      CREDENTIAL_ENCRYPTION_KEY_ID: security-ci
+      ATTACHMENT_SIGNING_SECRET: security-ci-attachment-signing-secret-32-chars
+      BOOTSTRAP_ADMIN_TOKEN: security-ci-bootstrap-token-at-least-32-characters
+      BOOTSTRAP_ADMIN_TOKEN_EXPIRES_AT: 2099-01-01T00:00:00Z
+      ANTIVIRUS_REQUIRED: "false"
+      AI_WORKER_ENABLED: "true"
+      AI_OTEL_ENABLED: "false"
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install
+        run: |
+          node scripts/verify-lockfile.mjs
+          npm ci --no-audit --no-fund
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit and security tests
+        run: npm test
+      - name: Production build
+        run: npm run build
+      - name: Clean migrations and PostgreSQL integration tests
+        env:
+          DATABASE_URL: ${{ env.MIGRATION_DATABASE_URL }}
+          TEST_DATABASE_URL: ${{ env.MIGRATION_DATABASE_URL }}
+        run: |
+          npm run db:migrate:all
+          npm run test:integration -- --reporter=verbose
+      - name: Docker Compose smoke test
+        env:
+          POSTGRES_PORT: "55433"
+          WEB_PORT: "3002"
+        run: |
+          cp .env.example .env
+          cat >> .env <<'EOF'
+          CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          CREDENTIAL_ENCRYPTION_KEY_ID=compose-security-ci
+          BOOTSTRAP_ADMIN_TOKEN=compose-security-ci-bootstrap-token-at-least-32-characters
+          BOOTSTRAP_ADMIN_TOKEN_EXPIRES_AT=2099-01-01T00:00:00Z
+          ATTACHMENT_SIGNING_SECRET=compose-security-ci-attachment-signing-secret
+          ANTIVIRUS_REQUIRED=false
+          AI_WORKER_ENABLED=true
+          AI_OTEL_ENABLED=false
+          EOF
+          docker compose up -d --build
+          timeout 240 sh -c 'until curl --fail --silent http://127.0.0.1:3002/api/ready >/dev/null; do sleep 5; done'
+          docker compose exec -T worker node scripts/healthcheck-worker.mjs
+      - name: Compose diagnostics
+        if: failure() && hashFiles('.env') != ''
+        run: docker compose logs --no-color
+      - name: Compose cleanup
+        if: always() && hashFiles('.env') != ''
+        run: docker compose down --volumes --remove-orphans
