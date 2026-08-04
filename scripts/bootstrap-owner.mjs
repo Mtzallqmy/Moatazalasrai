@@ -1,4 +1,4 @@
-import { randomBytes, scrypt } from "node:crypto";
+import { createHash, randomBytes, randomUUID, scrypt } from "node:crypto";
 import pg from "pg";
 
 const { Pool } = pg;
@@ -12,9 +12,13 @@ function deriveKey(password, salt, length) {
   });
 }
 
+function digest(value) {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
 async function hashPassword(password) {
-  if (password.length < 10 || password.length > 128) {
-    throw new Error("OWNER_INITIAL_PASSWORD must contain 10 to 128 characters.");
+  if (password.length < 12 || password.length > 128) {
+    throw new Error("OWNER_INITIAL_PASSWORD must contain 12 to 128 characters.");
   }
   const salt = randomBytes(16);
   const derived = await deriveKey(password, salt, 64);
@@ -28,12 +32,28 @@ const email = process.env.OWNER_EMAIL?.trim().toLowerCase();
 const password = process.env.OWNER_INITIAL_PASSWORD;
 const name = process.env.OWNER_NAME?.trim() || "معتز العلقمي";
 const organizationName = process.env.OWNER_ORGANIZATION_NAME?.trim() || "Moataz Agent Platform";
+const bootstrapToken = process.env.BOOTSTRAP_ADMIN_TOKEN?.trim();
+const expiryValue = process.env.BOOTSTRAP_ADMIN_TOKEN_EXPIRES_AT?.trim();
 
 if (!email || !password) {
-  console.log(JSON.stringify({ level: "info", event: "owner.bootstrap.skipped", reason: "OWNER_EMAIL or OWNER_INITIAL_PASSWORD is not configured" }));
+  console.log(JSON.stringify({
+    level: "info",
+    event: "owner.bootstrap.skipped",
+    reason: "OWNER_EMAIL or OWNER_INITIAL_PASSWORD is not configured",
+  }));
   process.exit(0);
 }
+if (!bootstrapToken || bootstrapToken.length < 32) {
+  throw new Error("BOOTSTRAP_ADMIN_TOKEN must contain at least 32 characters.");
+}
+if (!expiryValue) throw new Error("BOOTSTRAP_ADMIN_TOKEN_EXPIRES_AT is required.");
+const configuredExpiry = new Date(expiryValue);
+if (!Number.isFinite(configuredExpiry.getTime()) || configuredExpiry <= new Date()) {
+  throw new Error("BOOTSTRAP_ADMIN_TOKEN_EXPIRES_AT must be a future ISO-8601 timestamp.");
+}
 
+const tokenHash = digest(bootstrapToken);
+const requestId = `cli-${randomUUID()}`;
 const pool = new Pool({
   connectionString: databaseUrl,
   max: 1,
@@ -44,67 +64,83 @@ const client = await pool.connect();
 
 try {
   await client.query("BEGIN");
-  const existingUsers = await client.query(
-    "select id, password_hash from users where email = $1 limit 1",
-    [email],
+  await client.query(
+    `INSERT INTO bootstrap_admin_tokens (id, token_hash, expires_at)
+     VALUES ('admin', $1, $2)
+     ON CONFLICT (id) DO NOTHING`,
+    [tokenHash, configuredExpiry],
   );
-  let userId = existingUsers.rows[0]?.id;
+  const stateResult = await client.query(
+    `SELECT token_hash, expires_at, used_at, disabled_at, permanently_disabled
+     FROM bootstrap_admin_tokens
+     WHERE id = 'admin'
+     FOR UPDATE`,
+  );
+  const state = stateResult.rows[0];
+  if (!state) throw new Error("Bootstrap control row is missing. Apply migrations first.");
+  if (state.permanently_disabled || state.disabled_at) throw new Error("Bootstrap is permanently disabled.");
+  if (state.used_at) throw new Error("Bootstrap token was already used.");
+  if (state.token_hash !== tokenHash) throw new Error("Bootstrap token rotation is not allowed after initialization.");
+  if (!state.expires_at || new Date(state.expires_at) <= new Date()) throw new Error("Bootstrap token is expired.");
 
-  if (!userId) {
-    const passwordHash = await hashPassword(password);
-    const inserted = await client.query(
-      `insert into users (email, name, password_hash)
-       values ($1, $2, $3)
-       returning id`,
-      [email, name, passwordHash],
-    );
-    userId = inserted.rows[0]?.id;
-    if (!userId) throw new Error("Owner user could not be created.");
-  } else if (!existingUsers.rows[0]?.password_hash) {
-    const passwordHash = await hashPassword(password);
-    await client.query(
-      "update users set password_hash = $1, name = coalesce(name, $2), updated_at = now() where id = $3",
-      [passwordHash, name, userId],
-    );
+  const existingUsers = await client.query("SELECT id FROM users WHERE email = $1 LIMIT 1", [email]);
+  if (existingUsers.rows[0]) {
+    throw new Error("OWNER_EMAIL already exists; the bootstrap CLI will not mutate an existing identity.");
   }
 
-  const memberships = await client.query(
-    "select organization_id from organization_members where user_id = $1 order by created_at asc limit 1",
-    [userId],
+  const passwordHash = await hashPassword(password);
+  const insertedUser = await client.query(
+    `INSERT INTO users (email, name, password_hash)
+     VALUES ($1, $2, $3)
+     RETURNING id`,
+    [email, name, passwordHash],
   );
-  let organizationId = memberships.rows[0]?.organization_id;
+  const userId = insertedUser.rows[0]?.id;
+  if (!userId) throw new Error("Owner user could not be created.");
 
-  if (!organizationId) {
-    const slug = `moataz-${randomBytes(4).toString("hex")}`;
-    const insertedOrganizations = await client.query(
-      `insert into organizations (name, slug)
-       values ($1, $2)
-       returning id`,
-      [organizationName, slug],
-    );
-    organizationId = insertedOrganizations.rows[0]?.id;
-    if (!organizationId) throw new Error("Owner organization could not be created.");
-    await client.query(
-      `insert into organization_members (organization_id, user_id, role)
-       values ($1, $2, 'owner')
-       on conflict (organization_id, user_id) do update set role = 'owner'`,
-      [organizationId, userId],
-    );
-  } else {
-    await client.query(
-      "update organization_members set role = 'owner' where organization_id = $1 and user_id = $2",
-      [organizationId, userId],
-    );
-  }
+  const slug = `moataz-${randomBytes(4).toString("hex")}`;
+  const insertedOrganization = await client.query(
+    `INSERT INTO organizations (name, slug)
+     VALUES ($1, $2)
+     RETURNING id`,
+    [organizationName, slug],
+  );
+  const organizationId = insertedOrganization.rows[0]?.id;
+  if (!organizationId) throw new Error("Owner organization could not be created.");
 
   await client.query(
-    `insert into audit_logs (organization_id, actor_type, actor_id, action, resource_type, resource_id, metadata)
-     values ($1, 'bootstrap', $2, 'owner.bootstrap.verified', 'user', $3, '{}'::jsonb)`,
-    [organizationId, String(userId), String(userId)],
+    `INSERT INTO organization_members (organization_id, user_id, role)
+     VALUES ($1, $2, 'owner')`,
+    [organizationId, userId],
+  );
+  await client.query(
+    `UPDATE bootstrap_admin_tokens SET
+       used_at = now(),
+       used_request_id = $1,
+       used_ip_hash = $2,
+       updated_at = now()
+     WHERE id = 'admin'`,
+    [requestId, digest("local-cli")],
+  );
+  await client.query(
+    `INSERT INTO audit_logs (
+       organization_id, actor_type, actor_id, action, resource_type, resource_id, metadata
+     ) VALUES (
+       $1, 'bootstrap', $2, 'owner.bootstrapped', 'user', $2,
+       jsonb_build_object('requestId', $3, 'source', 'cli', 'mfaEnrollmentRequired', true)
+     )`,
+    [organizationId, String(userId), requestId],
   );
   await client.query("COMMIT");
 
-  console.log(JSON.stringify({ level: "info", event: "owner.bootstrap.completed", email, organizationId }));
+  console.log(JSON.stringify({
+    level: "info",
+    event: "owner.bootstrap.completed",
+    email,
+    organizationId,
+    requestId,
+    securityAction: "Enable TOTP MFA, remove bootstrap secrets, then run npm run bootstrap:disable.",
+  }));
 } catch (error) {
   await client.query("ROLLBACK").catch(() => undefined);
   throw error;
