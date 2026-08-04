@@ -18,6 +18,15 @@ afterEach(() => {
   mocks.sendText.mockClear();
 });
 
+function sameOriginRequest(path: string, method: string) {
+  const appUrl = process.env.APP_URL ?? "http://localhost:3000";
+  const origin = new URL(appUrl).origin;
+  return new Request(new URL(path, `${origin}/`), {
+    method,
+    headers: { origin, "sec-fetch-site": "same-origin" },
+  });
+}
+
 describe("WhatsApp disconnect endpoint", () => {
   it("disconnects the session user, sends best-effort confirmation, and never exposes wa_id", async () => {
     mocks.requireSession.mockResolvedValue({
@@ -28,10 +37,7 @@ describe("WhatsApp disconnect endpoint", () => {
     });
     mocks.disconnect.mockResolvedValue({ disconnected: true, waId: "967711111111" });
     const { DELETE } = await import("@/app/api/integrations/whatsapp/connection/route");
-    const response = await DELETE(new Request("https://app.example/api/integrations/whatsapp/connection", {
-      method: "DELETE",
-      headers: { origin: "https://app.example", "sec-fetch-site": "same-origin" },
-    }));
+    const response = await DELETE(sameOriginRequest("/api/integrations/whatsapp/connection", "DELETE"));
     expect(response.status).toBe(200);
     expect(mocks.disconnect).toHaveBeenCalledWith(expect.objectContaining({
       userId: "00000000-0000-4000-8000-000000000001",
