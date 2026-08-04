@@ -3,7 +3,7 @@ import { apiSuccess, assertSameOrigin, getRequestId, handleApiError } from "@/li
 import { requireWhatsAppConfig } from "@/lib/integrations/whatsapp/config";
 import { sendTextMessage } from "@/lib/integrations/whatsapp/client";
 import { disconnectWhatsAppForUser } from "@/lib/integrations/whatsapp/linking";
-import { hydrateRuntimeControlPlane } from "@/lib/platform/runtime-control";
+import { hydrateRuntimeForRequest } from "@/lib/platform/runtime-hydration";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
 
 export const runtime = "nodejs";
@@ -12,7 +12,7 @@ export async function DELETE(request: Request) {
   const requestId = getRequestId(request);
   try {
     assertSameOrigin(request);
-    await hydrateRuntimeControlPlane();
+    await hydrateRuntimeForRequest();
     requireWhatsAppConfig();
     const session = await requireSession();
     await enforceRateLimit({
