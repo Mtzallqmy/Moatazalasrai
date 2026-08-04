@@ -5,6 +5,6 @@ export async function hydrateRuntimeForRequest() {
   if (process.env.NODE_ENV === "test" && process.env.RUNTIME_CONTROL_TEST_ENABLED !== "true") {
     return null;
   }
-  await initializeWhatsAppFromEnvironment();
-  return hydrateRuntimeControlPlane();
+  const report = await initializeWhatsAppFromEnvironment();
+  return hydrateRuntimeControlPlane(report.changed);
 }

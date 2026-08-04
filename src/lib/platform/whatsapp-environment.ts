@@ -7,7 +7,7 @@ import { decryptSecret, encryptSecret, maskSecret } from "@/lib/security/encrypt
 
 const SETTINGS_ID = "primary";
 const WHATSAPP_CONTEXT = "platform-runtime:whatsapp";
-const CACHE_TTL_MS = 60_000;
+const CACHE_TTL_MS = 15 * 60_000;
 const REQUEST_TIMEOUT_MS = 12_000;
 
 export const WHATSAPP_ENVIRONMENT_NAMES = [
@@ -33,6 +33,10 @@ const SECRET_NAMES = new Set<EnvironmentName>([
   "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
   "WHATSAPP_CONNECT_TOKEN_SECRET",
 ]);
+
+const AUTHORITY_NAMES = WHATSAPP_ENVIRONMENT_NAMES.filter(
+  (name) => name !== "APP_URL" && name !== "PUBLIC_APP_URL",
+);
 
 const COMMON_ALIASES: Partial<Record<EnvironmentName, readonly string[]>> = {
   META_APP_ID: ["WHATSAPP_APP_ID", "FACEBOOK_APP_ID"],
@@ -186,7 +190,7 @@ export function inspectWhatsAppEnvironment(): WhatsAppEnvironmentInspection {
   ) as EnvironmentValues;
   const loadedCount = WHATSAPP_ENVIRONMENT_NAMES.filter((name) => Boolean(values[name])).length;
   const missing = WHATSAPP_ENVIRONMENT_NAMES.filter((name) => !values[name]);
-  const authoritative = loadedCount > 0;
+  const authoritative = AUTHORITY_NAMES.some((name) => Boolean(values[name]));
   const invalid: WhatsAppEnvironmentInspection["invalid"] = [];
   const warnings: string[] = [];
 
@@ -369,7 +373,11 @@ export async function testMetaGraphApi(config: WhatsAppEnvironmentConfig, fetchI
       const subscriptionResponse = await timedFetch(subscriptionUrl.toString(), { headers }, fetchImpl);
       const subscriptionPayload = await responseJson(subscriptionResponse);
       if (subscriptionResponse.ok && Array.isArray(subscriptionPayload?.data)) {
-        appIdFound = subscriptionPayload.data.some((item) => Boolean(item && typeof item === "object" && "id" in item && String((item as { id?: unknown }).id) === config.appId));
+        appIdFound = subscriptionPayload.data.some((item) => {
+          if (!item || typeof item !== "object") return false;
+          const app = (item as { whatsapp_business_api_data?: { id?: unknown } }).whatsapp_business_api_data;
+          return String(app?.id ?? "") === config.appId;
+        });
         subscriptionStatus = appIdFound ? "subscribed" : "not_subscribed";
       }
     } catch {
@@ -462,7 +470,9 @@ async function persistInitialization(
       try { existing = JSON.parse(decryptSecret(encrypted, WHATSAPP_CONTEXT)) as WhatsAppEnvironmentConfig; }
       catch { existing = null; }
     }
-    changed = JSON.stringify(existing) !== JSON.stringify(config);
+    changed = row?.whatsappManaged !== false
+      || row?.whatsappEnabled !== enabled
+      || JSON.stringify(existing) !== JSON.stringify(config);
     if (changed || !encrypted) encrypted = encryptSecret(JSON.stringify(config), WHATSAPP_CONTEXT);
   }
   const environmentHealth = {

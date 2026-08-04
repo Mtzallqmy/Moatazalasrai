@@ -84,7 +84,7 @@ describe("WhatsApp Railway environment bootstrap", () => {
         quality_rating: "GREEN",
       }), { status: 200, headers: { "content-type": "application/json" } }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: [{ id: config.appId, name: "Moataz AI" }],
+        data: [{ whatsapp_business_api_data: { id: config.appId, name: "Moataz AI" } }],
       }), { status: 200, headers: { "content-type": "application/json" } }));
 
     const health = await testMetaGraphApi(config, fetchImpl);
