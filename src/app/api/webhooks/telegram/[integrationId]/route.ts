@@ -11,15 +11,16 @@ import {
   telegramUpdates,
 } from "@/db/schema";
 import { executeAgentRun } from "@/lib/agents/runtime";
-import { apiSuccess, getRequestId } from "@/lib/http/api";
+import { apiSuccess, getRequestId, handleApiError } from "@/lib/http/api";
 import { listGitHubRepositories, readGitHubFile } from "@/lib/integrations/github";
 import {
   downloadTelegramFile,
   sendTelegramMessage,
 } from "@/lib/integrations/telegram";
 import { decryptSecret, secureHashEquals } from "@/lib/security/encryption";
-import { storeAttachment } from "@/lib/storage/attachments";
-import { attachmentContext } from "@/lib/storage/attachments";
+import { attachmentContext, storeAttachment, waitForAttachmentReady } from "@/lib/storage/attachments";
+import { recordDeniedAccess } from "@/lib/security/audit";
+import { enforceRateLimit, requestClientKey } from "@/lib/security/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -195,6 +196,7 @@ async function processUpdate(input: {
               content: downloaded.content,
               telegramFileId: file.fileId,
             });
+            await waitForAttachmentReady(input.integration.organizationId, stored.id);
             attachmentIds.push(stored.id);
           }
           const indexed = await attachmentContext(input.integration.organizationId, conversationId, attachmentIds);
@@ -269,7 +271,23 @@ export async function POST(
     : "";
   const suppliedSecret = request.headers.get("x-telegram-bot-api-secret-token") ?? "";
   if (!expectedHash || !suppliedSecret || !secureHashEquals(expectedHash, suppliedSecret)) {
-    return new Response(null, { status: 401 });
+    await recordDeniedAccess({
+      organizationId: integration.organizationId,
+      reason: "TELEGRAM_SECRET_INVALID",
+      requestId,
+      route: `/api/webhooks/telegram/${integrationId}`,
+    });
+    return new Response(null, { status: 401, headers: { "cache-control": "no-store", "x-request-id": requestId } });
+  }
+  try {
+    await enforceRateLimit({
+      scope: "telegram.webhook.ip",
+      key: requestClientKey(request, integrationId),
+      limit: 3_000,
+      windowMs: 60_000,
+    });
+  } catch (error) {
+    return handleApiError(error, requestId, "/api/webhooks/telegram/:integrationId");
   }
   const update = await request.json().catch(() => null) as TelegramUpdate | null;
   if (!update || !Number.isSafeInteger(update.update_id)) {

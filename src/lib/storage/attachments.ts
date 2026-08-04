@@ -114,6 +114,7 @@ export async function storeAttachment(input: {
   const storage = legacyDatabase ? null : objectStorage();
   const objectKey = storage ? `${input.organizationId}/${id}` : null;
   if (storage && objectKey) await storage.put({ key: objectKey, body: input.content, contentType: declaredMime, sha256 });
+  let persisted = false;
   try {
     const [created] = await db().insert(attachments).values({
       id,
@@ -143,6 +144,7 @@ export async function storeAttachment(input: {
       createdAt: attachments.createdAt,
     });
     if (!created) throw new Error("ATTACHMENT_CREATE_FAILED");
+    persisted = true;
     try {
       const queued = await enqueueAttachmentScan({
         organizationId: input.organizationId,
@@ -163,7 +165,7 @@ export async function storeAttachment(input: {
       });
     }
   } catch (error) {
-    if (storage && objectKey) await storage.delete(objectKey).catch(() => undefined);
+    if (!persisted && storage && objectKey) await storage.delete(objectKey).catch(() => undefined);
     throw error;
   }
 }
