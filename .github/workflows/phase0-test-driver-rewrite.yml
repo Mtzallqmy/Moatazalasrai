@@ -2,16 +2,15 @@
 name: Phase 0 Test Driver Rewrite
 
 on:
-  push:
-    branches: [feat/phase0-platform-foundation]
-    paths:
-      - .github/workflows/phase0-test-driver-rewrite.yml
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
 
 jobs:
   rewrite:
+    if: github.head_ref == 'feat/phase0-platform-foundation'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
