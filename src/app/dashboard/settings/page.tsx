@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { DashboardShell } from "@/components/dashboard-shell";
+import { MfaSecurityCard } from "@/components/mfa-security-card";
 import { SettingsForms } from "@/components/settings-forms";
 import { WhatsAppConnectionCard } from "@/components/whatsapp-connection-card";
 import { currentSession } from "@/lib/auth/session";
@@ -10,8 +11,9 @@ export default async function SettingsPage() {
   if (!session.organizationId || !session.organizationName || !session.role) redirect("/select-organization");
   const canManageOrganization = ["owner", "admin"].includes(session.role);
   return (
-    <DashboardShell session={session} activePath="/dashboard/settings" title="إعدادات الحساب والمؤسسة" description="تحديث البيانات وتدوير كلمات المرور والجلسات وإدارة قنوات الاتصال الآمنة.">
+    <DashboardShell session={session} activePath="/dashboard/settings" title="إعدادات الحساب والمؤسسة" description="تحديث البيانات وتدوير كلمات المرور والجلسات وإدارة التحقق الثنائي وقنوات الاتصال الآمنة.">
       <SettingsForms name={session.name} organizationName={session.organizationName} canManageOrganization={canManageOrganization} />
+      <MfaSecurityCard visible={canManageOrganization} />
       <WhatsAppConnectionCard canManagePlatform={canManageOrganization} />
     </DashboardShell>
   );
