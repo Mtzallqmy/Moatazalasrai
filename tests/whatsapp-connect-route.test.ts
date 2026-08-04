@@ -18,14 +18,20 @@ afterEach(() => {
   mocks.createLink.mockReset();
 });
 
+function sameOriginRequest(path: string, method: string) {
+  const appUrl = process.env.APP_URL ?? "http://localhost:3000";
+  const origin = new URL(appUrl).origin;
+  return new Request(new URL(path, `${origin}/`), {
+    method,
+    headers: { origin, "sec-fetch-site": "same-origin" },
+  });
+}
+
 describe("WhatsApp connect endpoint", () => {
   it("rejects an unauthenticated user", async () => {
     mocks.requireSession.mockRejectedValue(new ApiError(401, "UNAUTHORIZED", "يجب تسجيل الدخول."));
     const { POST } = await import("@/app/api/integrations/whatsapp/connect/route");
-    const response = await POST(new Request("https://app.example/api/integrations/whatsapp/connect", {
-      method: "POST",
-      headers: { origin: "https://app.example", "sec-fetch-site": "same-origin" },
-    }));
+    const response = await POST(sameOriginRequest("/api/integrations/whatsapp/connect", "POST"));
     expect(response.status).toBe(401);
     expect(mocks.createLink).not.toHaveBeenCalled();
   });
@@ -40,10 +46,7 @@ describe("WhatsApp connect endpoint", () => {
       expiresAt: new Date("2026-08-03T20:00:00.000Z"),
     });
     const { POST } = await import("@/app/api/integrations/whatsapp/connect/route");
-    const response = await POST(new Request("https://app.example/api/integrations/whatsapp/connect", {
-      method: "POST",
-      headers: { origin: "https://app.example", "sec-fetch-site": "same-origin" },
-    }));
+    const response = await POST(sameOriginRequest("/api/integrations/whatsapp/connect", "POST"));
     expect(response.status).toBe(201);
     expect(mocks.createLink).toHaveBeenCalledWith(expect.objectContaining({
       userId: "00000000-0000-4000-8000-000000000001",
