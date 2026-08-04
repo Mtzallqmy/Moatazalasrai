@@ -65,5 +65,5 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
     lastMessageAt: row.lastMessageAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
-  }))} initialConversationId={params.conversationId} initialAgentId={params.agentId} currentUser={{ id: session.userId, name: session.name, email: session.email }} initialAppearance={normalizeChatAppearance(storedAppearance ?? defaultChatAppearance)} puterEnabled={isPuterEnabled()} knowledgeBases={bases} ragEnabled={ragEnabled} memoryEnabled={memoryEnabled} /></DashboardShell>;
+  }))} initialConversationId={params.conversationId} initialAgentId={params.agentId} currentUser={{ id: session.userId, name: session.name ?? session.email, email: session.email }} initialAppearance={normalizeChatAppearance(storedAppearance ?? defaultChatAppearance)} puterEnabled={isPuterEnabled()} knowledgeBases={bases} ragEnabled={ragEnabled} memoryEnabled={memoryEnabled} /></DashboardShell>;
 }
