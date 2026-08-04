@@ -54,6 +54,7 @@ export async function POST(request: Request) {
     const [userMessage] = await db().insert(messages).values({
       conversationId: conversation.id,
       role: "user",
+      authorUserId: principal.userId,
       content: body.message,
       metadata: {
         requestId,

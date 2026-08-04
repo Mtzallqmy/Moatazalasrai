@@ -1,7 +1,8 @@
 import { and, count, desc, eq, ilike, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import { db } from "@/db";
-import { agents, attachments, conversations, messages } from "@/db/schema";
+import { agents, attachments, conversationMembers, conversations, messages, users } from "@/db/schema";
 import { requireSession } from "@/lib/auth/authorization";
+import { canManageConversation, canWriteConversation, conversationAccessFilter } from "@/lib/chat/access";
 import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { conversationActionSchema, paginationSchema, uuidSchema } from "@/lib/http/contracts";
 
@@ -19,7 +20,8 @@ export async function GET(request: Request) {
         .where(and(
           eq(conversations.id, id),
           eq(conversations.organizationId, session.organizationId),
-          session.role === "member" ? eq(conversations.createdByUserId, session.userId) : undefined,
+          conversationAccessFilter({ role: session.role, userId: session.userId, access: "read" }),
+          isNull(conversations.deletedAt),
         ))
         .limit(1);
       if (!owned) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة.");
@@ -27,6 +29,9 @@ export async function GET(request: Request) {
         db().select({
           id: messages.id,
           role: messages.role,
+          authorUserId: messages.authorUserId,
+          authorName: users.name,
+          authorEmail: users.email,
           content: messages.content,
           contentParts: messages.contentParts,
           status: messages.status,
@@ -41,6 +46,7 @@ export async function GET(request: Request) {
           errorCode: messages.errorCode,
           editedAt: messages.editedAt,
         }).from(messages)
+          .leftJoin(users, eq(users.id, messages.authorUserId))
           .where(and(eq(messages.conversationId, id), isNull(messages.deletedAt)))
           .orderBy(desc(messages.createdAt))
           .limit(query.limit)
@@ -76,7 +82,7 @@ export async function GET(request: Request) {
           .innerJoin(conversations, eq(conversations.id, messages.conversationId))
           .where(and(
             eq(conversations.organizationId, session.organizationId),
-            session.role === "member" ? eq(conversations.createdByUserId, session.userId) : undefined,
+            conversationAccessFilter({ role: session.role, userId: session.userId, access: "read" }),
             isNull(messages.deletedAt),
             ilike(messages.content, pattern),
           ))
@@ -95,7 +101,7 @@ export async function GET(request: Request) {
         : isNull(conversations.archivedAt);
     const where = and(
       eq(conversations.organizationId, session.organizationId),
-      session.role === "member" ? eq(conversations.createdByUserId, session.userId) : undefined,
+      conversationAccessFilter({ role: session.role, userId: session.userId, access: "read" }),
       archiveFilter,
       deleted ? isNotNull(conversations.deletedAt) : isNull(conversations.deletedAt),
       searchFilter,
@@ -105,6 +111,8 @@ export async function GET(request: Request) {
         id: conversations.id,
         title: conversations.title,
         agentId: conversations.agentId,
+        createdByUserId: conversations.createdByUserId,
+        memberRole: conversationMembers.role,
         agentName: agents.name,
         summary: conversations.summary,
         status: conversations.status,
@@ -118,6 +126,10 @@ export async function GET(request: Request) {
         updatedAt: conversations.updatedAt,
       }).from(conversations)
         .innerJoin(agents, eq(agents.id, conversations.agentId))
+        .leftJoin(conversationMembers, and(
+          eq(conversationMembers.conversationId, conversations.id),
+          eq(conversationMembers.userId, session.userId),
+        ))
         .where(where)
         .orderBy(desc(conversations.pinnedAt), desc(conversations.lastMessageAt), desc(conversations.updatedAt), desc(conversations.id))
         .limit(query.limit)
@@ -125,7 +137,12 @@ export async function GET(request: Request) {
       db().select({ value: count() }).from(conversations).where(where),
     ]);
     const total = totals[0]?.value ?? 0;
-    return apiSuccess(rows, requestId, 200, {
+    const accessibleRows = rows.map((row) => ({
+      ...row,
+      canWrite: canWriteConversation(session.role, row.createdByUserId, session.userId, row.memberRole),
+      canManage: canManageConversation(session.role, row.createdByUserId, session.userId, row.memberRole),
+    }));
+    return apiSuccess(accessibleRows, requestId, 200, {
       pagination: { ...query, total, pages: Math.ceil(total / query.limit) },
     });
   } catch (error) {
@@ -149,20 +166,31 @@ export async function POST(request: Request) {
         ))
         .limit(1);
       if (!agent) throw new ApiError(422, "AGENT_UNAVAILABLE", "الوكيل غير منشور أو غير موجود.");
-      const [conversation] = await db().insert(conversations).values({
-        organizationId: session.organizationId,
-        agentId: agent.id,
-        createdByUserId: session.userId,
-        title: null,
-        status: "active",
-      }).returning();
+      const conversation = await db().transaction(async (tx) => {
+        const [created] = await tx.insert(conversations).values({
+          organizationId: session.organizationId,
+          agentId: agent.id,
+          createdByUserId: session.userId,
+          title: null,
+          status: "active",
+        }).returning();
+        if (!created) throw new Error("CONVERSATION_CREATE_FAILED");
+        await tx.insert(conversationMembers).values({
+          organizationId: session.organizationId,
+          conversationId: created.id,
+          userId: session.userId,
+          role: "manager",
+          addedByUserId: session.userId,
+        });
+        return created;
+      });
       return apiSuccess(conversation, requestId, 201);
     }
 
     const ownedWhere = and(
       eq(conversations.id, body.conversationId),
       eq(conversations.organizationId, session.organizationId),
-      session.role === "member" ? eq(conversations.createdByUserId, session.userId) : undefined,
+      conversationAccessFilter({ role: session.role, userId: session.userId, access: "manage" }),
     );
     if (body.action === "delete") {
       const [deleted] = await db().update(conversations).set({ status: "deleted", deletedAt: new Date(), updatedAt: new Date() })

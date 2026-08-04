@@ -6,6 +6,7 @@ import { DashboardShell } from "@/components/dashboard-shell";
 import { db } from "@/db";
 import { agentTeams, agents, conversations, mcpServers, providerCredentials, runs } from "@/db/schema";
 import { currentSession } from "@/lib/auth/session";
+import { conversationAccessFilter } from "@/lib/chat/access";
 
 function statusLabel(status: string) {
   return ({
@@ -25,9 +26,16 @@ export default async function DashboardPage() {
   const isMember = session.role === "member";
 
   const [agentCount, providerCount, runCount, teamCount, mcpCount, recentRuns] = await Promise.all([
-    db().select({ value: count() }).from(agents).where(eq(agents.organizationId, organizationId)),
-    db().select({ value: count() }).from(providerCredentials).where(eq(providerCredentials.organizationId, organizationId)),
-    db().select({ value: count() }).from(runs).where(eq(runs.organizationId, organizationId)),
+    db().select({ value: count() }).from(agents).where(and(eq(agents.organizationId, organizationId), eq(agents.status, "published"))),
+    db().select({ value: count() }).from(providerCredentials).where(and(eq(providerCredentials.organizationId, organizationId), eq(providerCredentials.enabled, true), eq(providerCredentials.validationStatus, "verified"))),
+    isMember
+      ? db().select({ value: count() }).from(runs)
+        .innerJoin(conversations, eq(conversations.id, runs.conversationId))
+        .where(and(
+          eq(runs.organizationId, organizationId),
+          conversationAccessFilter({ role: session.role, userId: session.userId, access: "read" }),
+        ))
+      : db().select({ value: count() }).from(runs).where(eq(runs.organizationId, organizationId)),
     db().select({ value: count() }).from(agentTeams).where(eq(agentTeams.organizationId, organizationId)),
     db().select({ value: count() }).from(mcpServers).where(and(eq(mcpServers.organizationId, organizationId), eq(mcpServers.status, "connected"))),
     isMember
@@ -40,7 +48,10 @@ export default async function DashboardPage() {
       }).from(runs)
         .innerJoin(agents, eq(agents.id, runs.agentId))
         .innerJoin(conversations, eq(conversations.id, runs.conversationId))
-        .where(and(eq(runs.organizationId, organizationId), eq(conversations.createdByUserId, session.userId)))
+        .where(and(
+          eq(runs.organizationId, organizationId),
+          conversationAccessFilter({ role: session.role, userId: session.userId, access: "read" }),
+        ))
         .orderBy(desc(runs.createdAt)).limit(6)
       : db().select({
         id: runs.id,
@@ -61,7 +72,7 @@ export default async function DashboardPage() {
     {
       label: isMember ? "الخدمات المتصلة" : "MCP / المزودون",
       value: isMember ? providerCount[0]?.value ?? 0 : `${mcpCount[0]?.value ?? 0} / ${providerCount[0]?.value ?? 0}`,
-      hint: "اتصالات فعلية ومراقبة",
+      hint: "اتصالات متحققة ومفعلة",
       icon: Braces,
     },
   ];
@@ -92,7 +103,7 @@ export default async function DashboardPage() {
           <div className="panel-header">
             <div>
               <h2>آخر عمليات التشغيل</h2>
-              <p>تحديث مباشر لحالة الوكلاء والنماذج</p>
+              <p>أحدث السجلات المحفوظة في قاعدة البيانات</p>
             </div>
             <Link className="panel-link" href="/dashboard/runs">عرض الكل</Link>
           </div>

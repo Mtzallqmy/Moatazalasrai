@@ -19,6 +19,7 @@ import {
   handleApiError,
   parseJson,
 } from "@/lib/http/api";
+import { hydrateRuntimeControlPlane } from "@/lib/platform/runtime-control";
 import { enforceRateLimit, requestClientKey } from "@/lib/security/rate-limit";
 
 export const runtime = "nodejs";
@@ -26,6 +27,7 @@ export const runtime = "nodejs";
 export async function GET(request: Request) {
   const requestId = getRequestId(request);
   try {
+    await hydrateRuntimeControlPlane();
     const session = await requireSession("site_connections:read");
     const id = new URL(request.url).searchParams.get("id");
     const data = id
@@ -41,6 +43,7 @@ export async function POST(request: Request) {
   const requestId = getRequestId(request);
   try {
     assertSameOrigin(request);
+    await hydrateRuntimeControlPlane();
     const session = await requireSession("site_connections:manage");
     await enforceRateLimit({
       scope: "site-connections:create",
@@ -65,6 +68,7 @@ export async function PATCH(request: Request) {
   const requestId = getRequestId(request);
   try {
     assertSameOrigin(request);
+    await hydrateRuntimeControlPlane();
     const session = await requireSession("site_connections:manage");
     await enforceRateLimit({
       scope: "site-connections:update",
@@ -89,6 +93,7 @@ export async function DELETE(request: Request) {
   const requestId = getRequestId(request);
   try {
     assertSameOrigin(request);
+    await hydrateRuntimeControlPlane();
     const session = await requireSession("site_connections:manage");
     const body = await parseJson(request, siteConnectionDeleteSchema, 4 * 1024);
     const result = await deleteSiteConnection({

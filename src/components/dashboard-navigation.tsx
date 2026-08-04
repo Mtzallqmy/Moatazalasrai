@@ -2,38 +2,106 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, Bot, Boxes, Braces, CircleGauge, Database,
-  FileText, Home, KeyRound, Menu, MessageSquare, Moon, Network,
-  PlayCircle, Search, Settings, ShieldAlert, ShieldCheck, Sun, Users, Workflow, X,
+  Activity,
+  Archive,
+  Bot,
+  Boxes,
+  Braces,
+  CircleGauge,
+  Database,
+  FileSearch,
+  FileText,
+  FolderGit2,
+  Home,
+  KeyRound,
+  Menu,
+  MessageSquare,
+  Moon,
+  Network,
+  PlayCircle,
+  Search,
+  Settings,
+  ShieldAlert,
+  ShieldCheck,
+  Sun,
+  Users,
+  Workflow,
+  X,
+  type LucideIcon,
 } from "lucide-react";
 import { LogoutButton } from "@/components/logout-button";
+import { can, type Permission, type Role } from "@/lib/auth/permissions";
 
 export type DashboardSession = {
   name: string | null;
   email: string;
   organizationId: string | null;
   organizationName: string | null;
-  role: string | null;
+  role: Role | null;
 };
 
-const navigation = [
-  { label: "نظرة عامة", href: "/dashboard", icon: Home },
-  { label: "المحادثات", href: "/dashboard/chat", icon: MessageSquare, roles: ["owner", "admin", "developer", "operator", "member"] },
-  { label: "الوكلاء", href: "/dashboard/agents", icon: Bot },
-  { label: "فرق الوكلاء", href: "/dashboard/teams", icon: Workflow, roles: ["owner", "admin", "developer", "operator"] },
-  { label: "عمليات التشغيل", href: "/dashboard/runs", icon: PlayCircle, roles: ["owner", "admin", "developer", "operator"] },
-  { label: "موافقات الأدوات", href: "/dashboard/approvals", icon: ShieldAlert, roles: ["owner", "admin", "developer", "operator"] },
-  { label: "الملفات والمعرفة", href: "/dashboard/files", icon: FileText, roles: ["owner", "admin", "developer", "operator", "member"] },
-  { label: "المزودون والنماذج", href: "/dashboard/providers", icon: Database, roles: ["owner", "admin", "developer"] },
-  { label: "بوابة MCP", href: "/dashboard/mcp", icon: Braces, roles: ["owner", "admin", "developer"] },
-  { label: "التكاملات", href: "/dashboard/integrations", icon: Boxes, roles: ["owner", "admin"] },
-  { label: "الأعضاء والصلاحيات", href: "/dashboard/members", icon: Users, roles: ["owner", "admin"] },
-  { label: "سجل التدقيق", href: "/dashboard/audit", icon: ShieldCheck, roles: ["owner", "admin"] },
-  { label: "صحة المنصة", href: "/dashboard/diagnostics", icon: Activity, roles: ["owner", "admin"] },
-  { label: "الإعدادات", href: "/dashboard/settings", icon: Settings },
-] as const;
+type NavigationItem = {
+  label: string;
+  href: string;
+  icon: LucideIcon;
+  permission?: Permission;
+  exact?: boolean;
+  mobile?: boolean;
+  keywords?: string[];
+};
+
+type NavigationGroup = { label: string; items: NavigationItem[] };
+
+const navigationGroups: NavigationGroup[] = [
+  {
+    label: "مساحة العمل",
+    items: [
+      { label: "نظرة عامة", href: "/dashboard", icon: Home, exact: true, mobile: true, keywords: ["الرئيسية", "dashboard"] },
+      { label: "المحادثات", href: "/dashboard/chat", icon: MessageSquare, permission: "agents:run", mobile: true, keywords: ["رسائل", "chat"] },
+      { label: "الوكلاء", href: "/dashboard/agents", icon: Bot, permission: "agents:read", mobile: true, keywords: ["agents"] },
+      { label: "فرق الوكلاء", href: "/dashboard/teams", icon: Workflow, permission: "agents:run" },
+      { label: "عمليات التشغيل", href: "/dashboard/runs", icon: PlayCircle, permission: "runs:read", mobile: true, keywords: ["runs", "تنفيذ"] },
+    ],
+  },
+  {
+    label: "المحتوى والمعرفة",
+    items: [
+      { label: "الملفات", href: "/dashboard/files", icon: FileText, permission: "files:read", mobile: true },
+      { label: "قواعد المعرفة", href: "/dashboard/knowledge", icon: FileSearch, permission: "files:read", keywords: ["RAG", "documents"] },
+      { label: "المستودعات", href: "/dashboard/repositories", icon: FolderGit2, permission: "integrations:read", keywords: ["GitHub", "code"] },
+    ],
+  },
+  {
+    label: "التشغيل والتكامل",
+    items: [
+      { label: "موافقات الأدوات", href: "/dashboard/approvals", icon: ShieldAlert, permission: "runs:read" },
+      { label: "المزودون والنماذج", href: "/dashboard/providers", icon: Database, permission: "providers:read", keywords: ["models", "AI"] },
+      { label: "بوابة MCP", href: "/dashboard/mcp", icon: Braces, permission: "providers:manage" },
+      { label: "التكاملات", href: "/dashboard/integrations", icon: Boxes, permission: "integrations:read" },
+      { label: "مهام المتصفح", href: "/dashboard/browser-tasks", icon: Archive, permission: "browser_tasks:read" },
+      { label: "بيئة التنفيذ", href: "/dashboard/sandbox", icon: Network, permission: "sandbox:read" },
+    ],
+  },
+  {
+    label: "الإدارة",
+    items: [
+      { label: "الأعضاء والصلاحيات", href: "/dashboard/members", icon: Users, permission: "members:read" },
+      { label: "سجل التدقيق", href: "/dashboard/audit", icon: ShieldCheck, permission: "audit:read" },
+      { label: "صحة المنصة", href: "/dashboard/diagnostics", icon: Activity, permission: "audit:read" },
+      { label: "الإعدادات", href: "/dashboard/settings", icon: Settings },
+    ],
+  },
+];
+
+function itemAllowed(item: NavigationItem, role: Role | null) {
+  return !item.permission || can(role, item.permission);
+}
+
+function itemActive(item: NavigationItem, pathname: string) {
+  return item.exact ? pathname === item.href : pathname === item.href || pathname.startsWith(`${item.href}/`);
+}
 
 function ThemeButton() {
   function toggle() {
@@ -42,9 +110,9 @@ function ThemeButton() {
     window.localStorage.setItem("moataz-theme", next ? "dark" : "light");
   }
   return (
-    <button className="icon-button" type="button" onClick={toggle} aria-label="تبديل المظهر">
-      <Moon className="theme-icon-light" size={18} />
-      <Sun className="theme-icon-dark" size={18} />
+    <button className="icon-button" type="button" onClick={toggle} aria-label="تبديل المظهر" title="تبديل المظهر">
+      <Moon className="theme-icon-light" size={18} aria-hidden="true" />
+      <Sun className="theme-icon-dark" size={18} aria-hidden="true" />
     </button>
   );
 }
@@ -74,16 +142,29 @@ function Sidebar({ session, activePath, close }: {
         <span className="workspace-status-dot" aria-label="مساحة العمل النشطة" />
       </div>
       <nav className="sidebar-nav">
-        <p className="nav-section-label">العمل</p>
-        {navigation.filter((item) => !("roles" in item) || (item.roles as readonly string[]).includes(session.role ?? "")).map((item) => {
-          const active = item.href === "/dashboard" ? current === item.href : current.startsWith(item.href);
-          const Icon = item.icon;
+        {navigationGroups.map((group) => {
+          const items = group.items.filter((item) => itemAllowed(item, session.role));
+          if (!items.length) return null;
           return (
-            <Link key={item.href} href={item.href} onClick={close} aria-current={active ? "page" : undefined}
-              className={`sidebar-link${active ? " sidebar-link-active" : ""}`}>
-              <Icon size={18} strokeWidth={1.9} aria-hidden="true" />
-              <span>{item.label}</span>
-            </Link>
+            <div className="sidebar-nav-group" key={group.label}>
+              <p className="nav-section-label">{group.label}</p>
+              {items.map((item) => {
+                const active = itemActive(item, current);
+                const Icon = item.icon;
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    onClick={close}
+                    aria-current={active ? "page" : undefined}
+                    className={`sidebar-link${active ? " sidebar-link-active" : ""}`}
+                  >
+                    <Icon size={18} strokeWidth={1.9} aria-hidden="true" />
+                    <span>{item.label}</span>
+                  </Link>
+                );
+              })}
+            </div>
           );
         })}
       </nav>
@@ -104,19 +185,41 @@ export function DashboardNavigation({ session, activePath }: { session: Dashboar
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
   const router = useRouter();
-  const allowedNavigation = navigation.filter((item) => !("roles" in item) || (item.roles as readonly string[]).includes(session.role ?? ""));
-  const searchResults = allowedNavigation.filter((item) => item.label.includes(query.trim()));
+  const pathname = usePathname() || activePath;
+  const menuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const allowedNavigation = useMemo(
+    () => navigationGroups.flatMap((group) => group.items).filter((item) => itemAllowed(item, session.role)),
+    [session.role],
+  );
+  const normalizedQuery = query.trim().toLocaleLowerCase("ar");
+  const searchResults = allowedNavigation.filter((item) => {
+    if (!normalizedQuery) return true;
+    const haystack = [item.label, ...(item.keywords ?? [])].join(" ").toLocaleLowerCase("ar");
+    return haystack.includes(normalizedQuery);
+  });
+  const mobileItems = allowedNavigation.filter((item) => item.mobile).slice(0, 5);
 
   useEffect(() => {
     if (!open) return;
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Tab" && closeButtonRef.current && !document.querySelector(".drawer-panel:focus-within")) {
+        event.preventDefault();
+        closeButtonRef.current.focus();
+      }
+    };
     document.body.style.overflow = "hidden";
     window.addEventListener("keydown", onKey);
+    window.setTimeout(() => closeButtonRef.current?.focus(), 0);
     return () => {
       document.body.style.overflow = "";
       window.removeEventListener("keydown", onKey);
+      menuButtonRef.current?.focus();
     };
   }, [open]);
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
@@ -129,6 +232,10 @@ export function DashboardNavigation({ session, activePath }: { session: Dashboar
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  useEffect(() => {
+    if (searchOpen) window.setTimeout(() => searchInputRef.current?.focus(), 0);
+  }, [searchOpen]);
+
   function navigate(href: string) {
     setSearchOpen(false);
     setQuery("");
@@ -139,16 +246,19 @@ export function DashboardNavigation({ session, activePath }: { session: Dashboar
     <>
       <div className="desktop-sidebar"><Sidebar session={session} activePath={activePath} /></div>
       <header className="mobile-dashboard-bar">
-        <button className="icon-button" type="button" onClick={() => setOpen(true)} aria-label="فتح القائمة" aria-expanded={open}>
-          <Menu size={21} />
+        <button ref={menuButtonRef} className="icon-button" type="button" onClick={() => setOpen(true)} aria-label="فتح القائمة" aria-expanded={open}>
+          <Menu size={21} aria-hidden="true" />
         </button>
-        <Link href="/dashboard" className="mobile-brand"><CircleGauge size={20} /> معتز AI</Link>
-        <div className="mobile-bar-actions"><button className="icon-button" type="button" aria-label="بحث" onClick={() => setSearchOpen(true)}><Search size={18} /></button><ThemeButton /></div>
+        <Link href="/dashboard" className="mobile-brand"><CircleGauge size={20} aria-hidden="true" /> معتز AI</Link>
+        <div className="mobile-bar-actions">
+          <button className="icon-button" type="button" aria-label="بحث" onClick={() => setSearchOpen(true)}><Search size={18} aria-hidden="true" /></button>
+          <ThemeButton />
+        </div>
       </header>
       <div className={`mobile-drawer${open ? " mobile-drawer-open" : ""}`} aria-hidden={!open}>
         <button className="drawer-backdrop" type="button" onClick={() => setOpen(false)} aria-label="إغلاق القائمة" />
-        <div className="drawer-panel">
-          <button className="drawer-close icon-button" type="button" onClick={() => setOpen(false)} aria-label="إغلاق القائمة"><X size={20} /></button>
+        <div className="drawer-panel" role="dialog" aria-modal="true" aria-label="التنقل">
+          <button ref={closeButtonRef} className="drawer-close icon-button" type="button" onClick={() => setOpen(false)} aria-label="إغلاق القائمة"><X size={20} /></button>
           <Sidebar session={session} activePath={activePath} close={() => setOpen(false)} />
         </div>
       </div>
@@ -160,12 +270,24 @@ export function DashboardNavigation({ session, activePath }: { session: Dashboar
         </button>
         <div className="utility-actions"><ThemeButton /><span className="utility-separator" /><span className="role-badge"><KeyRound size={14} /> {session.role ?? "viewer"}</span></div>
       </div>
+      <nav className="mobile-bottom-nav" aria-label="التنقل السريع">
+        {mobileItems.map((item) => {
+          const Icon = item.icon;
+          const active = itemActive(item, pathname);
+          return (
+            <Link href={item.href} key={item.href} aria-current={active ? "page" : undefined} className={active ? "mobile-bottom-link-active" : undefined}>
+              <Icon size={20} aria-hidden="true" />
+              <span>{item.label}</span>
+            </Link>
+          );
+        })}
+      </nav>
       {searchOpen ? (
         <div className="command-overlay" role="presentation" onMouseDown={() => setSearchOpen(false)}>
           <section className="command-palette" role="dialog" aria-modal="true" aria-label="البحث في مساحة العمل" onMouseDown={(event) => event.stopPropagation()}>
             <div className="command-input">
               <Search size={19} aria-hidden="true" />
-              <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="اكتب اسم الصفحة…" aria-label="عبارة البحث" />
+              <input ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="اكتب اسم الصفحة أو الوظيفة…" aria-label="عبارة البحث" />
               <button type="button" onClick={() => setSearchOpen(false)} aria-label="إغلاق"><X size={18} /></button>
             </div>
             <div className="command-results">

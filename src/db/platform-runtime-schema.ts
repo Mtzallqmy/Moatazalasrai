@@ -1,0 +1,33 @@
+import { boolean, index, integer, jsonb, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { users } from "@/db/schema";
+
+export const platformRuntimeSettings = pgTable("platform_runtime_settings", {
+  id: text("id").primaryKey(),
+  whatsappManaged: boolean("whatsapp_managed").notNull().default(false),
+  whatsappEnabled: boolean("whatsapp_enabled").notNull().default(false),
+  whatsappConfigEncrypted: text("whatsapp_config_encrypted"),
+  whatsappConnectTtlMinutes: integer("whatsapp_connect_ttl_minutes").notNull().default(10),
+  sandboxManaged: boolean("sandbox_managed").notNull().default(false),
+  sandboxEnabled: boolean("sandbox_enabled").notNull().default(false),
+  sandboxRunnerUrl: text("sandbox_runner_url"),
+  sandboxRunnerSecretEncrypted: text("sandbox_runner_secret_encrypted"),
+  sandboxExecutionTimeoutMs: integer("sandbox_execution_timeout_ms").notNull().default(300_000),
+  sandboxMaxOutputBytes: integer("sandbox_max_output_bytes").notNull().default(2_097_152),
+  sandboxMaxFileBytes: integer("sandbox_max_file_bytes").notNull().default(10_485_760),
+  sandboxWorkspaceDiskBytes: integer("sandbox_workspace_disk_bytes").notNull().default(536_870_912),
+  sandboxMaxConcurrentPerOrg: integer("sandbox_max_concurrent_per_org").notNull().default(2),
+  browserManaged: boolean("browser_managed").notNull().default(false),
+  browserEnabled: boolean("browser_enabled").notNull().default(false),
+  browserRunnerUrl: text("browser_runner_url"),
+  browserRunnerSecretEncrypted: text("browser_runner_secret_encrypted"),
+  browserInteractiveLoginEnabled: boolean("browser_interactive_login_enabled").notNull().default(false),
+  browserScreenshotsEnabled: boolean("browser_screenshots_enabled").notNull().default(true),
+  browserTaskTimeoutMs: integer("browser_task_timeout_ms").notNull().default(300_000),
+  browserMaxSteps: integer("browser_max_steps").notNull().default(50),
+  browserMaxPages: integer("browser_max_pages").notNull().default(5),
+  browserAllowedDownloadBytes: integer("browser_allowed_download_bytes").notNull().default(10_485_760),
+  updatedByUserId: uuid("updated_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  lastHealth: jsonb("last_health").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [index("platform_runtime_settings_updated_idx").on(table.updatedAt)]);

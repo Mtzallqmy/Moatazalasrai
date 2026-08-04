@@ -3,11 +3,12 @@ import { OrganizationSwitcher } from "@/components/organization-switcher";
 import { DashboardNavigation, type DashboardSession } from "@/components/dashboard-navigation";
 import { SiteFooter } from "@/components/site-footer";
 
-export function DashboardShell({ session, activePath, title, description, children }: {
+export function DashboardShell({ session, activePath, title, description, actions, children }: {
   session: DashboardSession;
   activePath: string;
   title: string;
   description?: string;
+  actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -25,7 +26,7 @@ export function DashboardShell({ session, activePath, title, description, childr
             {description ? <p className="dashboard-description">{description}</p> : null}
           </div>
           <div className="dashboard-header-actions">
-            <span className="system-status"><i aria-hidden="true" /> المنصة تعمل بكفاءة</span>
+            {actions}
             <OrganizationSwitcher activeOrganizationId={session.organizationId} />
           </div>
         </header>

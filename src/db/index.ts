@@ -34,6 +34,8 @@ const requiredTables = [
   "agents",
   "agent_versions",
   "conversations",
+  "conversation_members",
+  "conversation_drafts",
   "messages",
   "runs",
   "run_events",
@@ -43,6 +45,9 @@ const requiredTables = [
   "integrations",
   "telegram_chats",
   "telegram_updates",
+  "whatsapp_connections",
+  "whatsapp_link_tokens",
+  "whatsapp_webhook_events",
   "attachments",
   "agent_memories",
   "knowledge_bases",
@@ -70,6 +75,7 @@ const requiredTables = [
   "sandbox_events",
   "sandbox_files",
   "sandbox_artifacts",
+  "platform_runtime_settings",
 ] as const;
 
 export async function checkDatabase(): Promise<{
@@ -90,6 +96,8 @@ export async function checkDatabase(): Promise<{
       to_regclass('public.agents')::text AS agents,
       to_regclass('public.agent_versions')::text AS agent_versions,
       to_regclass('public.conversations')::text AS conversations,
+      to_regclass('public.conversation_members')::text AS conversation_members,
+      to_regclass('public.conversation_drafts')::text AS conversation_drafts,
       to_regclass('public.messages')::text AS messages,
       to_regclass('public.runs')::text AS runs,
       to_regclass('public.run_events')::text AS run_events,
@@ -99,6 +107,9 @@ export async function checkDatabase(): Promise<{
       to_regclass('public.integrations')::text AS integrations,
       to_regclass('public.telegram_chats')::text AS telegram_chats,
       to_regclass('public.telegram_updates')::text AS telegram_updates,
+      to_regclass('public.whatsapp_connections')::text AS whatsapp_connections,
+      to_regclass('public.whatsapp_link_tokens')::text AS whatsapp_link_tokens,
+      to_regclass('public.whatsapp_webhook_events')::text AS whatsapp_webhook_events,
       to_regclass('public.attachments')::text AS attachments,
       to_regclass('public.agent_memories')::text AS agent_memories,
       to_regclass('public.knowledge_bases')::text AS knowledge_bases,
@@ -125,7 +136,8 @@ export async function checkDatabase(): Promise<{
       to_regclass('public.sandbox_executions')::text AS sandbox_executions,
       to_regclass('public.sandbox_events')::text AS sandbox_events,
       to_regclass('public.sandbox_files')::text AS sandbox_files,
-      to_regclass('public.sandbox_artifacts')::text AS sandbox_artifacts
+      to_regclass('public.sandbox_artifacts')::text AS sandbox_artifacts,
+      to_regclass('public.platform_runtime_settings')::text AS platform_runtime_settings
   `;
   const state = rows[0] as Record<string, string | null> | undefined;
   const missingTables = requiredTables.filter((table) => !state?.[table]);

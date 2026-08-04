@@ -1,5 +1,61 @@
 # تقرير التسليم والتحقق
 
+## إصدار 2026-08-03: واجهة الإنتاج والتكاملات
+
+الفرع المحلي: `feature/production-ui-rebuild`
+
+### نطاق الإصدار
+
+- تكامل WhatsApp Business Platform الرسمي عبر Cloud API في migration `0028`.
+- إصلاح ثبات Puter E2E وتجهيز Gradle Wrapper داخل CI دون إضافة ملفات مولدة غير لازمة.
+- إعادة بناء App Shell ونظام التصميم والتنقل المتجاوب وRTL.
+- طبقة API client موحدة وأخطاء عربية آمنة وrequest IDs وtimeouts.
+- محادثة حقيقية مرتبطة بـPostgreSQL وSSE، ومسودات خادمية في migration `0029`.
+- عضويات محادثة فعلية بأدوار قارئ/كاتب/مدير ومؤلف الرسالة في migration `0030`.
+- واجهات فعلية للملفات والمعرفة وتصفح GitHub وRuns والوكلاء والنماذج، وفق العقود الموجودة فقط.
+
+### commits المحلية
+
+```text
+0052d3d test(docs): cover conversation access and delivery state
+777ed84 feat(chat): add real conversation membership and authorship
+15d2048 feat(ui): rebuild production workspace experience
+606da13 fix(ci): stabilize Puter E2E and bootstrap Android wrapper
+53ca6cb feat(integrations): add official WhatsApp Cloud API account linking
+```
+
+### نتائج الأوامر الفعلية
+
+| الفحص | النتيجة الفعلية |
+|---|---|
+| Install | فشل `npm ci` قبل التثبيت بسبب HTTP 404 من مرآة npm الداخلية للحزمة `zod-validation-error@4.0.2`؛ البيئة تستخدم Node 22.16.0 والمشروع يطلب 22.18.0. |
+| Typecheck | شُغّل، لكنه فشل بسبب غياب dependencies بعد فشل install؛ لا يُعد نتيجة على صحة الأنواع في الكود. |
+| Lint | لم يبدأ lint؛ `eslint` المحلي غير مثبت. |
+| Unit | لم تبدأ الاختبارات؛ `vitest` المحلي غير مثبت. |
+| Integration | لم تبدأ الاختبارات؛ `vitest` غير مثبت ولا يوجد `TEST_DATABASE_URL`. |
+| E2E | لم يبدأ Playwright الخاص بالمشروع لغياب الحزمة المحلية. |
+| Build | لم يبدأ Next build؛ `next` المحلي غير مثبت. |
+| فحص patch | نجح `git diff --check`. |
+| فحص syntax | نجح transpile نحوي لـ64 ملف TypeScript/TSX متغيرًا. |
+| migrations | نجح parser للمigrations 0027–0030. |
+| workflows/scripts | نجح تحليل 3 ملفات YAML و`bash -n` للسكريبتات المتغيرة. |
+
+### حالة Git
+
+تعذر النشر من بيئة التنفيذ: موصل GitHub عُطّل عند الاستدعاء الفعلي، و`git ls-remote` فشل برسالة `Could not resolve host: github.com`، كما أن `gh` غير مثبت. لذلك لا يوجد ادعاء بأن الفرع أو commits أو PR رُفعت إلى GitHub.
+
+### نواقص موثقة
+
+- presence/typing الحي يحتاج خدمة realtime وجداول أو قناة أحداث.
+- فهرسة المستودعات وcheckpoints وcitations على مستوى السطر تحتاج jobs ومخططًا إضافيًا.
+- مشاركة المحادثة العامة وfork تحتاج عقود صلاحيات وروابط قصيرة العمر.
+- URL knowledge sources وإصدارات الملفات وهوية الوكيل الغنية ليست مدعومة بالكامل في المخطط الحالي.
+- الاختبارات الحية تحتاج Node 22.18.0، registry صالحًا، PostgreSQL اختباريًا وبيانات اعتماد منفصلة للخدمات.
+
+---
+
+## التقرير التاريخي السابق — 2026-07-29
+
 تاريخ التحقق: 2026-07-29
 
 ## النتيجة

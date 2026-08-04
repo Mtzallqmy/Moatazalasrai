@@ -1,8 +1,9 @@
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { auditLogs, conversations, messages } from "@/db/schema";
+import { auditLogs, conversationMembers, conversations, messages } from "@/db/schema";
 import { requireSession } from "@/lib/auth/authorization";
+import { conversationAccessFilter } from "@/lib/chat/access";
 import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { uuidSchema } from "@/lib/http/contracts";
 
@@ -19,16 +20,30 @@ export async function PATCH(request: Request) {
     const session = await requireSession("agents:run");
     const body = await parseJson(request, mutationSchema, 40 * 1024);
     const result = await db().transaction(async (tx) => {
-      const [owned] = await tx.select({ id: messages.id, role: messages.role })
+      const [owned] = await tx.select({
+        id: messages.id,
+        role: messages.role,
+        authorUserId: messages.authorUserId,
+        createdByUserId: conversations.createdByUserId,
+        memberRole: conversationMembers.role,
+      })
         .from(messages)
         .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+        .leftJoin(conversationMembers, and(
+          eq(conversationMembers.conversationId, conversations.id),
+          eq(conversationMembers.userId, session.userId),
+        ))
         .where(and(
           eq(messages.id, body.messageId),
           eq(conversations.organizationId, session.organizationId),
-          session.role === "member" ? eq(conversations.createdByUserId, session.userId) : undefined,
+          conversationAccessFilter({ role: session.role, userId: session.userId, access: "write" }),
         ))
         .limit(1);
       if (!owned) throw new ApiError(404, "MESSAGE_NOT_FOUND", "الرسالة غير موجودة.");
+      const canManage = session.role !== "member" || owned.createdByUserId === session.userId || owned.memberRole === "manager";
+      if (!canManage && owned.authorUserId !== session.userId) {
+        throw new ApiError(403, "MESSAGE_MUTATION_FORBIDDEN", "لا يمكنك تعديل أو حذف رسالة عضو آخر.");
+      }
       if (body.action === "edit" && owned.role !== "user") {
         throw new ApiError(409, "MESSAGE_NOT_EDITABLE", "يمكن تعديل رسائل المستخدم فقط.");
       }

@@ -1,8 +1,12 @@
 "use client";
 
 import { FormEvent, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { Archive, Bot, Copy, Edit3, History, MessageSquare, Plus, Search, Send, Sparkles, X } from "lucide-react";
 import { agentTemplates, type AgentTemplate } from "@/lib/agents/templates";
+import { Alert, Button, EmptyState, Field, Input, Select, StatusBadge, Textarea, buttonClass } from "@/components/ui";
+import { apiErrorMessage, apiRequest } from "@/lib/http/client";
 
 type Provider = { id: string; name: string; provider: string; discoveredModels: string[] };
 type Agent = {
@@ -26,280 +30,234 @@ type Version = {
   createdAt: string;
 };
 type Details = { agent: Agent; versions: Version[] };
+type AgentMutation = { agent: Agent; version: Version };
+
+function providerModels(providers: Provider[], providerId: string) {
+  return providers.find((item) => item.id === providerId)?.discoveredModels ?? [];
+}
 
 export function AgentManager({ providers, initialAgents, canManage }: { providers: Provider[]; initialAgents: Agent[]; canManage: boolean }) {
   const router = useRouter();
-  const [providerId, setProviderId] = useState(providers[0]?.id ?? "");
   const [agents, setAgents] = useState(initialAgents);
-  const [message, setMessage] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState<"all" | Agent["status"]>("all");
+  const [providerId, setProviderId] = useState(providers[0]?.id ?? "");
   const [details, setDetails] = useState<Details | null>(null);
   const [editProviderId, setEditProviderId] = useState("");
-  const models = useMemo(() => providers.find((item) => item.id === providerId)?.discoveredModels ?? [], [providerId, providers]);
-  const editModels = useMemo(() => providers.find((item) => item.id === editProviderId)?.discoveredModels ?? [], [editProviderId, providers]);
+  const [selectedVersion, setSelectedVersion] = useState(0);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const models = useMemo(() => providerModels(providers, providerId), [providerId, providers]);
+  const editModels = useMemo(() => providerModels(providers, editProviderId), [editProviderId, providers]);
+  const visibleAgents = useMemo(() => {
+    const normalized = query.trim().toLocaleLowerCase("ar");
+    return agents.filter((agent) => (status === "all" || agent.status === status)
+      && (!normalized || `${agent.name} ${agent.description ?? ""} ${agent.model}`.toLocaleLowerCase("ar").includes(normalized)));
+  }, [agents, query, status]);
+  const version = details?.versions[selectedVersion] ?? details?.versions[0] ?? null;
+
+  function clearFeedback() {
+    setError(null);
+    setNotice(null);
+  }
+
+  async function createAgent(input: Record<string, unknown>, success: string) {
+    clearFeedback();
+    setBusy("create");
+    try {
+      const result = await apiRequest<AgentMutation>("/api/dashboard/agents", { method: "POST", body: input, timeoutMs: 30_000 });
+      const next: Agent = {
+        id: result.agent.id,
+        name: result.agent.name,
+        description: result.agent.description,
+        status: result.agent.status,
+        currentVersion: result.agent.currentVersion,
+        model: result.version.model,
+        providerCredentialId: result.version.providerCredentialId,
+        updatedAt: new Date().toISOString(),
+      };
+      setAgents((items) => [next, ...items]);
+      setNotice(success);
+      setCreateOpen(false);
+      router.refresh();
+    } catch (cause) {
+      setError(apiErrorMessage(cause, "تعذر إنشاء الوكيل."));
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function createFromTemplate(template: AgentTemplate) {
     const model = models[0];
-    if (!providerId || !model || loading) {
-      setMessage("أضف مزودًا متحققًا ونموذجًا متاحًا قبل تفعيل القالب.");
+    if (!providerId || !model) {
+      setError("لا يوجد مزود متحقق ونموذج مكتشف يمكن استخدامه.");
       return;
     }
-    setLoading(true);
-    setMessage(null);
-    try {
-      const response = await fetch("/api/dashboard/agents", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          name: template.name,
-          description: template.description,
-          providerCredentialId: providerId,
-          model,
-          instructions: template.instructions,
-          temperature: template.temperature,
-          maxOutputTokens: template.maxOutputTokens,
-          publish: true,
-        }),
-      });
-      const result = await response.json().catch(() => null) as { success?: boolean; error?: { message?: string } } | null;
-      if (!response.ok || !result?.success) throw new Error(result?.error?.message ?? "تعذر إنشاء الوكيل من القالب.");
-      setMessage(`تم إنشاء ونشر «${template.name}» وربطه بالنموذج ${model}.`);
-      router.refresh();
-    } catch (cause) {
-      setMessage(cause instanceof Error ? cause.message : "تعذر إنشاء الوكيل من القالب.");
-    } finally {
-      setLoading(false);
-    }
+    await createAgent({
+      name: template.name,
+      description: template.description,
+      providerCredentialId: providerId,
+      model,
+      instructions: template.instructions,
+      temperature: template.temperature,
+      maxOutputTokens: template.maxOutputTokens,
+      publish: true,
+    }, `تم إنشاء ونشر «${template.name}».`);
   }
 
-  async function create(event: FormEvent<HTMLFormElement>) {
+  async function submitCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (loading) return;
-    const form = event.currentTarget;
-    const data = new FormData(form);
-    setLoading(true);
-    setMessage(null);
+    const data = new FormData(event.currentTarget);
+    await createAgent({
+      name: data.get("name"),
+      description: data.get("description"),
+      providerCredentialId: providerId,
+      model: data.get("model"),
+      instructions: data.get("instructions"),
+      temperature: Number(data.get("temperature")),
+      maxOutputTokens: Number(data.get("maxOutputTokens")),
+      publish: data.get("publish") === "on",
+    }, "تم إنشاء الوكيل وإصداره الأول.");
+  }
+
+  async function loadDetails(agent: Agent) {
+    clearFeedback();
+    setBusy(agent.id);
     try {
-      const response = await fetch("/api/dashboard/agents", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          name: data.get("name"),
-          description: data.get("description"),
-          providerCredentialId: providerId,
-          model: data.get("model"),
-          instructions: data.get("instructions"),
-          temperature: Number(data.get("temperature")),
-          maxOutputTokens: Number(data.get("maxOutputTokens")),
-          publish: data.get("publish") === "on",
-        }),
-      });
-      const result = await response.json().catch(() => null) as { success?: boolean; error?: { message?: string } } | null;
-      if (!response.ok || !result?.success) throw new Error(result?.error?.message ?? "تعذر إنشاء الوكيل.");
-      setMessage("تم إنشاء الوكيل وإصداره الأول بنجاح.");
-      form.reset();
+      const result = await apiRequest<Details>(`/api/dashboard/agents?id=${encodeURIComponent(agent.id)}`);
+      const normalized = {
+        agent: { ...agent, ...result.agent },
+        versions: result.versions.map((item) => ({ ...item, createdAt: String(item.createdAt) })),
+      };
+      setDetails(normalized);
+      setEditProviderId(normalized.versions[0]?.providerCredentialId ?? agent.providerCredentialId);
+      setSelectedVersion(0);
+    } catch (cause) {
+      setError(apiErrorMessage(cause, "تعذر تحميل تفاصيل الوكيل."));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function mutateAgent(agent: Agent, body: Record<string, unknown>, success: string) {
+    clearFeedback();
+    setBusy(agent.id);
+    try {
+      const result = await apiRequest<AgentMutation>("/api/dashboard/agents", { method: "PATCH", body: { id: agent.id, ...body }, timeoutMs: 30_000 });
+      setAgents((items) => items.map((item) => item.id === agent.id ? {
+        ...item,
+        name: result.agent.name,
+        description: result.agent.description,
+        status: result.agent.status,
+        currentVersion: result.agent.currentVersion,
+        model: result.version.model,
+        providerCredentialId: result.version.providerCredentialId,
+        updatedAt: new Date().toISOString(),
+      } : item));
+      setNotice(success);
+      setDetails(null);
       router.refresh();
     } catch (cause) {
-      setMessage(cause instanceof Error ? cause.message : "تعذر إنشاء الوكيل.");
+      setError(apiErrorMessage(cause, "تعذر تحديث الوكيل."));
     } finally {
-      setLoading(false);
-    }
-  }
-
-  async function changeStatus(agent: Agent, status: Agent["status"]) {
-    if (busyId) return;
-    setBusyId(agent.id);
-    setMessage(null);
-    try {
-      const response = await fetch("/api/dashboard/agents", {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: agent.id, status }),
-      });
-      const result = await response.json().catch(() => null) as {
-        success?: boolean;
-        data?: { agent?: Agent; version?: Version };
-        error?: { message?: string };
-      } | null;
-      if (!response.ok || !result?.success || !result.data?.agent) {
-        throw new Error(result?.error?.message ?? "تعذر تحديث الوكيل.");
-      }
-      const updated = result.data.agent;
-      setAgents((current) => current.map((item) => item.id === agent.id ? {
-        ...item,
-        status: updated.status,
-        currentVersion: updated.currentVersion,
-      } : item));
-      setMessage(status === "published" ? "تم نشر إصدار ثابت جديد للوكيل." : "تم تحديث حالة الوكيل.");
-    } catch (cause) {
-      setMessage(cause instanceof Error ? cause.message : "تعذر تحديث الوكيل.");
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  async function openEditor(agent: Agent) {
-    setBusyId(agent.id);
-    setMessage(null);
-    try {
-      const response = await fetch(`/api/dashboard/agents?id=${encodeURIComponent(agent.id)}`);
-      const result = await response.json().catch(() => null) as { success?: boolean; data?: Details; error?: { message?: string } } | null;
-      if (!response.ok || !result?.success || !result.data) throw new Error(result?.error?.message ?? "تعذر تحميل تفاصيل الوكيل.");
-      setDetails({
-        agent: { ...agent, ...result.data.agent },
-        versions: result.data.versions.map((version) => ({ ...version, createdAt: String(version.createdAt) })),
-      });
-      setEditProviderId(result.data.versions[0]?.providerCredentialId ?? agent.providerCredentialId);
-    } catch (cause) {
-      setMessage(cause instanceof Error ? cause.message : "تعذر تحميل تفاصيل الوكيل.");
-    } finally {
-      setBusyId(null);
+      setBusy(null);
     }
   }
 
   async function saveEdit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!details || loading) return;
+    if (!details) return;
     const data = new FormData(event.currentTarget);
-    setLoading(true);
-    setMessage(null);
+    await mutateAgent(details.agent, {
+      name: data.get("name"),
+      description: data.get("description"),
+      providerCredentialId: editProviderId,
+      model: data.get("model"),
+      instructions: data.get("instructions"),
+      temperature: Number(data.get("temperature")),
+      maxOutputTokens: Number(data.get("maxOutputTokens")),
+    }, "تم حفظ التعديل كإصدار جديد immutable.");
+  }
+
+  async function duplicate(agent: Agent) {
+    clearFeedback();
+    setBusy(agent.id);
     try {
-      const response = await fetch("/api/dashboard/agents", {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          id: details.agent.id,
-          name: data.get("name"),
-          description: data.get("description"),
-          providerCredentialId: editProviderId,
-          model: data.get("model"),
-          instructions: data.get("instructions"),
-          temperature: Number(data.get("temperature")),
-          maxOutputTokens: Number(data.get("maxOutputTokens")),
-        }),
-      });
-      const result = await response.json().catch(() => null) as {
-        success?: boolean;
-        data?: { agent: Agent; version: Version };
-        error?: { message?: string };
-      } | null;
-      if (!response.ok || !result?.success || !result.data) throw new Error(result?.error?.message ?? "تعذر حفظ الوكيل.");
-      setAgents((items) => items.map((item) => item.id === details.agent.id ? {
-        ...item,
-        name: result.data!.agent.name,
-        description: result.data!.agent.description,
-        currentVersion: result.data!.agent.currentVersion,
-        model: result.data!.version.model,
-        providerCredentialId: result.data!.version.providerCredentialId,
-      } : item));
-      setDetails(null);
-      setMessage("تم حفظ التعديل كإصدار جديد غير قابل للتغيير.");
-      router.refresh();
+      const source = await apiRequest<Details>(`/api/dashboard/agents?id=${encodeURIComponent(agent.id)}`);
+      const latest = source.versions[0];
+      if (!latest) throw new Error("لا يوجد إصدار صالح للنسخ.");
+      await createAgent({
+        name: `${source.agent.name} — نسخة`,
+        description: source.agent.description,
+        providerCredentialId: latest.providerCredentialId,
+        model: latest.model,
+        instructions: latest.instructions,
+        temperature: latest.temperatureMilli / 1000,
+        maxOutputTokens: latest.maxOutputTokens,
+        publish: false,
+      }, "تم نسخ الوكيل كمسودة مستقلة.");
     } catch (cause) {
-      setMessage(cause instanceof Error ? cause.message : "تعذر حفظ الوكيل.");
-    } finally {
-      setLoading(false);
+      setError(apiErrorMessage(cause, "تعذر نسخ الوكيل."));
+      setBusy(null);
     }
   }
 
-  const latest = details?.versions[0];
-  return (
-    <>
-      <section className="soft-card mb-5 overflow-hidden p-5 sm:p-6">
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div><p className="eyebrow">Agent Library</p><h2 className="mt-2 text-2xl font-black">وكلاء جاهزون لمهام حقيقية</h2><p className="mt-2 max-w-3xl text-sm leading-7" style={{ color: "var(--text-secondary)" }}>قوالب أصلية مستوحاة من أفضل أنماط منصات الوكلاء: تخطيط وتنفيذ، بناء تطبيقات، بحث موثق، هندسة برمجيات، مراجعة GitHub، تحليل بيانات ومستندات وعمليات.</p></div>
-          {canManage ? <label className="grid min-w-64 gap-2 text-xs">مزود القوالب<select value={providerId} onChange={(event) => setProviderId(event.target.value)} className="form-control text-sm">{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} — {provider.provider}</option>)}</select></label> : null}
-        </div>
-        <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {agentTemplates.map((template) => (
-            <article key={template.id} className={`agent-template agent-template-${template.accent}`}>
-              <div className="flex items-center justify-between"><span className="template-icon">{template.icon}</span><span className="status-badge status-neutral">{template.category}</span></div>
-              <h3 className="mt-4 font-black">{template.name}</h3>
-              <p className="mt-2 text-sm leading-6" style={{ color: "var(--text-secondary)" }}>{template.description}</p>
-              {canManage ? <button type="button" disabled={loading || models.length === 0} onClick={() => createFromTemplate(template)} className="secondary-button mt-4 w-full px-3 py-2 text-xs">إنشاء ونشر</button> : null}
-            </article>
-          ))}
-        </div>
-      </section>
-      <div className={`grid gap-5 ${canManage ? "xl:grid-cols-[420px_1fr]" : ""}`}>
-      {canManage ? <form onSubmit={create} className="soft-card grid content-start gap-4 p-5">
-        <h2 className="text-lg font-bold">إنشاء وكيل فعلي</h2>
-        {providers.length === 0 ? <p className="rounded-2xl border border-amber-200/20 bg-amber-200/10 p-3 text-sm text-amber-100">أضف مزودًا وافحصه أولًا؛ لا يمكن إنشاء وكيل دون نموذج محفوظ.</p> : null}
-        <label className="grid gap-2 text-sm">الاسم<input name="name" required maxLength={100} className="form-control" /></label>
-        <label className="grid gap-2 text-sm">الوصف<textarea name="description" maxLength={1000} rows={2} className="form-control" /></label>
-        <label className="grid gap-2 text-sm">المزود<select value={providerId} onChange={(event) => setProviderId(event.target.value)} required className="form-control">{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} — {provider.provider}</option>)}</select></label>
-        <label className="grid gap-2 text-sm">النموذج<select name="model" required className="form-control font-mono text-sm" dir="ltr">{models.map((model) => <option key={model} value={model}>{model}</option>)}</select></label>
-        <label className="grid gap-2 text-sm">تعليمات النظام<textarea name="instructions" required minLength={1} maxLength={30000} rows={8} className="form-control leading-7" /></label>
-        <div className="grid grid-cols-2 gap-3">
-          <label className="grid gap-2 text-sm">Temperature<input name="temperature" type="number" min={0} max={2} step={0.1} defaultValue={0.2} className="form-control" dir="ltr" /></label>
-          <label className="grid gap-2 text-sm">حد الإخراج<input name="maxOutputTokens" type="number" min={64} max={32768} defaultValue={2048} className="form-control" dir="ltr" /></label>
-        </div>
-        <label className="flex items-center gap-2 text-sm text-stone-300"><input name="publish" type="checkbox" /> نشر الوكيل مباشرة</label>
-        <button disabled={loading || providers.length === 0 || models.length === 0} className="primary-button disabled:opacity-50">{loading ? "جارٍ الحفظ..." : "إنشاء الوكيل"}</button>
-        {message ? <p role="status" className="rounded-2xl border border-stone-700 p-3 text-sm">{message}</p> : null}
-      </form> : null}
-      <section className="soft-card p-5">
-        <h2 className="text-lg font-bold">الوكلاء المحفوظون</h2>
-        {agents.length === 0 ? (
-          <p className="mt-5 rounded-2xl border border-dashed border-stone-700 p-10 text-center text-sm text-stone-400">لا توجد وكلاء بعد.</p>
-        ) : (
-          <div className="mt-5 grid gap-3 sm:grid-cols-2">
-            {agents.map((agent) => (
-              <article key={agent.id} className="rounded-2xl border border-stone-700 bg-stone-950/45 p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <h3 className="font-bold">{agent.name}</h3>
-                  <span className={`status-badge ${agent.status === "published" ? "status-success" : agent.status === "archived" ? "status-error" : "status-neutral"}`}>{agent.status}</span>
-                </div>
-                <p className="mt-2 text-xs text-stone-500">الإصدار الحالي: {agent.currentVersion}</p>
-                <p className="mt-3 font-mono text-xs text-emerald-100" dir="ltr">{agent.model}</p>
-                {agent.description ? <p className="mt-3 text-sm leading-7 text-stone-400">{agent.description}</p> : null}
-                {canManage ? <div className="mt-4 flex flex-wrap gap-2">
-                  <button disabled={busyId !== null} onClick={() => openEditor(agent)} className="secondary-button px-3 py-2 text-xs">تعديل وإصدارات</button>
-                  {agent.status !== "published" ? <button disabled={busyId !== null} onClick={() => changeStatus(agent, "published")} className="secondary-button px-3 py-2 text-xs">نشر</button> : null}
-                  {agent.status !== "archived" ? <button disabled={busyId !== null} onClick={() => changeStatus(agent, "archived")} className="danger-button px-3 py-2 text-xs">أرشفة</button> : <button disabled={busyId !== null} onClick={() => changeStatus(agent, "draft")} className="secondary-button px-3 py-2 text-xs">استعادة كمسودة</button>}
-                </div> : <a href={`/dashboard/chat`} className="primary-button mt-4 w-full px-3 py-2 text-xs">ابدأ محادثة</a>}
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
+  return <div className="agent-workspace">
+    {error ? <Alert tone="danger">{error}</Alert> : null}
+    {notice ? <Alert tone="success">{notice}</Alert> : null}
 
-      {canManage && details && latest ? (
-        <div className="modal-backdrop" role="presentation">
-          <section className="modal-card max-h-[90vh] overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="agent-editor-title">
-            <h2 id="agent-editor-title" className="text-xl font-bold">تعديل الوكيل وسجل الإصدارات</h2>
-            <form onSubmit={saveEdit} className="mt-5 grid gap-4">
-              <label className="grid gap-2 text-sm">الاسم<input name="name" defaultValue={details.agent.name} required maxLength={100} className="form-control" /></label>
-              <label className="grid gap-2 text-sm">الوصف<textarea name="description" defaultValue={details.agent.description ?? ""} maxLength={1000} rows={2} className="form-control" /></label>
-              <label className="grid gap-2 text-sm">المزود<select value={editProviderId} onChange={(event) => setEditProviderId(event.target.value)} className="form-control">{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
-              <label className="grid gap-2 text-sm">النموذج<select name="model" defaultValue={editModels.includes(latest.model) ? latest.model : editModels[0]} className="form-control font-mono" dir="ltr">{editModels.map((model) => <option key={model}>{model}</option>)}</select></label>
-              <label className="grid gap-2 text-sm">تعليمات النظام<textarea name="instructions" defaultValue={latest.instructions} required maxLength={30000} rows={7} className="form-control leading-7" /></label>
-              <div className="grid grid-cols-2 gap-3">
-                <label className="grid gap-2 text-sm">Temperature<input name="temperature" type="number" min={0} max={2} step={0.1} defaultValue={latest.temperatureMilli / 1000} className="form-control" /></label>
-                <label className="grid gap-2 text-sm">حد الإخراج<input name="maxOutputTokens" type="number" min={64} max={32768} defaultValue={latest.maxOutputTokens} className="form-control" /></label>
-              </div>
-              <div className="flex justify-end gap-2">
-                <button type="button" className="secondary-button" onClick={() => setDetails(null)}>إلغاء</button>
-                <button disabled={loading || editModels.length === 0} className="primary-button">{loading ? "جارٍ الحفظ..." : "حفظ كإصدار جديد"}</button>
-              </div>
-            </form>
-            <section className="mt-6 border-t border-stone-700 pt-5">
-              <h3 className="font-bold">الإصدارات السابقة</h3>
-              <div className="mt-3 space-y-2">
-                {details.versions.map((version) => (
-                  <details key={version.id} className="rounded-2xl border border-stone-700 p-3">
-                    <summary className="cursor-pointer text-sm">الإصدار {version.version} — <span dir="ltr" className="font-mono text-xs">{version.model}</span></summary>
-                    <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-stone-400">{version.instructions}</p>
-                    <p className="mt-2 text-xs text-stone-500">{new Date(version.createdAt).toLocaleString("ar")} — {version.maxOutputTokens} token</p>
-                  </details>
-                ))}
-              </div>
-            </section>
-          </section>
+    <section className="page-section agent-library">
+      <header className="page-section-header">
+        <div><h2>مكتبة الوكلاء</h2><p>القوالب تنشئ سجلات وإصدارات حقيقية باستخدام مزود متحقق.</p></div>
+        {canManage ? <Button onClick={() => setCreateOpen(true)}><Plus size={16} /> وكيل جديد</Button> : null}
+      </header>
+      <div className="page-section-body grid gap-4">
+        {canManage ? <div className="agent-template-toolbar"><Field label="مزود القوالب"><Select value={providerId} onChange={(event) => setProviderId(event.target.value)}>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} — {provider.provider}</option>)}</Select></Field><p>{models.length ? `${models.length} نموذج مكتشف` : "لا توجد نماذج متاحة"}</p></div> : null}
+        <div className="agent-template-grid">
+          {agentTemplates.slice(0, 8).map((template) => <article key={template.id} className={`agent-template agent-template-${template.accent}`}>
+            <div className="flex items-center justify-between"><span className="template-icon">{template.icon}</span><span className="status-badge status-neutral">{template.category}</span></div>
+            <h3>{template.name}</h3><p>{template.description}</p>
+            {canManage ? <Button variant="secondary" size="sm" disabled={busy !== null || !models.length} onClick={() => void createFromTemplate(template)}><Sparkles size={14} /> إنشاء ونشر</Button> : null}
+          </article>)}
         </div>
-      ) : null}
       </div>
-    </>
-  );
+    </section>
+
+    <section className="page-section">
+      <header className="page-section-header"><div><h2>الوكلاء الفعليون</h2><p>{visibleAgents.length} من {agents.length}</p></div></header>
+      <div className="page-section-body grid gap-4">
+        <div className="agent-filterbar"><label className="file-search"><Search size={16} /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="بحث بالاسم أو النموذج" aria-label="بحث الوكلاء" /></label><Select value={status} onChange={(event) => setStatus(event.target.value as typeof status)} aria-label="تصفية حالة الوكلاء"><option value="all">كل الحالات</option><option value="published">منشور</option><option value="draft">مسودة</option><option value="archived">مؤرشف</option></Select></div>
+        {visibleAgents.length ? <div className="agent-card-grid">{visibleAgents.map((agent) => <article key={agent.id} className="agent-card">
+          <header><span className="agent-avatar"><Bot size={19} /></span><div><h3>{agent.name}</h3><p>{agent.description || "لا يوجد وصف"}</p></div><StatusBadge status={agent.status} label={agent.status === "published" ? "منشور" : agent.status === "draft" ? "مسودة" : "مؤرشف"} /></header>
+          <dl><div><dt>النموذج</dt><dd dir="ltr">{agent.model}</dd></div><div><dt>الإصدار</dt><dd>v{agent.currentVersion}</dd></div><div><dt>آخر تعديل</dt><dd>{new Date(agent.updatedAt).toLocaleDateString("ar")}</dd></div></dl>
+          <footer>
+            {agent.status === "published" ? <Link className={buttonClass({ variant: "primary", size: "sm" })} href={`/dashboard/chat?agentId=${encodeURIComponent(agent.id)}`}><MessageSquare size={14} /> محادثة</Link> : null}
+            <Button variant="secondary" size="sm" onClick={() => void loadDetails(agent)} disabled={busy !== null}><Edit3 size={14} /> المحرر</Button>
+            {canManage ? <Button variant="ghost" size="sm" onClick={() => void duplicate(agent)} disabled={busy !== null}><Copy size={14} /> نسخ</Button> : null}
+            {canManage && agent.status !== "published" ? <Button variant="secondary" size="sm" onClick={() => void mutateAgent(agent, { status: "published" }, "تم نشر إصدار ثابت جديد.")} disabled={busy !== null}><Send size={14} /> نشر</Button> : null}
+            {canManage && agent.status !== "archived" ? <Button variant="ghost" size="sm" onClick={() => void mutateAgent(agent, { status: "archived" }, "تمت أرشفة الوكيل.")} disabled={busy !== null}><Archive size={14} /> أرشفة</Button> : null}
+          </footer>
+        </article>)}</div> : <EmptyState icon={<Bot size={22} />} title="لا توجد نتائج" description="غيّر البحث أو الفلتر، أو أنشئ وكيلًا جديدًا من مزود متحقق." />}
+      </div>
+    </section>
+
+    {createOpen && canManage ? <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setCreateOpen(false)}><section className="modal-card agent-editor-modal" role="dialog" aria-modal="true" aria-labelledby="create-agent-title"><header className="modal-header"><div><h2 id="create-agent-title">إنشاء وكيل</h2><p>تُحفظ الحقول كإصدار أول في قاعدة البيانات.</p></div><Button variant="ghost" size="sm" onClick={() => setCreateOpen(false)} aria-label="إغلاق"><X size={18} /></Button></header><form onSubmit={submitCreate} className="agent-editor-form">
+      <fieldset><legend>1. الهوية</legend><div className="agent-fields"><Field label="الاسم" required><Input name="name" required maxLength={120} /></Field><Field label="الوصف"><Input name="description" maxLength={1000} /></Field></div></fieldset>
+      <fieldset><legend>2. النموذج</legend><div className="agent-fields"><Field label="المزود"><Select value={providerId} onChange={(event) => setProviderId(event.target.value)}>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</Select></Field><Field label="النموذج" required><Select name="model" required>{models.map((model) => <option key={model}>{model}</option>)}</Select></Field></div></fieldset>
+      <fieldset><legend>3. تعليمات النظام</legend><Field label="التعليمات" required><Textarea name="instructions" required maxLength={30000} rows={9} /></Field></fieldset>
+      <fieldset><legend>4. قيود التوليد</legend><div className="agent-fields"><Field label="Temperature"><Input name="temperature" type="number" min={0} max={2} step={0.1} defaultValue={0.3} /></Field><Field label="حد الإخراج"><Input name="maxOutputTokens" type="number" min={64} max={32768} defaultValue={2048} /></Field></div><label className="chat-memory-option"><input name="publish" type="checkbox" /><span><b>نشر الإصدار فورًا</b><small>المسودة لا تظهر للمستخدمين العاديين حتى نشرها.</small></span></label></fieldset>
+      <footer className="modal-actions"><Button variant="secondary" onClick={() => setCreateOpen(false)}>إلغاء</Button><Button type="submit" disabled={busy !== null || !models.length}>حفظ الوكيل</Button></footer>
+    </form></section></div> : null}
+
+    {details && version ? <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setDetails(null)}><section className="modal-card agent-editor-modal" role="dialog" aria-modal="true" aria-labelledby="edit-agent-title"><header className="modal-header"><div><h2 id="edit-agent-title">محرر {details.agent.name}</h2><p>كل حفظ ينشئ إصدارًا جديدًا، ولا يعدل الإصدار السابق.</p></div><Button variant="ghost" size="sm" onClick={() => setDetails(null)} aria-label="إغلاق"><X size={18} /></Button></header><form key={`${details.agent.id}-${version.id}`} onSubmit={saveEdit} className="agent-editor-form">
+      <fieldset><legend>1. الهوية</legend><div className="agent-fields"><Field label="الاسم" required><Input name="name" defaultValue={details.agent.name} required maxLength={120} /></Field><Field label="الوصف"><Input name="description" defaultValue={details.agent.description ?? ""} maxLength={1000} /></Field></div></fieldset>
+      <fieldset><legend>2. النموذج</legend><div className="agent-fields"><Field label="المزود"><Select value={editProviderId} onChange={(event) => setEditProviderId(event.target.value)}>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} — {provider.provider}</option>)}</Select></Field><Field label="النموذج"><Select name="model" defaultValue={editModels.includes(version.model) ? version.model : editModels[0]}>{editModels.map((model) => <option key={model}>{model}</option>)}</Select></Field></div></fieldset>
+      <fieldset><legend>3. تعليمات النظام</legend><Field label="التعليمات"><Textarea name="instructions" defaultValue={version.instructions} required rows={10} maxLength={30000} /></Field></fieldset>
+      <fieldset><legend>4. حدود التشغيل</legend><div className="agent-fields"><Field label="Temperature"><Input name="temperature" type="number" min={0} max={2} step={0.1} defaultValue={version.temperatureMilli / 1000} /></Field><Field label="حد الإخراج"><Input name="maxOutputTokens" type="number" min={64} max={32768} defaultValue={version.maxOutputTokens} /></Field></div></fieldset>
+      <footer className="modal-actions"><Button variant="secondary" onClick={() => setDetails(null)}>إلغاء</Button><Button type="submit" disabled={busy !== null || !editModels.length}>حفظ كإصدار جديد</Button></footer>
+    </form><section className="agent-version-panel"><h3><History size={16} /> سجل الإصدارات</h3><div>{details.versions.map((item, index) => <button type="button" key={item.id} onClick={() => { setSelectedVersion(index); setEditProviderId(item.providerCredentialId); }} className={index === selectedVersion ? "agent-version-active" : undefined}><span>الإصدار {item.version}</span><bdi dir="ltr">{item.model}</bdi><small>{new Date(item.createdAt).toLocaleString("ar")}</small></button>)}</div></section></section></div> : null}
+  </div>;
 }
