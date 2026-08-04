@@ -8,6 +8,7 @@ import {
   agentTeamMembers,
   agentTeams,
   agents,
+  conversationMembers,
   conversations,
   messages,
   runs,
@@ -151,13 +152,25 @@ async function ensureStepConversation(input: {
 }) {
   let conversationId = input.currentConversationId ?? null;
   if (!conversationId) {
-    const [conversation] = await db().insert(conversations).values({
-      organizationId: input.organizationId,
-      agentId: input.agent.id,
-      title: `تشغيل فريق — ${input.agent.name}`,
-      createdByUserId: input.userId,
-    }).returning({ id: conversations.id });
-    if (!conversation) throw new Error("TEAM_CONVERSATION_CREATE_FAILED");
+    const conversation = await db().transaction(async (tx) => {
+      const [created] = await tx.insert(conversations).values({
+        organizationId: input.organizationId,
+        agentId: input.agent.id,
+        title: `تشغيل فريق — ${input.agent.name}`,
+        createdByUserId: input.userId,
+      }).returning({ id: conversations.id });
+      if (!created) throw new Error("TEAM_CONVERSATION_CREATE_FAILED");
+      if (input.userId) {
+        await tx.insert(conversationMembers).values({
+          organizationId: input.organizationId,
+          conversationId: created.id,
+          userId: input.userId,
+          role: "manager",
+          addedByUserId: input.userId,
+        });
+      }
+      return created;
+    });
     conversationId = conversation.id;
     await db().update(agentTeamRunStepsRuntime).set({ conversationId }).where(and(
       eq(agentTeamRunStepsRuntime.id, input.stepId),
@@ -168,6 +181,7 @@ async function ensureStepConversation(input: {
   await db().insert(messages).values({
     conversationId,
     role: "user",
+    authorUserId: input.userId,
     content: input.prompt,
     clientRequestId: input.stableRequestId,
     metadata: { teamRunId: input.teamRunId, stepType: input.stepType },

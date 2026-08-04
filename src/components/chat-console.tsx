@@ -1,7 +1,7 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Cloud, Loader2, Palette, X } from "lucide-react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Check, Cloud, Eye, FileText, Loader2, Palette, Users, Wrench, X } from "lucide-react";
 import {
   chatThemeOptions,
   chatWallpaperOptions,
@@ -14,8 +14,12 @@ import { getPuterClient } from "@/lib/puter/client";
 import { streamPuterChat } from "@/lib/puter/chat";
 import { listPuterModels } from "@/lib/puter/models";
 import type { ClientAIModel, PuterChatMessage } from "@/lib/puter/types";
+import { apiErrorMessage, apiRequest } from "@/lib/http/client";
+import { MessageContent } from "@/components/message-content";
+import { ConversationMembersPanel } from "@/components/conversation-members-panel";
 
 type Agent = { id: string; name: string };
+type KnowledgeBaseOption = { id: string; name: string };
 type Conversation = {
   id: string;
   title: string | null;
@@ -30,10 +34,15 @@ type Conversation = {
   model?: string | null;
   createdAt?: string;
   updatedAt: string;
+  canWrite?: boolean;
+  canManage?: boolean;
 };
 type Message = {
   id: string;
   role: "user" | "assistant";
+  authorUserId?: string | null;
+  authorName?: string | null;
+  authorEmail?: string | null;
   content: string;
   status?: "sending" | "streaming" | "completed" | "failed" | "interrupted" | "cancelled";
   createdAt: string;
@@ -50,15 +59,36 @@ type Message = {
 };
 type Attachment = { id: string; filename: string; mimeType: string; sizeBytes: number; processingStatus?: string };
 type FailedUpload = { id: string; file: File; message: string };
-type ModelOption = { providerCredentialId: string; providerName: string; model: string; freeTierEligible: boolean };
+type ModelOption = {
+  providerCredentialId: string;
+  providerName: string;
+  provider: string;
+  model: string;
+  freeTierEligible: boolean;
+  available: boolean;
+  latencyMs?: number | null;
+  capabilities?: {
+    text?: boolean;
+    vision?: boolean;
+    files?: boolean;
+    tools?: boolean;
+    structuredOutput?: boolean;
+    streaming?: boolean;
+  };
+};
 type Api<T> = { success?: boolean; data?: T; error?: { code?: string; message?: string; requestId?: string } };
 
-export function ChatConsole({ agents, initialConversations, initialConversationId, initialAppearance, puterEnabled }: {
+export function ChatConsole({ agents, initialConversations, initialConversationId, initialAgentId, currentUser, initialAppearance, puterEnabled, knowledgeBases, ragEnabled, memoryEnabled }: {
   agents: Agent[];
   initialConversations: Conversation[];
   initialConversationId?: string;
+  initialAgentId?: string;
+  currentUser: { id: string; name: string; email: string };
   initialAppearance: ChatAppearance;
   puterEnabled: boolean;
+  knowledgeBases: KnowledgeBaseOption[];
+  ragEnabled: boolean;
+  memoryEnabled: boolean;
 }) {
   const [conversations, setConversations] = useState(initialConversations);
   const [conversationId, setConversationId] = useState(
@@ -66,7 +96,7 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
       ? initialConversationId ?? ""
       : initialConversations[0]?.id ?? "",
   );
-  const [agentId, setAgentId] = useState(agents[0]?.id ?? "");
+  const [agentId, setAgentId] = useState(agents.some((agent) => agent.id === initialAgentId) ? initialAgentId ?? "" : agents[0]?.id ?? "");
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(initialConversations.length > 0);
@@ -83,6 +113,9 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
   const [draft, setDraft] = useState("");
   const [models, setModels] = useState<ModelOption[]>([]);
   const [selectedModel, setSelectedModel] = useState("auto");
+  const [knowledgeBaseId, setKnowledgeBaseId] = useState("");
+  const [useMemory, setUseMemory] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [executionMode, setExecutionMode] = useState<"server" | "puter">("server");
   const [puterModels, setPuterModels] = useState<ClientAIModel[]>([]);
   const [puterModel, setPuterModel] = useState("");
@@ -92,11 +125,20 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
   const [pendingPuterText, setPendingPuterText] = useState<string | null>(null);
   const [appearance, setAppearance] = useState(initialAppearance);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
+  const [membersOpen, setMembersOpen] = useState(false);
+  const closeMembers = useCallback(() => setMembersOpen(false), []);
   const [savingAppearance, setSavingAppearance] = useState(false);
   const streamController = useRef<AbortController | null>(null);
   const puterExecutionRef = useRef<{ executionId: string; userMessageId: string; model: string } | null>(null);
   const scrollAnchor = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const draftReadyRef = useRef(false);
   const conversationGroups = useMemo(() => groupConversations(conversations), [conversations]);
+  const activeConversation = useMemo(() => conversations.find((item) => item.id === conversationId), [conversations, conversationId]);
+  const selectedModelInfo = useMemo(() => {
+    if (selectedModel === "auto") return null;
+    return models.find((item) => `${item.providerCredentialId}:${item.model}` === selectedModel) ?? null;
+  }, [models, selectedModel]);
 
   async function connectPuter(forceModels = false) {
     if (!puterEnabled) return;
@@ -124,22 +166,16 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
       const query = new URLSearchParams({ limit: "100" });
       if (archivedMode) query.set("archived", "true");
       if (search.trim()) query.set("q", search.trim());
-      fetch(`/api/dashboard/chat?${query.toString()}`, { signal: controller.signal })
-        .then(async (response) => ({ response, result: await response.json().catch(() => null) as Api<Conversation[]> | null }))
-        .then(({ response, result }) => {
-          if (!response.ok || !result?.success) throw new Error(result?.error?.message ?? "تعذر تحميل المحادثات.");
-          setConversations((result.data ?? []).map((row) => ({
-            ...row,
-            updatedAt: new Date(row.updatedAt).toISOString(),
-            lastMessageAt: row.lastMessageAt ? new Date(row.lastMessageAt).toISOString() : null,
-            pinnedAt: row.pinnedAt ? new Date(row.pinnedAt).toISOString() : null,
-            archivedAt: row.archivedAt ? new Date(row.archivedAt).toISOString() : null,
-          })));
-        })
+      apiRequest<Conversation[]>(`/api/dashboard/chat?${query.toString()}`, { signal: controller.signal })
+        .then((rows) => setConversations(rows.map((row) => ({
+          ...row,
+          updatedAt: new Date(row.updatedAt).toISOString(),
+          lastMessageAt: row.lastMessageAt ? new Date(row.lastMessageAt).toISOString() : null,
+          pinnedAt: row.pinnedAt ? new Date(row.pinnedAt).toISOString() : null,
+          archivedAt: row.archivedAt ? new Date(row.archivedAt).toISOString() : null,
+        }))))
         .catch((cause) => {
-          if (!(cause instanceof DOMException && cause.name === "AbortError")) {
-            setError(cause instanceof Error ? cause.message : "تعذر تحميل المحادثات.");
-          }
+          if (!controller.signal.aborted) setError(apiErrorMessage(cause, "تعذر تحميل المحادثات."));
         })
         .finally(() => setLoadingConversations(false));
     }, 250);
@@ -150,46 +186,66 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
   }, [archivedMode, search]);
 
   useEffect(() => {
-    fetch("/api/dashboard/models").then(async (response) => {
-      const result = await response.json().catch(() => null) as Api<ModelOption[]> | null;
-      if (response.ok && result?.success) setModels(result.data ?? []);
-    }).catch(() => undefined);
+    apiRequest<ModelOption[]>("/api/dashboard/models")
+      .then(setModels)
+      .catch((cause) => setError(apiErrorMessage(cause, "تعذر تحميل النماذج المتاحة.")));
   }, []);
 
   useEffect(() => {
     if (!conversationId) return;
     const controller = new AbortController();
-    fetch(`/api/dashboard/chat?conversationId=${encodeURIComponent(conversationId)}&limit=100`, { signal: controller.signal })
-      .then(async (response) => ({ response, result: await response.json().catch(() => null) as Api<Message[]> | null }))
-      .then(({ response, result }) => {
-        if (!response.ok || !result?.success) throw new Error(result?.error?.message ?? "تعذر تحميل الرسائل.");
-        setMessages(result.data ?? []);
-      })
+    setLoadingMessages(true);
+    apiRequest<Message[]>(`/api/dashboard/chat?conversationId=${encodeURIComponent(conversationId)}&limit=100`, { signal: controller.signal })
+      .then(setMessages)
       .catch((cause) => {
-        if (!(cause instanceof DOMException && cause.name === "AbortError")) {
-          setError(cause instanceof Error ? cause.message : "تعذر تحميل الرسائل.");
-        }
+        if (!controller.signal.aborted) setError(apiErrorMessage(cause, "تعذر تحميل الرسائل."));
       })
       .finally(() => setLoadingMessages(false));
     return () => controller.abort();
   }, [conversationId]);
 
   useEffect(() => {
-    if (!conversationId) return;
-    const timeout = window.setTimeout(() => {
-      setDraft(localStorage.getItem(`chat-draft:${conversationId}`) ?? "");
-    }, 0);
-    return () => window.clearTimeout(timeout);
-  }, [conversationId]);
+    if (!conversationId || activeConversation?.canWrite === false) {
+      setDraft("");
+      draftReadyRef.current = false;
+      return;
+    }
+    const controller = new AbortController();
+    draftReadyRef.current = false;
+    setDraft("");
+    apiRequest<{ content: string; updatedAt: string | null }>(`/api/dashboard/chat/draft?conversationId=${encodeURIComponent(conversationId)}`, { signal: controller.signal })
+      .then((stored) => setDraft(stored.content))
+      .catch((cause) => {
+        if (!controller.signal.aborted) setError(apiErrorMessage(cause, "تعذر تحميل مسودة المحادثة."));
+      })
+      .finally(() => { if (!controller.signal.aborted) draftReadyRef.current = true; });
+    return () => controller.abort();
+  }, [conversationId, activeConversation?.canWrite]);
 
   useEffect(() => {
-    if (!conversationId) return;
+    if (!conversationId || activeConversation?.canWrite === false || !draftReadyRef.current) return;
+    const controller = new AbortController();
     const timeout = window.setTimeout(() => {
-      if (draft) localStorage.setItem(`chat-draft:${conversationId}`, draft);
-      else localStorage.removeItem(`chat-draft:${conversationId}`);
-    }, 250);
-    return () => window.clearTimeout(timeout);
-  }, [conversationId, draft]);
+      apiRequest(`/api/dashboard/chat/draft`, {
+        method: "PUT",
+        signal: controller.signal,
+        body: { conversationId, content: draft },
+      }).catch((cause) => {
+        if (!controller.signal.aborted) setError(apiErrorMessage(cause, "تعذر حفظ مسودة المحادثة."));
+      });
+    }, 500);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
+  }, [conversationId, draft, activeConversation?.canWrite]);
+
+  useEffect(() => {
+    const node = composerRef.current;
+    if (!node) return;
+    node.style.height = "0px";
+    node.style.height = `${Math.min(Math.max(node.scrollHeight, 84), 220)}px`;
+  }, [draft]);
 
   useEffect(() => {
     scrollAnchor.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -206,15 +262,11 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
     setConversationId(id);
   }
 
-  async function conversationAction(body: Record<string, unknown>) {
-    const response = await fetch("/api/dashboard/chat", {
+  function conversationAction(body: Record<string, unknown>) {
+    return apiRequest<Conversation & { deleted?: boolean }>("/api/dashboard/chat", {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
+      body,
     });
-    const result = await response.json().catch(() => null) as Api<Conversation & { deleted?: boolean }> | null;
-    if (!response.ok || !result?.success) throw new Error(result?.error?.message ?? "تعذر تحديث المحادثة.");
-    return result.data;
   }
 
   async function createConversation() {
@@ -225,7 +277,7 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
       const created = await conversationAction({ action: "create", agentId });
       if (!created) throw new Error("تعذر إنشاء المحادثة.");
       const agentName = agents.find((agent) => agent.id === agentId)?.name ?? "وكيل";
-      const row: Conversation = { ...created, agentName, status: "active", pinnedAt: null, archivedAt: null, lastMessageAt: null, updatedAt: new Date(created.updatedAt).toISOString() };
+      const row: Conversation = { ...created, agentName, status: "active", pinnedAt: null, archivedAt: null, lastMessageAt: null, canWrite: true, canManage: true, updatedAt: new Date(created.updatedAt).toISOString() };
       setConversations((current) => [row, ...current]);
       setMessages([]);
       setLoadingMessages(true);
@@ -342,9 +394,8 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
       }
     }
     if (!sawServerMessage) {
-      const refresh = await fetch(`/api/dashboard/chat?conversationId=${encodeURIComponent(conversationId)}&limit=100`);
-      const result = await refresh.json().catch(() => null) as Api<Message[]> | null;
-      if (refresh.ok && result?.success) setMessages(result.data ?? []);
+      const refreshed = await apiRequest<Message[]>(`/api/dashboard/chat?conversationId=${encodeURIComponent(conversationId)}&limit=100`);
+      setMessages(refreshed);
     }
   }
 
@@ -352,14 +403,10 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
     const form = new FormData();
     form.set("conversationId", conversationId);
     form.set("file", file);
-    const response = await fetch("/api/dashboard/files", { method: "POST", body: form });
-    const payload = await response.json().catch(() => null) as Api<Attachment> | null;
-    if (!response.ok || !payload?.success || !payload.data) {
-      throw new Error(payload?.error?.message ?? `تعذر رفع ${file.name}.`);
-    }
-    setAttachments((current) => current.some((item) => item.id === payload.data!.id)
+    const uploaded = await apiRequest<Attachment>("/api/dashboard/files", { method: "POST", body: form, timeoutMs: 60_000 });
+    setAttachments((current) => current.some((item) => item.id === uploaded.id)
       ? current
-      : [...current, payload.data!].slice(0, 8));
+      : [...current, uploaded].slice(0, 8));
     if (failedId) setFailedUploads((items) => items.filter((item) => item.id !== failedId));
   }
 
@@ -382,15 +429,11 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
 
   async function removePendingAttachment(file: Attachment) {
     setAttachments((items) => items.filter((item) => item.id !== file.id));
-    const response = await fetch("/api/dashboard/files", {
-      method: "DELETE",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id: file.id }),
-    });
-    if (!response.ok) {
+    try {
+      await apiRequest("/api/dashboard/files", { method: "DELETE", body: { id: file.id } });
+    } catch (cause) {
       setAttachments((items) => [...items, file]);
-      const payload = await response.json().catch(() => null) as Api<never> | null;
-      setError(payload?.error?.message ?? `تعذر حذف ${file.filename}.`);
+      setError(apiErrorMessage(cause, `تعذر حذف ${file.filename}.`));
     }
   }
 
@@ -410,11 +453,19 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
   }
 
   async function sendServerText(text: string) {
-    if (!conversationId || loading || !text.trim()) return;
+    if (!conversationId || activeConversation?.canWrite === false || loading || !text.trim()) return;
+    const hasImage = attachments.some((file) => file.mimeType.startsWith("image/"));
+    if (hasImage && selectedModelInfo && selectedModelInfo.capabilities?.vision !== true) {
+      setError("النموذج المختار لا يعلن دعم Vision. اختر نموذجًا يدعم الصور أو استخدم الاختيار التلقائي.");
+      return;
+    }
     const optimisticId = `local-${crypto.randomUUID()}`;
     const optimistic: Message = {
       id: optimisticId,
       role: "user",
+      authorUserId: currentUser.id,
+      authorName: currentUser.name,
+      authorEmail: currentUser.email,
       content: text.trim(),
       createdAt: new Date().toISOString(),
       attachments: [...attachments],
@@ -437,6 +488,8 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
           attachmentIds: attachments.map((file) => file.id),
           clientRequestId: crypto.randomUUID(),
           inputKind: attachments.length ? "file" : "text",
+          ...(knowledgeBaseId ? { knowledgeBaseId } : {}),
+          useMemory: memoryEnabled && useMemory,
           ...(selectedModel === "auto" ? {} : {
             providerCredentialId: selectedModel.split(":", 1)[0],
             model: selectedModel.slice(selectedModel.indexOf(":") + 1),
@@ -477,22 +530,19 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
     status: "completed" | "failed" | "cancelled";
     content?: string;
   }) {
-    const response = await fetch("/api/dashboard/chat/puter", {
+    const result = await apiRequest<{ assistantMessage: Message | null }>("/api/dashboard/chat/puter", {
       method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ conversationId, ...input }),
+      body: { conversationId, ...input },
     });
-    const result = await response.json().catch(() => null) as Api<{ assistantMessage: Message | null }> | null;
-    if (!response.ok || !result?.success) throw new Error(result?.error?.message ?? "تعذر حفظ نتيجة Puter.");
-    return result.data?.assistantMessage ?? null;
+    return result.assistantMessage;
   }
 
   async function sendPuterText(text: string) {
-    if (!conversationId || loading || !text.trim() || !puterModel) return;
+    if (!conversationId || activeConversation?.canWrite === false || loading || !text.trim() || !puterModel) return;
     const optimisticId = `local-${crypto.randomUUID()}`;
     const assistantId = `stream-puter-${crypto.randomUUID()}`;
     setMessages((current) => [...current, {
-      id: optimisticId, role: "user", content: text.trim(), status: "sending", createdAt: new Date().toISOString(), attachments: [],
+      id: optimisticId, role: "user", authorUserId: currentUser.id, authorName: currentUser.name, authorEmail: currentUser.email, content: text.trim(), status: "sending", createdAt: new Date().toISOString(), attachments: [],
     }]);
     setLoading(true);
     setError(null);
@@ -503,32 +553,30 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
     try {
       const client = await getPuterClient();
       if (!client.auth.isSignedIn()) throw new Error("اتصل بحساب Puter قبل بدء الدردشة.");
-      const response = await fetch("/api/dashboard/chat/puter", {
+      const result = await apiRequest<{
+        executionId: string;
+        userMessage: Message;
+        messages: PuterChatMessage[];
+      }>("/api/dashboard/chat/puter", {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
+        body: {
           conversationId,
           message: text.trim(),
           model: puterModel,
           clientRequestId: crypto.randomUUID(),
-        }),
+        },
         signal: controller.signal,
       });
-      const result = await response.json().catch(() => null) as Api<{
-        executionId: string;
-        userMessage: Message;
-        messages: PuterChatMessage[];
-      }> | null;
-      if (!response.ok || !result?.success || !result.data) throw new Error(result?.error?.message ?? "تعذر بدء دردشة Puter.");
-      const execution = { executionId: result.data.executionId, userMessageId: result.data.userMessage.id, model: puterModel };
+      const execution = { executionId: result.executionId, userMessageId: result.userMessage.id, model: puterModel };
       puterExecutionRef.current = execution;
-      setMessages((items) => [...items.map((item) => item.id === optimisticId ? result.data!.userMessage : item), {
+      const savedUserMessage: Message = { ...result.userMessage, authorName: currentUser.name, authorEmail: currentUser.email };
+      setMessages((items) => [...items.map((item) => item.id === optimisticId ? savedUserMessage : item), {
         id: assistantId, role: "assistant", content: "", status: "streaming", model: puterModel, createdAt: new Date().toISOString(),
         metadata: { provider: "puter", executionSource: "client" },
       }]);
       const finalText = await streamPuterChat({
         client,
-        messages: result.data.messages,
+        messages: result.messages,
         model: puterModel,
         signal: controller.signal,
         onText(delta) {
@@ -581,11 +629,7 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
   async function stop() {
     streamController.current?.abort();
     if (executionMode === "server" && runId) {
-      await fetch("/api/dashboard/runs", {
-        method: "DELETE",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ runId }),
-      }).catch(() => undefined);
+      await apiRequest("/api/dashboard/runs", { method: "DELETE", body: { runId } }).catch(() => undefined);
     }
   }
 
@@ -593,14 +637,13 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
     if (action === "delete" && !window.confirm("حذف هذه الرسالة؟")) return;
     const content = action === "edit" ? window.prompt("عدّل الرسالة ثم أعد توليد الرد", message.content)?.trim() : undefined;
     if (action === "edit" && !content) return;
-    const response = await fetch("/api/dashboard/messages", {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action, messageId: message.id, ...(content ? { content } : {}) }),
-    });
-    const result = await response.json().catch(() => null) as Api<Message> | null;
-    if (!response.ok || !result?.success) {
-      setError(result?.error?.message ?? "تعذر تحديث الرسالة.");
+    try {
+      await apiRequest<Message>("/api/dashboard/messages", {
+        method: "PATCH",
+        body: { action, messageId: message.id, ...(content ? { content } : {}) },
+      });
+    } catch (cause) {
+      setError(apiErrorMessage(cause, "تعذر تحديث الرسالة."));
       return;
     }
     if (action === "delete") setMessages((items) => items.filter((item) => item.id !== message.id));
@@ -616,19 +659,14 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
     setSavingAppearance(true);
     setError(null);
     try {
-      const response = await fetch("/api/dashboard/chat/preferences", {
+      const saved = await apiRequest<ChatAppearance>("/api/dashboard/chat/preferences", {
         method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(next),
+        body: next,
       });
-      const result = await response.json().catch(() => null) as Api<ChatAppearance> | null;
-      if (!response.ok || !result?.success || !result.data) {
-        throw new Error(result?.error?.message ?? "تعذر حفظ مظهر المحادثة.");
-      }
-      setAppearance(result.data);
+      setAppearance(saved);
     } catch (cause) {
       setAppearance(previous);
-      setError(cause instanceof Error ? cause.message : "تعذر حفظ مظهر المحادثة.");
+      setError(apiErrorMessage(cause, "تعذر حفظ مظهر المحادثة."));
     } finally {
       setSavingAppearance(false);
     }
@@ -641,8 +679,6 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
   function selectWallpaper(wallpaper: ChatWallpaperId) {
     if (wallpaper !== appearance.wallpaper) void saveAppearance({ ...appearance, wallpaper });
   }
-
-  const activeConversation = conversations.find((item) => item.id === conversationId);
 
   return (
     <div className="grid gap-5 xl:grid-cols-[310px_minmax(0,1fr)]">
@@ -670,14 +706,14 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
                   <span className="mt-1 block truncate text-xs" style={{ color: "var(--text-secondary)" }}>{row.agentName}{row.model ? ` · ${row.model}` : ""}</span>
                   <span className="mt-1 block text-[11px]" style={{ color: "var(--text-secondary)" }}>{new Date(row.lastMessageAt ?? row.updatedAt).toLocaleString("ar")}</span>
                 </button>
-                <div className="mt-2 flex flex-wrap gap-1 border-t pt-2" style={{ borderColor: "var(--border)" }}>
+                {row.canManage !== false ? <div className="mt-2 flex flex-wrap gap-1 border-t pt-2" style={{ borderColor: "var(--border)" }}>
                   <button className="chat-action" onClick={() => renameConversation(row)}>✎ تسمية</button>
                   {!archivedMode ? <button className="chat-action" onClick={() => void pinConversation(row)}>{row.pinnedAt ? "☆ إلغاء التثبيت" : "★ تثبيت"}</button> : null}
                   {archivedMode
                     ? <button className="chat-action" onClick={() => void restoreConversation(row)}>↺ استعادة</button>
                     : <button className="chat-action" onClick={() => void archiveConversation(row)}>▣ أرشفة</button>}
                   <button className="chat-action chat-action-danger" onClick={() => void deleteConversation(row)}>⌫ حذف ناعم</button>
-                </div>
+                </div> : <p className="mt-2 border-t pt-2 text-[11px] text-[var(--text-secondary)]" style={{ borderColor: "var(--border)" }}>مشاركة للقراءة أو الكتابة دون إدارة.</p>}
               </article>)}
             </div>
           </section>)}
@@ -689,10 +725,16 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
         <div className="chat-header relative border-b p-4 sm:p-5" style={{ borderColor: "var(--border)" }}>
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-3"><span className="brand-mark !mb-0 !h-10 !w-10">AI</span><div className="min-w-0"><h2 className="truncate font-black">{activeConversation?.title || "دردشة الوكيل"}</h2><p className="mt-1 truncate text-xs" style={{ color: "var(--text-secondary)" }}>{activeConversation?.agentName ? `الوكيل: ${activeConversation.agentName}` : "اختر محادثة أو أنشئ واحدة"} — بث مباشر وحفظ تلقائي</p></div></div>
-            <button type="button" className="appearance-trigger" onClick={() => setAppearanceOpen((value) => !value)} aria-expanded={appearanceOpen} aria-controls="chat-appearance-panel">
-              <Palette size={18} aria-hidden="true" />
-              <span className="hidden sm:inline">مظهر المحادثة</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button type="button" className="appearance-trigger" disabled={!conversationId} onClick={() => setMembersOpen(true)} aria-label="إدارة أعضاء المحادثة">
+                <Users size={18} aria-hidden="true" />
+                <span className="hidden sm:inline">الأعضاء</span>
+              </button>
+              <button type="button" className="appearance-trigger" onClick={() => setAppearanceOpen((value) => !value)} aria-expanded={appearanceOpen} aria-controls="chat-appearance-panel">
+                <Palette size={18} aria-hidden="true" />
+                <span className="hidden sm:inline">المظهر</span>
+              </button>
+            </div>
           </div>
           {appearanceOpen ? (
             <section id="chat-appearance-panel" className="chat-appearance-panel" aria-label="اختيار مظهر المحادثة">
@@ -731,7 +773,11 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
               marginLeft: message.role === "user" ? "auto" : undefined,
               marginRight: message.role === "assistant" ? "auto" : undefined,
             }}>
-              <p className="whitespace-pre-wrap">{message.content || (message.status === "streaming" || message.status === "sending" ? "…" : "")}</p>
+              <div className="mb-2 flex items-center gap-2 text-[11px] font-bold text-[var(--text-secondary)]">
+                <span>{message.role === "assistant" ? activeConversation?.agentName ?? "الوكيل" : message.authorUserId === currentUser.id ? "أنت" : message.authorName || message.authorEmail || "عضو"}</span>
+                {message.role === "assistant" ? <span aria-hidden="true">✦</span> : null}
+              </div>
+              <MessageContent content={message.content} pending={message.status === "streaming" || message.status === "sending"} />
               {message.status && message.status !== "completed" ? <p className="mt-2 rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] px-2 py-1 text-xs" role={message.status === "failed" || message.status === "interrupted" ? "alert" : "status"}>
                 {message.status === "sending" ? "جارٍ الإرسال"
                   : message.status === "streaming" ? "جارٍ البث"
@@ -757,8 +803,8 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
               <div className="mt-2 flex items-center gap-3 text-[11px]" style={{ color: "var(--text-secondary)" }}>
                 <time>{new Date(message.createdAt).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" })}</time>
                 {message.content ? <button type="button" onClick={() => navigator.clipboard.writeText(message.content)}>نسخ</button> : null}
-                {message.role === "user" && !message.id.startsWith("local-") ? <button type="button" onClick={() => mutateMessage(message, "edit")}>تعديل وإعادة توليد</button> : null}
-                {!message.id.startsWith("stream-") && !message.id.startsWith("local-") ? <button type="button" onClick={() => mutateMessage(message, "delete")}>حذف</button> : null}
+                {message.role === "user" && (message.authorUserId === currentUser.id || activeConversation?.canManage) && !message.id.startsWith("local-") ? <button type="button" onClick={() => mutateMessage(message, "edit")}>تعديل وإعادة توليد</button> : null}
+                {(message.authorUserId === currentUser.id || activeConversation?.canManage) && !message.id.startsWith("stream-") && !message.id.startsWith("local-") ? <button type="button" onClick={() => mutateMessage(message, "delete")}>حذف</button> : null}
                 {message.model ? <span>{message.model}</span> : null}
                 {message.latencyMs !== null && message.latencyMs !== undefined ? <span>{message.latencyMs}ms</span> : null}
                 {message.inputTokens !== null && message.inputTokens !== undefined ? <span>دخل: {message.inputTokens}</span> : null}
@@ -770,22 +816,27 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
         </div>
         <form onSubmit={send} className="chat-composer border-t p-4" style={{ borderColor: "var(--border)" }}>
           <textarea
+            ref={composerRef}
             name="message"
             required
             maxLength={30000}
             rows={3}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
+            aria-describedby="chat-composer-help"
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 event.currentTarget.form?.requestSubmit();
               }
             }}
-            disabled={!conversationId || loading}
-            placeholder="اكتب طلبك… Enter للإرسال وShift+Enter لسطر جديد"
-            className="form-control w-full resize-none"
+            disabled={!conversationId || activeConversation?.canWrite === false || loading}
+            placeholder={activeConversation?.canWrite === false ? "هذه المحادثة للقراءة فقط" : "اكتب طلبك… Enter للإرسال وShift+Enter لسطر جديد"}
+            className="form-control w-full resize-none overflow-y-auto"
           />
+          <p id="chat-composer-help" className="mt-2 text-[11px]" style={{ color: "var(--text-secondary)" }}>
+            {activeConversation?.canWrite === false ? "لديك صلاحية قراءة فقط في هذه المحادثة." : "تُحفظ المسودة في قاعدة البيانات داخل مساحة العمل الحالية، ولا تُخزن في المتصفح."}
+          </p>
           {attachments.length > 0 ? (
             <div className="mt-3 flex flex-wrap gap-2">
               {attachments.map((file) => (
@@ -833,19 +884,35 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
                 <button type="button" className="secondary-button px-3 py-2 text-xs" disabled={puterModelsLoading} onClick={() => void connectPuter(true)}>
                   {puterModelsLoading ? <Loader2 className="animate-spin" size={14} /> : <Cloud size={14} />} {puterConnected ? "تحديث Puter" : "الاتصال بـPuter"}
                 </button>
-              </> :               <select className="form-control max-w-72 text-sm" value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} aria-label="النموذج">
-                <option value="auto">اختيار تلقائي حسب القدرات</option>
-                {models.map((item) => <option key={`${item.providerCredentialId}:${item.model}`} value={`${item.providerCredentialId}:${item.model}`}>
-                  {item.providerName} — {item.model}{item.freeTierEligible ? " (مجاني)" : ""}
-                </option>)}
-              </select>}
+              </> : <div className="grid min-w-0 gap-2">
+                <select className="form-control max-w-80 text-sm" value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} aria-label="النموذج">
+                  <option value="auto">اختيار تلقائي حسب القدرات</option>
+                  {models.map((item) => <option key={`${item.providerCredentialId}:${item.model}`} value={`${item.providerCredentialId}:${item.model}`}>
+                    {item.providerName} — {item.model}{item.freeTierEligible ? " (مجاني)" : ""}
+                  </option>)}
+                </select>
+                {selectedModelInfo ? <div className="flex flex-wrap items-center gap-2 text-[11px]" style={{ color: "var(--text-secondary)" }}>
+                  <span className="status-badge status-success">متاح</span>
+                  {selectedModelInfo.capabilities?.vision ? <span className="inline-flex items-center gap-1"><Eye size={12} /> Vision</span> : null}
+                  {selectedModelInfo.capabilities?.files ? <span className="inline-flex items-center gap-1"><FileText size={12} /> ملفات</span> : null}
+                  {selectedModelInfo.capabilities?.tools ? <span className="inline-flex items-center gap-1"><Wrench size={12} /> أدوات</span> : null}
+                  {selectedModelInfo.latencyMs ? <span>{selectedModelInfo.latencyMs}ms</span> : null}
+                </div> : null}
+              </div>}
+              {executionMode === "server" && (ragEnabled || memoryEnabled) ? <div className="chat-advanced-control">
+                <button type="button" className="secondary-button text-sm" onClick={() => setAdvancedOpen((value) => !value)} aria-expanded={advancedOpen} aria-controls="chat-advanced-context">السياق المتقدم</button>
+                {advancedOpen ? <section id="chat-advanced-context" className="chat-advanced-popover" aria-label="خيارات السياق">
+                  {ragEnabled ? <label><span>قاعدة المعرفة</span><select className="form-control" value={knowledgeBaseId} onChange={(event) => setKnowledgeBaseId(event.target.value)}><option value="">بدون قاعدة معرفة</option>{knowledgeBases.map((base) => <option key={base.id} value={base.id}>{base.name}</option>)}</select></label> : null}
+                  {memoryEnabled ? <label className="chat-memory-option"><input type="checkbox" checked={useMemory} onChange={(event) => setUseMemory(event.target.checked)} /><span><b>استخدام ذاكرة الوكيل</b><small>يسترجع الخادم الذكريات المسموح بها لهذا المستخدم والوكيل فقط.</small></span></label> : null}
+                </section> : null}
+              </div> : null}
               <label className={`secondary-button text-sm ${executionMode === "puter" ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}>
                 {uploading ? "جارٍ الرفع…" : "إرفاق ملفات"}
                 <input
                   type="file"
                   multiple
                   className="sr-only"
-                  disabled={!conversationId || loading || uploading || attachments.length >= 8 || executionMode === "puter"}
+                  disabled={!conversationId || activeConversation?.canWrite === false || loading || uploading || attachments.length >= 8 || executionMode === "puter"}
                   accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.docx,.txt,.md,.csv,.json,.xlsx,.pptx,.mp3,.wav,.ogg,.m4a,.mp4,.webm,.mov,.zip,.rar,.7z"
                   onChange={(event) => {
                     uploadFiles(event.target.files);
@@ -860,11 +927,12 @@ export function ChatConsole({ agents, initialConversations, initialConversationI
             {loading ? (
               <button type="button" onClick={stop} className="danger-button">إيقاف التوليد</button>
             ) : (
-              <button disabled={!conversationId || uploading || (executionMode === "puter" && (!puterModel || !puterConnected))} className="primary-button disabled:opacity-50">إرسال</button>
+              <button disabled={!conversationId || activeConversation?.canWrite === false || uploading || (executionMode === "puter" && (!puterModel || !puterConnected))} className="primary-button disabled:opacity-50">إرسال</button>
             )}
           </div>
         </form>
       </section>
+      {conversationId ? <ConversationMembersPanel conversationId={conversationId} open={membersOpen} onClose={closeMembers} /> : null}
       {privacyOpen ? <div className="fixed inset-0 z-[80] grid place-items-center bg-slate-950/70 p-4" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setPrivacyOpen(false); }}>
         <section className="modal-card max-w-lg" role="dialog" aria-modal="true" aria-labelledby="puter-privacy-title">
           <h2 id="puter-privacy-title" className="text-xl font-extrabold">قبل استخدام Puter</h2>

@@ -19,6 +19,7 @@ export const runStatus = pgEnum("run_status", ["queued", "running", "waiting_app
 export const providerKind = pgEnum("provider_kind", ["openai", "anthropic", "gemini", "openai_compatible"]);
 export const providerValidationStatus = pgEnum("provider_validation_status", ["pending", "verified", "failed"]);
 export const messageRole = pgEnum("message_role", ["user", "assistant"]);
+export const conversationMemberRole = pgEnum("conversation_member_role", ["reader", "writer", "manager"]);
 export const integrationKind = pgEnum("integration_kind", ["telegram", "github"]);
 export const integrationStatus = pgEnum("integration_status", ["pending", "verified", "failed"]);
 export const attachmentSource = pgEnum("attachment_source", ["web", "api", "telegram"]);
@@ -227,10 +228,40 @@ export const conversations = pgTable("conversations", {
   index("conversations_agent_idx").on(table.agentId),
 ]);
 
+export const conversationMembers = pgTable("conversation_members", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  conversationId: uuid("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  role: conversationMemberRole("role").notNull().default("reader"),
+  addedByUserId: uuid("added_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("conversation_members_conversation_user_unique_idx").on(table.conversationId, table.userId),
+  index("conversation_members_org_user_idx").on(table.organizationId, table.userId),
+  index("conversation_members_conversation_role_idx").on(table.conversationId, table.role),
+]);
+
+export const conversationDrafts = pgTable("conversation_drafts", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  conversationId: uuid("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  content: text("content").notNull().default(""),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("conversation_drafts_conversation_user_unique_idx").on(table.conversationId, table.userId),
+  index("conversation_drafts_org_user_updated_idx").on(table.organizationId, table.userId, table.updatedAt),
+]);
+
 export const messages = pgTable("messages", {
   id: uuid("id").defaultRandom().primaryKey(),
   conversationId: uuid("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
   role: messageRole("role").notNull(),
+  authorUserId: uuid("author_user_id").references(() => users.id, { onDelete: "set null" }),
   content: text("content").notNull(),
   contentParts: jsonb("content_parts").$type<Array<Record<string, unknown>>>().notNull().default([]),
   status: text("status").notNull().default("completed"),
@@ -248,7 +279,10 @@ export const messages = pgTable("messages", {
   editedAt: timestamp("edited_at", { withTimezone: true }),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-}, (table) => [index("messages_conversation_created_idx").on(table.conversationId, table.createdAt)]);
+}, (table) => [
+  index("messages_conversation_created_idx").on(table.conversationId, table.createdAt),
+  index("messages_author_user_idx").on(table.authorUserId, table.createdAt),
+]);
 
 export const runs = pgTable("runs", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -366,6 +400,56 @@ export const telegramUpdates = pgTable("telegram_updates", {
 }, (table) => [
   uniqueIndex("telegram_updates_integration_update_unique_idx").on(table.integrationId, table.updateId),
   index("telegram_updates_received_idx").on(table.receivedAt),
+]);
+
+
+export const whatsappConnections = pgTable("whatsapp_connections", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  organizationId: uuid("organization_id").references(() => organizations.id, { onDelete: "set null" }),
+  whatsappWaId: text("whatsapp_wa_id"),
+  whatsappPhoneNumberMasked: text("whatsapp_phone_number_masked"),
+  connectionStatus: text("connection_status").notNull().default("disconnected"),
+  connectedAt: timestamp("connected_at", { withTimezone: true }),
+  disconnectedAt: timestamp("disconnected_at", { withTimezone: true }),
+  lastInteractionAt: timestamp("last_interaction_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("whatsapp_connections_user_unique_idx").on(table.userId),
+  uniqueIndex("whatsapp_connections_wa_id_unique_idx").on(table.whatsappWaId)
+    .where(sql`${table.whatsappWaId} IS NOT NULL`),
+  index("whatsapp_connections_status_idx").on(table.connectionStatus, table.updatedAt),
+]);
+
+export const whatsappLinkTokens = pgTable("whatsapp_link_tokens", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  tokenHash: text("token_hash").notNull().unique(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  usedAt: timestamp("used_at", { withTimezone: true }),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("whatsapp_link_tokens_user_created_idx").on(table.userId, table.createdAt),
+  index("whatsapp_link_tokens_expires_idx").on(table.expiresAt),
+  index("whatsapp_link_tokens_active_user_idx").on(table.userId, table.createdAt)
+    .where(sql`${table.usedAt} IS NULL AND ${table.revokedAt} IS NULL`),
+]);
+
+export const whatsappWebhookEvents = pgTable("whatsapp_webhook_events", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  messageId: text("message_id").notNull().unique(),
+  phoneNumberId: text("phone_number_id"),
+  eventType: text("event_type").notNull(),
+  status: text("status").notNull().default("accepted"),
+  errorCode: text("error_code"),
+  receivedAt: timestamp("received_at", { withTimezone: true }).defaultNow().notNull(),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+}, (table) => [
+  index("whatsapp_webhook_events_received_idx").on(table.receivedAt),
+  index("whatsapp_webhook_events_status_idx").on(table.status, table.receivedAt),
 ]);
 
 export const attachments = pgTable("attachments", {

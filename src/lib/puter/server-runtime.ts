@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { agentVersions, agents, auditLogs, conversations, messages } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
 import type { Role } from "@/lib/auth/authorization";
+import { conversationAccessFilter } from "@/lib/chat/access";
 
 const PUTER_PROVIDER = "puter" as const;
 type ExecutionStatus = "running" | "completed" | "failed" | "cancelled";
@@ -31,7 +32,7 @@ function ownedConversationWhere(input: { organizationId: string; userId: string;
   return and(
     eq(conversations.id, input.conversationId),
     eq(conversations.organizationId, input.organizationId),
-    input.role === "member" ? eq(conversations.createdByUserId, input.userId) : undefined,
+    conversationAccessFilter({ role: input.role, userId: input.userId, access: "write" }),
     isNull(conversations.deletedAt),
     isNull(conversations.archivedAt),
   );
@@ -80,6 +81,7 @@ export async function startPuterChat(input: {
     const [created] = await tx.insert(messages).values({
       conversationId: input.conversationId,
       role: "user",
+      authorUserId: input.userId,
       content: input.message,
       clientRequestId: input.clientRequestId,
       providerCredentialId: null,
@@ -89,6 +91,7 @@ export async function startPuterChat(input: {
     }).returning({
       id: messages.id,
       role: messages.role,
+      authorUserId: messages.authorUserId,
       content: messages.content,
       metadata: messages.metadata,
       model: messages.model,

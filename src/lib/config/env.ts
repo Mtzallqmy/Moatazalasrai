@@ -9,6 +9,18 @@ type RuntimeEnvironment = {
   credentialEncryptionPreviousKeys: Readonly<Record<string, string>>;
   bootstrapAdminToken?: string;
   appUrl?: string;
+  publicAppUrl?: string;
+  whatsappIntegrationEnabled: boolean;
+  metaAppId?: string;
+  metaAppSecret?: string;
+  metaGraphApiVersion?: string;
+  whatsappAccessToken?: string;
+  whatsappPhoneNumberId?: string;
+  whatsappBusinessAccountId?: string;
+  whatsappDisplayPhoneNumber?: string;
+  whatsappWebhookVerifyToken?: string;
+  whatsappConnectTokenSecret?: string;
+  whatsappConnectTokenTtlMinutes: number;
   logLevel: LogLevel;
   browserAgentEnabled: boolean;
   googleOauthIntegrationsEnabled: boolean;
@@ -125,6 +137,32 @@ function serviceUrl(name: string, nodeEnv: NodeEnvironment): string | undefined 
   return url.toString().replace(/\/$/, "");
 }
 
+
+function requireFeatureValue(enabled: boolean, name: string) {
+  const value = optional(name);
+  if (enabled && !value) throw new Error(`${name} is required when WHATSAPP_INTEGRATION_ENABLED is true.`);
+  return value;
+}
+
+function numericIdentifier(name: string, value: string | undefined) {
+  if (!value) return undefined;
+  if (!/^\d{5,30}$/.test(value)) throw new Error(`${name} must contain digits only.`);
+  return value;
+}
+
+function graphApiVersion(value: string | undefined) {
+  if (!value) return undefined;
+  if (!/^v\d{1,3}\.\d{1,2}$/.test(value)) throw new Error("META_GRAPH_API_VERSION must look like v23.0.");
+  return value;
+}
+
+function displayPhoneNumber(value: string | undefined) {
+  if (!value) return undefined;
+  const normalized = value.replace(/\D/g, "");
+  if (!/^\d{8,20}$/.test(normalized)) throw new Error("WHATSAPP_DISPLAY_PHONE_NUMBER is invalid.");
+  return normalized;
+}
+
 export function env(): RuntimeEnvironment {
   if (cached) return cached;
 
@@ -135,6 +173,38 @@ export function env(): RuntimeEnvironment {
   }
   if (nodeEnv === "production" && appUrl && !appUrl.startsWith("https://")) {
     throw new Error("APP_URL must use HTTPS in production.");
+  }
+  const publicAppUrl = serviceUrl("PUBLIC_APP_URL", nodeEnv) ?? appUrl;
+  const whatsappIntegrationEnabled = booleanEnv("WHATSAPP_INTEGRATION_ENABLED");
+  const metaAppId = numericIdentifier("META_APP_ID", requireFeatureValue(whatsappIntegrationEnabled, "META_APP_ID"));
+  const metaAppSecret = requireFeatureValue(whatsappIntegrationEnabled, "META_APP_SECRET");
+  const metaGraphApiVersion = graphApiVersion(requireFeatureValue(whatsappIntegrationEnabled, "META_GRAPH_API_VERSION"));
+  const whatsappAccessToken = requireFeatureValue(whatsappIntegrationEnabled, "WHATSAPP_ACCESS_TOKEN");
+  const whatsappPhoneNumberId = numericIdentifier(
+    "WHATSAPP_PHONE_NUMBER_ID",
+    requireFeatureValue(whatsappIntegrationEnabled, "WHATSAPP_PHONE_NUMBER_ID"),
+  );
+  const whatsappBusinessAccountId = numericIdentifier(
+    "WHATSAPP_BUSINESS_ACCOUNT_ID",
+    requireFeatureValue(whatsappIntegrationEnabled, "WHATSAPP_BUSINESS_ACCOUNT_ID"),
+  );
+  const whatsappDisplayPhoneNumber = displayPhoneNumber(
+    requireFeatureValue(whatsappIntegrationEnabled, "WHATSAPP_DISPLAY_PHONE_NUMBER"),
+  );
+  const whatsappWebhookVerifyToken = requireFeatureValue(whatsappIntegrationEnabled, "WHATSAPP_WEBHOOK_VERIFY_TOKEN");
+  const whatsappConnectTokenSecret = requireFeatureValue(whatsappIntegrationEnabled, "WHATSAPP_CONNECT_TOKEN_SECRET");
+  const whatsappConnectTokenTtlMinutes = integerEnv("WHATSAPP_CONNECT_TOKEN_TTL_MINUTES", 10, 5, 60);
+
+  if (whatsappIntegrationEnabled && !publicAppUrl) {
+    throw new Error("PUBLIC_APP_URL or APP_URL is required when WHATSAPP_INTEGRATION_ENABLED is true.");
+  }
+  if (metaAppSecret && metaAppSecret.length < 16) throw new Error("META_APP_SECRET is too short.");
+  if (whatsappAccessToken && whatsappAccessToken.length < 20) throw new Error("WHATSAPP_ACCESS_TOKEN is too short.");
+  if (whatsappWebhookVerifyToken && whatsappWebhookVerifyToken.length < 16) {
+    throw new Error("WHATSAPP_WEBHOOK_VERIFY_TOKEN must contain at least 16 characters.");
+  }
+  if (whatsappConnectTokenSecret && whatsappConnectTokenSecret.length < 32) {
+    throw new Error("WHATSAPP_CONNECT_TOKEN_SECRET must contain at least 32 characters.");
   }
 
   const browserAgentEnabled = booleanEnv("BROWSER_AGENT_ENABLED");
@@ -182,6 +252,8 @@ export function env(): RuntimeEnvironment {
     credentialEncryptionKey: validateEncryptionKey(required("CREDENTIAL_ENCRYPTION_KEY")),
     credentialEncryptionKeyId: encryptionKeyId(process.env.CREDENTIAL_ENCRYPTION_KEY_ID),
     credentialEncryptionPreviousKeys: previousEncryptionKeys(process.env.CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS),
+    whatsappIntegrationEnabled,
+    whatsappConnectTokenTtlMinutes,
     logLevel: parseLogLevel(process.env.LOG_LEVEL),
     browserAgentEnabled,
     googleOauthIntegrationsEnabled,
@@ -205,6 +277,16 @@ export function env(): RuntimeEnvironment {
   const bootstrapAdminToken = optional("BOOTSTRAP_ADMIN_TOKEN");
   if (bootstrapAdminToken) config.bootstrapAdminToken = bootstrapAdminToken;
   if (appUrl) config.appUrl = appUrl;
+  if (publicAppUrl) config.publicAppUrl = publicAppUrl;
+  if (metaAppId) config.metaAppId = metaAppId;
+  if (metaAppSecret) config.metaAppSecret = metaAppSecret;
+  if (metaGraphApiVersion) config.metaGraphApiVersion = metaGraphApiVersion;
+  if (whatsappAccessToken) config.whatsappAccessToken = whatsappAccessToken;
+  if (whatsappPhoneNumberId) config.whatsappPhoneNumberId = whatsappPhoneNumberId;
+  if (whatsappBusinessAccountId) config.whatsappBusinessAccountId = whatsappBusinessAccountId;
+  if (whatsappDisplayPhoneNumber) config.whatsappDisplayPhoneNumber = whatsappDisplayPhoneNumber;
+  if (whatsappWebhookVerifyToken) config.whatsappWebhookVerifyToken = whatsappWebhookVerifyToken;
+  if (whatsappConnectTokenSecret) config.whatsappConnectTokenSecret = whatsappConnectTokenSecret;
   if (browserRunnerUrl) config.browserRunnerUrl = browserRunnerUrl;
   if (browserRunnerSharedSecret) config.browserRunnerSharedSecret = browserRunnerSharedSecret;
   if (sandboxRunnerUrl) config.sandboxRunnerUrl = sandboxRunnerUrl;
