@@ -138,7 +138,7 @@ export async function completeMfaEnrollment(userId: string, code: string) {
     const codes = Array.from({ length: RECOVERY_CODE_COUNT }, recoveryCode);
     await tx.update(userTotpFactors).set({
       verifiedAt: new Date(),
-      lastUsedCounter: String(counter),
+      lastUsedCounter: counter,
       updatedAt: new Date(),
     }).where(eq(userTotpFactors.userId, userId));
     await tx.delete(userMfaRecoveryCodes).where(eq(userMfaRecoveryCodes.userId, userId));
@@ -169,11 +169,15 @@ export async function verifyUserMfaCode(userId: string, suppliedCode: string) {
         throw new ApiError(403, "MFA_ENROLLMENT_REQUIRED", "فعّل التحقق الثنائي قبل متابعة العملية.");
       }
       const secret = decryptSecret(factor.encryptedSecret, factorContext(userId));
-      const lastUsedCounter = factor.lastUsedCounter === null ? null : Number(factor.lastUsedCounter);
-      const counter = verifyTotpCode({ secret, code: normalized, lastUsedCounter, window: 1 });
+      const counter = verifyTotpCode({
+        secret,
+        code: normalized,
+        lastUsedCounter: factor.lastUsedCounter,
+        window: 1,
+      });
       if (counter === null) throw new ApiError(401, "MFA_CODE_INVALID", "رمز التحقق الثنائي غير صالح أو استُخدم سابقًا.");
       await tx.update(userTotpFactors).set({
-        lastUsedCounter: String(counter),
+        lastUsedCounter: counter,
         updatedAt: new Date(),
       }).where(eq(userTotpFactors.userId, userId));
       return { method: "totp" as const };
