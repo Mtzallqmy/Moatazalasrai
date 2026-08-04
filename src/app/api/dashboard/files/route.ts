@@ -6,7 +6,9 @@ import { can, requireSession } from "@/lib/auth/authorization";
 import { requireConversationAccess } from "@/lib/chat/access";
 import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { paginationSchema, uuidSchema } from "@/lib/http/contracts";
-import { deleteAttachmentContent, readAttachmentContent, storeAttachment, MAX_ATTACHMENT_BYTES } from "@/lib/storage/attachments";
+import { createAttachmentDownloadUrl } from "@/lib/storage/attachment-signing";
+import { deleteAttachmentContent, storeAttachment, MAX_ATTACHMENT_BYTES } from "@/lib/storage/attachments";
+import { enforceRateLimit } from "@/lib/security/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -38,16 +40,22 @@ export async function GET(request: Request) {
           includeArchived: true,
         });
       }
-      const content = await readAttachmentContent(file);
+      if (file.processingStatus !== "ready") {
+        throw new ApiError(423, "ATTACHMENT_QUARANTINED", "الملف غير متاح حتى يكتمل الفحص الأمني.");
+      }
       const preview = url.searchParams.get("preview") === "true"
         && (file.mimeType.startsWith("image/") || file.mimeType === "application/pdf");
-      return new Response(new Uint8Array(Buffer.from(content)), {
+      const signed = createAttachmentDownloadUrl({
+        origin: url.origin,
+        attachmentId: file.id,
+        organizationId: session.organizationId,
+        disposition: preview ? "inline" : "attachment",
+      });
+      return new Response(null, {
+        status: 307,
         headers: {
-          "content-type": file.mimeType,
-          "content-length": String(file.sizeBytes),
-          "content-disposition": `${preview ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
+          location: signed.url,
           "cache-control": "private, no-store",
-          "x-content-type-options": "nosniff",
           "x-request-id": requestId,
         },
       });
@@ -171,6 +179,12 @@ export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const session = await requireSession("files:upload");
+    await enforceRateLimit({
+      scope: "dashboard.files.upload",
+      key: `${session.organizationId}:${session.userId}`,
+      limit: 30,
+      windowMs: 60_000,
+    });
     const contentLength = Number(request.headers.get("content-length") ?? 0);
     if (contentLength > MAX_ATTACHMENT_BYTES + 1024 * 1024) throw new ApiError(413, "PAYLOAD_TOO_LARGE", "حجم الطلب أكبر من الحد.");
     const form = await request.formData();
@@ -196,7 +210,7 @@ export async function POST(request: Request) {
       mimeType: file.type || "application/octet-stream",
       content: Buffer.from(await file.arrayBuffer()),
     });
-    return apiSuccess(created, requestId, 201);
+    return apiSuccess(created, requestId, 202);
   } catch (error) {
     return handleApiError(error, requestId, "/api/dashboard/files");
   }
