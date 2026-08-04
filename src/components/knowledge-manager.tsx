@@ -72,8 +72,11 @@ export function KnowledgeManager({
 
   useEffect(() => {
     const controller = new AbortController();
-    void loadDocuments(controller.signal);
-    return () => controller.abort();
+    const timer = window.setTimeout(() => void loadDocuments(controller.signal), 0);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, enabled]);
 
