@@ -109,6 +109,7 @@ export const mobileSessions = pgTable("mobile_sessions", {
   accessTokenHash: text("access_token_hash").notNull().unique(),
   accessExpiresAt: timestamp("access_expires_at", { withTimezone: true }).notNull(),
   refreshTokenHash: text("refresh_token_hash").notNull().unique(),
+  previousRefreshTokenHash: text("previous_refresh_token_hash"),
   refreshExpiresAt: timestamp("refresh_expires_at", { withTimezone: true }).notNull(),
   deviceId: text("device_id").notNull(),
   deviceName: text("device_name"),
@@ -120,6 +121,7 @@ export const mobileSessions = pgTable("mobile_sessions", {
   uniqueIndex("mobile_sessions_user_device_idx").on(table.userId, table.deviceId),
   index("mobile_sessions_access_expiry_idx").on(table.accessExpiresAt),
   index("mobile_sessions_refresh_expiry_idx").on(table.refreshExpiresAt),
+  uniqueIndex("mobile_sessions_previous_refresh_hash_idx").on(table.previousRefreshTokenHash),
 ]);
 
 export const providerCredentials = pgTable("provider_credentials", {
