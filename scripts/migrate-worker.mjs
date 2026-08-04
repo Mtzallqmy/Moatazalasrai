@@ -5,9 +5,14 @@ const { Pool } = pg;
 const connectionString = process.env.DATABASE_URL?.trim();
 if (!connectionString) throw new Error("DATABASE_URL is required to migrate Graphile Worker.");
 
+function reportPoolError(event, error) {
+  process.stderr.write(`${JSON.stringify({ level: "error", event, errorName: error.name })}\n`);
+}
+
 const pool = new Pool({ connectionString, max: 1, connectionTimeoutMillis: 10_000 });
-pool.on("error", (error) => {
-  process.stderr.write(`${JSON.stringify({ level: "error", event: "graphile.migration.pool_error", errorName: error.name })}\n`);
+pool.on("error", (error) => reportPoolError("graphile.migration.pool_error", error));
+pool.on("connect", (client) => {
+  client.on("error", (error) => reportPoolError("graphile.migration.client_error", error));
 });
 
 try {
