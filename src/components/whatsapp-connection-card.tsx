@@ -1,9 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Status = {
   enabled: boolean;
+  configured?: boolean;
   connected: boolean;
   connectedAt: string | null;
   lastInteractionAt?: string | null;
@@ -21,7 +23,7 @@ function apiMessage(payload: Api<unknown> | null, fallback: string) {
   return `${payload?.error?.message ?? fallback}${requestId}`;
 }
 
-export function WhatsAppConnectionCard() {
+export function WhatsAppConnectionCard({ canManagePlatform = false }: { canManagePlatform?: boolean }) {
   const [status, setStatus] = useState<Status | null>(null);
   const [busy, setBusy] = useState<"connect" | "disconnect" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -136,7 +138,7 @@ export function WhatsAppConnectionCard() {
           </p>
         </div>
         <span className={`rounded-full px-3 py-1 text-xs ${status?.connected ? "bg-emerald-100/15 text-emerald-100" : "bg-stone-100/10 text-stone-300"}`}>
-          {status === null ? "جارٍ الفحص" : !status.enabled ? "غير مفعّل" : status.connected ? "مرتبط" : "غير مرتبط"}
+          {status === null ? "جارٍ الفحص" : !status.enabled ? status.configured ? "جاهز للتفعيل" : "يحتاج إعداد" : status.connected ? "مرتبط" : "جاهز للربط"}
         </span>
       </div>
 
@@ -144,6 +146,14 @@ export function WhatsAppConnectionCard() {
         <div className="mt-4 grid gap-1 text-sm text-stone-300">
           <p>الرقم: <span dir="ltr" className="font-latin">{status.phoneNumberMasked ?? "••••••"}</span></p>
           <p>تاريخ الربط: {status.connectedAt ? new Date(status.connectedAt).toLocaleString("ar") : "غير متاح"}</p>
+        </div>
+      ) : null}
+
+      {status && !status.enabled ? (
+        <div className="mt-4 rounded-2xl border border-amber-300/20 bg-amber-200/10 p-4 text-sm leading-7 text-amber-100">
+          {canManagePlatform ? (
+            <p>يلزم إدخال بيانات Meta الفعلية واجتياز اختبار الاتصال. <Link className="font-bold underline" href="/dashboard/diagnostics#runtime-control">فتح مركز تشغيل المنصة</Link>.</p>
+          ) : <p>ميزة WhatsApp لم يفعّلها مدير المنصة بعد. اطلب من المالك أو المدير إكمال إعداد Meta.</p>}
         </div>
       ) : null}
 
