@@ -32,7 +32,7 @@ afterEach(() => {
   for (const key of managed) {
     const value = original.get(key);
     if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
+    else Reflect.set(process.env, key, value);
   }
   original.clear();
   resetEnvForTests();
@@ -69,8 +69,8 @@ describe("central Telegram platform configuration", () => {
   });
 
   it("rejects non-HTTPS production URLs", () => {
-    process.env.NODE_ENV = "production";
-    process.env.APP_URL = "http://app.example";
+    Reflect.set(process.env, "NODE_ENV", "production");
+    Reflect.set(process.env, "APP_URL", "http://app.example");
     expect(() => telegramPlatformConfig()).toThrow(/HTTPS/);
   });
 
