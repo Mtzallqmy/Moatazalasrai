@@ -1,10 +1,14 @@
+// WhatsApp webhook verifies Meta signatures, preserves account-link commands, and delegates channel traffic.
 import { after } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { whatsappWebhookEvents } from "@/db/schema";
+import { channelConnectionForWebhook } from "@/lib/channels/connections";
+import { whatsappChannelAdapter } from "@/lib/channels/whatsapp-adapter";
+import { routeIncomingChannelMessage } from "@/lib/channels/router";
 import { apiFailure, apiSuccess, getRequestId, handleApiError } from "@/lib/http/api";
 import { requireWhatsAppConfig } from "@/lib/integrations/whatsapp/config";
-import { processWhatsAppMessage } from "@/lib/integrations/whatsapp/commands";
+import { parseWhatsAppCommand, processWhatsAppMessage } from "@/lib/integrations/whatsapp/commands";
 import { secureStringEquals, verifyMetaWebhookSignature } from "@/lib/integrations/whatsapp/crypto";
 import { extractWhatsAppMessages, type WhatsAppIncomingMessage } from "@/lib/integrations/whatsapp/webhook";
 import { hydrateRuntimeForRequest } from "@/lib/platform/runtime-hydration";
@@ -18,15 +22,8 @@ function databaseCode(error: unknown) {
   return typeof error === "object" && error && "code" in error ? String(error.code) : "";
 }
 
-async function processAcceptedEvent(eventId: string, message: WhatsAppIncomingMessage) {
+async function processLegacyEvent(eventId: string, message: WhatsAppIncomingMessage) {
   try {
-    if (message.type !== "text" && message.type !== "interactive") {
-      await db().update(whatsappWebhookEvents).set({
-        status: "ignored",
-        completedAt: new Date(),
-      }).where(eq(whatsappWebhookEvents.id, eventId));
-      return;
-    }
     await processWhatsAppMessage(message);
     await db().update(whatsappWebhookEvents).set({
       status: "completed",
@@ -45,7 +42,7 @@ async function processAcceptedEvent(eventId: string, message: WhatsAppIncomingMe
     }).where(eq(whatsappWebhookEvents.id, eventId));
     console.error(JSON.stringify({
       level: "error",
-      event: "whatsapp.webhook.processing_failed",
+      event: "whatsapp.webhook.legacy_processing_failed",
       eventId,
       errorCode,
     }));
@@ -93,8 +90,10 @@ export async function POST(request: Request) {
     try { payload = JSON.parse(rawBody); } catch {
       return apiFailure(400, "INVALID_JSON", "صيغة Webhook غير صالحة.", requestId);
     }
+
     const extracted = extractWhatsAppMessages(payload);
-    const phoneNumberKey = extracted.find((item) => item.phoneNumberId)?.phoneNumberId ?? config.phoneNumberId;
+    const normalized = whatsappChannelAdapter.normalizeIncoming(payload, { externalAccountId: config.phoneNumberId });
+    const phoneNumberKey = normalized.find((item) => item.externalAccountId)?.externalAccountId ?? config.phoneNumberId;
     await enforceRateLimit({
       scope: "whatsapp.webhook.phone",
       key: phoneNumberKey,
@@ -102,32 +101,60 @@ export async function POST(request: Request) {
       windowMs: 60_000,
     });
 
-    const accepted: Array<{ eventId: string; message: WhatsAppIncomingMessage }> = [];
+    const legacyTasks: Array<{ eventId: string; message: WhatsAppIncomingMessage }> = [];
+    const channelTasks: Array<{
+      connection: NonNullable<Awaited<ReturnType<typeof channelConnectionForWebhook>>>;
+      incoming: (typeof normalized)[number];
+    }> = [];
     let duplicates = 0;
+    let unconfigured = 0;
+
     for (const item of extracted) {
-      if (item.phoneNumberId && item.phoneNumberId !== config.phoneNumberId) continue;
+      const parsed = parseWhatsAppCommand(item.message);
+      const legacyCommand = parsed.kind === "connect"
+        || parsed.kind === "account"
+        || parsed.kind === "open_chat"
+        || parsed.kind === "disconnect";
+      if (!legacyCommand) continue;
       try {
         const [event] = await db().insert(whatsappWebhookEvents).values({
           messageId: item.message.id,
           phoneNumberId: item.phoneNumberId ?? config.phoneNumberId,
-          eventType: item.message.type,
+          eventType: `legacy:${parsed.kind}`,
         }).returning({ id: whatsappWebhookEvents.id });
-        if (event) accepted.push({ eventId: event.id, message: item.message });
+        if (event) legacyTasks.push({ eventId: event.id, message: item.message });
       } catch (error) {
-        if (databaseCode(error) === "23505") {
-          duplicates += 1;
-          continue;
-        }
-        throw error;
+        if (databaseCode(error) === "23505") duplicates += 1;
+        else throw error;
       }
     }
 
-    if (accepted.length > 0) {
+    const legacyIds = new Set(legacyTasks.map((task) => task.message.id));
+    for (const incoming of normalized) {
+      if (legacyIds.has(incoming.eventId)) continue;
+      const connection = await channelConnectionForWebhook({
+        kind: "whatsapp",
+        externalAccountId: incoming.externalAccountId || config.phoneNumberId,
+      });
+      if (connection) channelTasks.push({ connection, incoming });
+      else unconfigured += 1;
+    }
+
+    if (legacyTasks.length > 0 || channelTasks.length > 0) {
       after(async () => {
-        await Promise.allSettled(accepted.map((item) => processAcceptedEvent(item.eventId, item.message)));
+        await Promise.allSettled([
+          ...legacyTasks.map((task) => processLegacyEvent(task.eventId, task.message)),
+          ...channelTasks.map((task) => routeIncomingChannelMessage(task)),
+        ]);
       });
     }
-    return apiSuccess({ accepted: true, messages: accepted.length, duplicates }, requestId);
+    return apiSuccess({
+      accepted: true,
+      legacyCommands: legacyTasks.length,
+      channelMessages: channelTasks.length,
+      duplicates,
+      unconfigured,
+    }, requestId);
   } catch (error) {
     return handleApiError(error, requestId, "/api/webhooks/whatsapp");
   }
