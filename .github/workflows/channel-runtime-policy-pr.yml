@@ -1,84 +1,54 @@
-# Temporary same-repository rewrite, restricted to the channel platform branch.
-name: Channel Platform PR Remediation
+name: Apply Channel Platform Remediation
+
 on:
-  pull_request_target:
-    types: [opened, reopened, synchronize, ready_for_review]
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/channel-runtime-policy-pr.yml
+
 permissions:
   contents: write
+
+concurrency:
+  group: apply-channel-platform-remediation
+  cancel-in-progress: false
+
 jobs:
-  rewrite:
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'feat/channel-platform-whatsapp'
+  remediate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Checkout channel branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: feat/channel-platform-whatsapp
           fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
       - name: Apply deterministic remediation
-        shell: bash
+        run: python3 scripts/remediate-channel-platform.py
+
+      - name: Validate patched source
         run: |
-          python3 scripts/remediate-channel-platform.py
-          python3 <<'PY'
-          from pathlib import Path
+          git diff --check
+          npm ci --no-audit --no-fund
+          npm run lint
+          npm run typecheck
 
-          def maybe(path, old, new):
-              file = Path(path)
-              text = file.read_text()
-              if old in text:
-                  file.write_text(text.replace(old, new, 1))
-
-          maybe('src/lib/ai-sdk/runtime.ts',
-            '  runId: string;\n  allocateStep: () => number;\n}) {',
-            '  runId: string;\n  allowedToolIds?: readonly string[] | null;\n  allocateStep: () => number;\n}) {')
-          maybe('src/lib/ai-sdk/runtime.ts',
-            '    runId: input.runId,\n    state,\n  });',
-            '    runId: input.runId,\n    allowedToolIds: input.allowedToolIds,\n    state,\n  });')
-          maybe('src/lib/ai-sdk/runtime.ts',
-            '  resumeMessages?: ModelMessage[];\n  temperature: number;',
-            '  resumeMessages?: ModelMessage[];\n  allowedToolIds?: readonly string[] | null;\n  temperature: number;')
-          maybe('src/lib/ai-sdk/runtime.ts',
-            '  context: ProviderMessage[];\n  temperature: number;',
-            '  context: ProviderMessage[];\n  allowedToolIds?: readonly string[] | null;\n  temperature: number;')
-
-          path = Path('src/lib/agents/runtime.ts')
-          text = path.read_text()
-          text = text.replace('import { and, asc, count, desc, eq, isNull } from "drizzle-orm";', 'import { and, asc, count, desc, eq, inArray, isNull } from "drizzle-orm";')
-          text = text.replace(
-            'async function hasEnabledAgentTools(organizationId: string, agentId: string) {\n  const [row] = await db().select({ value: count() }).from(agentMcpTools)',
-            'async function hasEnabledAgentTools(\n  organizationId: string,\n  agentId: string,\n  allowedToolIds?: readonly string[] | null,\n) {\n  if (allowedToolIds && allowedToolIds.length === 0) return false;\n  const [row] = await db().select({ value: count() }).from(agentMcpTools)')
-          text = text.replace(
-            '      eq(agentMcpTools.agentId, agentId),\n      eq(mcpTools.organizationId, organizationId),',
-            '      eq(agentMcpTools.agentId, agentId),\n      allowedToolIds ? inArray(agentMcpTools.toolId, [...allowedToolIds]) : undefined,\n      eq(mcpTools.organizationId, organizationId),')
-          text = text.replace(
-            '    hasEnabledAgentTools(input.organizationId, input.agentId),',
-            '    hasEnabledAgentTools(input.organizationId, input.agentId, input.allowedToolIds),')
-          text = text.replace(
-            '  media?: ProviderContentPart[];\n}) {\n  const [agent]',
-            '  media?: ProviderContentPart[];\n  allowedToolIds?: readonly string[] | null;\n}) {\n  const [agent]', 1)
-          text = text.replace(
-            '  media?: ProviderContentPart[];\n}) {\n  const requestId = input.requestId ?? crypto.randomUUID();',
-            '  media?: ProviderContentPart[];\n  allowedToolIds?: readonly string[] | null;\n}) {\n  const requestId = input.requestId ?? crypto.randomUUID();', 1)
-          text = text.replace(
-            '          context: prepared.context,\n          temperature: prepared.version.temperatureMilli / 1000,',
-            '          context: prepared.context,\n          allowedToolIds: input.allowedToolIds,\n          temperature: prepared.version.temperatureMilli / 1000,', 1)
-          text = text.replace(
-            '  media?: ProviderContentPart[];\n}) {\n  const prepared = await prepareAgentRun(input);',
-            '  media?: ProviderContentPart[];\n  allowedToolIds?: readonly string[] | null;\n}) {\n  const prepared = await prepareAgentRun(input);', 1)
-          marker = '          context: prepared.context,\n          temperature: prepared.version.temperatureMilli / 1000,\n          maxOutputTokens: prepared.version.maxOutputTokens,\n          abortSignal: controller.signal,\n          allocateStep,\n        })) {'
-          if marker in text:
-              text = text.replace(marker, marker.replace('          temperature:', '          allowedToolIds: input.allowedToolIds,\n          temperature:'), 1)
-          path.write_text(text)
-          PY
-      - name: Commit remediation
-        shell: bash
+      - name: Commit source fixes
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src scripts/remediate-channel-platform.py
-          if git diff --cached --quiet; then
-            echo "No remediation changes required"
+          if git diff --quiet; then
+            echo "No source changes remain to apply."
             exit 0
           fi
-          git commit -m "fix(channels): complete WhatsApp channel platform"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/components/channel-manager.tsx src/db/channel-schema.ts src/lib/channels/router.ts src/lib/channels/telegram-adapter.ts src/lib/ai-sdk/runtime.ts src/lib/agents/runtime.ts
+          git commit -m "fix(channels): apply production channel remediation"
           git push origin HEAD:feat/channel-platform-whatsapp
