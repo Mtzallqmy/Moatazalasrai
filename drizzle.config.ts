@@ -5,6 +5,7 @@ export default defineConfig({
     "./src/db/schema.ts",
     "./src/db/channel-schema.ts",
     "./src/db/control-plane-schema.ts",
+    "./src/db/admin-schema.ts",
     "./src/db/mcp-catalog-schema.ts",
     "./src/db/provider-health-schema.ts",
     "./src/db/site-connections-schema.ts",
