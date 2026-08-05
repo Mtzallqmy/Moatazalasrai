@@ -6,11 +6,13 @@ def replace_once(path: str, old: str, new: str, required: bool = True):
     text = file.read_text()
     if old not in text:
         if required:
-            raise RuntimeError(f"Missing patch anchor in {path}: {old[:100]!r}")
-        return
+            raise RuntimeError(f"Missing patch anchor in {path}: {old[:120]!r}")
+        return False
     file.write_text(text.replace(old, new, 1))
+    return True
 
 
+# Channel contracts and router imports.
 replace_once(
     "src/db/channel-schema.ts",
     "    days: Record<string, Array<{ start: string; end: string }>>;\n  };",
@@ -24,15 +26,102 @@ replace_once(
     required=False,
 )
 
+# Telegram adapter typing and unused imports.
 telegram = Path("src/lib/channels/telegram-adapter.ts")
 text = telegram.read_text()
-text = text.replace("  ChannelAdapterContext,\n  ChannelIncomingAttachment,\n  ChannelIncomingMessage,\n", "  ChannelIncomingAttachment,\n")
+text = text.replace(
+    "  ChannelAdapterContext,\n  ChannelIncomingAttachment,\n  ChannelIncomingMessage,\n",
+    "  ChannelIncomingAttachment,\n",
+)
 text = text.replace(
     "      const bot = await verifyTelegramToken(context.credentials.token);",
     "      const bot = await verifyTelegramToken(context.credentials.token) as { id: string | number; first_name?: string; username?: string };",
 )
 telegram.write_text(text)
 
+# Propagate the per-channel tool allowlist through the AI SDK runtime.
+replace_once(
+    "src/lib/ai-sdk/runtime.ts",
+    "  runId: string;\n  allocateStep: () => number;\n}) {",
+    "  runId: string;\n  allowedToolIds?: readonly string[] | null;\n  allocateStep: () => number;\n}) {",
+    required=False,
+)
+replace_once(
+    "src/lib/ai-sdk/runtime.ts",
+    "    runId: input.runId,\n    state,\n  });",
+    "    runId: input.runId,\n    allowedToolIds: input.allowedToolIds,\n    state,\n  });",
+    required=False,
+)
+replace_once(
+    "src/lib/ai-sdk/runtime.ts",
+    "  resumeMessages?: ModelMessage[];\n  temperature: number;",
+    "  resumeMessages?: ModelMessage[];\n  allowedToolIds?: readonly string[] | null;\n  temperature: number;",
+    required=False,
+)
+replace_once(
+    "src/lib/ai-sdk/runtime.ts",
+    "  context: ProviderMessage[];\n  temperature: number;",
+    "  context: ProviderMessage[];\n  allowedToolIds?: readonly string[] | null;\n  temperature: number;",
+    required=False,
+)
+
+# Enforce channel tool policy before loading and executing agent MCP tools.
+replace_once(
+    "src/lib/agents/runtime.ts",
+    'import { and, asc, count, desc, eq, isNull } from "drizzle-orm";',
+    'import { and, asc, count, desc, eq, inArray, isNull } from "drizzle-orm";',
+    required=False,
+)
+replace_once(
+    "src/lib/agents/runtime.ts",
+    "async function hasEnabledAgentTools(organizationId: string, agentId: string) {\n  const [row] = await db().select({ value: count() }).from(agentMcpTools)",
+    "async function hasEnabledAgentTools(\n  organizationId: string,\n  agentId: string,\n  allowedToolIds?: readonly string[] | null,\n) {\n  if (allowedToolIds && allowedToolIds.length === 0) return false;\n  const [row] = await db().select({ value: count() }).from(agentMcpTools)",
+    required=False,
+)
+replace_once(
+    "src/lib/agents/runtime.ts",
+    "      eq(agentMcpTools.agentId, agentId),\n      eq(mcpTools.organizationId, organizationId),",
+    "      eq(agentMcpTools.agentId, agentId),\n      allowedToolIds ? inArray(agentMcpTools.toolId, [...allowedToolIds]) : undefined,\n      eq(mcpTools.organizationId, organizationId),",
+    required=False,
+)
+replace_once(
+    "src/lib/agents/runtime.ts",
+    "  media?: ProviderContentPart[];\n}) {\n  const [agent]",
+    "  media?: ProviderContentPart[];\n  allowedToolIds?: readonly string[] | null;\n}) {\n  const [agent]",
+    required=False,
+)
+replace_once(
+    "src/lib/agents/runtime.ts",
+    "    hasEnabledAgentTools(input.organizationId, input.agentId),",
+    "    hasEnabledAgentTools(input.organizationId, input.agentId, input.allowedToolIds),",
+    required=False,
+)
+replace_once(
+    "src/lib/agents/runtime.ts",
+    "  media?: ProviderContentPart[];\n}) {\n  const requestId = input.requestId ?? crypto.randomUUID();",
+    "  media?: ProviderContentPart[];\n  allowedToolIds?: readonly string[] | null;\n}) {\n  const requestId = input.requestId ?? crypto.randomUUID();",
+    required=False,
+)
+replace_once(
+    "src/lib/agents/runtime.ts",
+    "          context: prepared.context,\n          temperature: prepared.version.temperatureMilli / 1000,",
+    "          context: prepared.context,\n          allowedToolIds: input.allowedToolIds,\n          temperature: prepared.version.temperatureMilli / 1000,",
+    required=False,
+)
+replace_once(
+    "src/lib/agents/runtime.ts",
+    "  media?: ProviderContentPart[];\n}) {\n  const prepared = await prepareAgentRun(input);",
+    "  media?: ProviderContentPart[];\n  allowedToolIds?: readonly string[] | null;\n}) {\n  const prepared = await prepareAgentRun(input);",
+    required=False,
+)
+replace_once(
+    "src/lib/agents/runtime.ts",
+    "          context: prepared.context,\n          temperature: prepared.version.temperatureMilli / 1000,\n          maxOutputTokens: prepared.version.maxOutputTokens,\n          abortSignal: controller.signal,\n          allocateStep,\n        })) {",
+    "          context: prepared.context,\n          allowedToolIds: input.allowedToolIds,\n          temperature: prepared.version.temperatureMilli / 1000,\n          maxOutputTokens: prepared.version.maxOutputTokens,\n          abortSignal: controller.signal,\n          allocateStep,\n        })) {",
+    required=False,
+)
+
+# Management UI required by the server-side channels page.
 component = Path("src/components/channel-manager.tsx")
 if not component.exists():
     component.write_text(r'''"use client";
@@ -41,18 +130,31 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 type Named = { id: string; name: string };
 type Connection = {
-  id: string; kind: "telegram" | "whatsapp"; name: string; displayAddress: string | null;
-  status: string; enabled: boolean; webhookStatus: string; lastErrorCode: string | null;
-  defaultAgentId: string | null; defaultProviderCredentialId: string | null; defaultModel: string | null;
-  inboxId: string | null; workflowId: string | null; settings: Record<string, unknown>;
+  id: string;
+  kind: "telegram" | "whatsapp";
+  name: string;
+  displayAddress: string | null;
+  status: string;
+  enabled: boolean;
+  webhookStatus: string;
+  lastErrorCode: string | null;
+  defaultAgentId: string | null;
+  defaultProviderCredentialId: string | null;
+  defaultModel: string | null;
+  inboxId: string | null;
+  workflowId: string | null;
+  settings: Record<string, unknown>;
 };
 type Props = {
-  canManage: boolean; canHandoff: boolean;
+  canManage: boolean;
+  canHandoff: boolean;
   options: {
     agents: Array<Named & { status: string }>;
     providers: Array<Named & { provider: string; models: unknown; enabled: boolean }>;
     tools: Array<Named & { title: string | null; risk: string }>;
-    inboxes: Named[]; workflows: Named[]; members: Array<Named & { email: string; role: string }>;
+    inboxes: Named[];
+    workflows: Named[];
+    members: Array<Named & { email: string; role: string }>;
   };
 };
 
@@ -76,17 +178,29 @@ export function ChannelManager({ canManage, canHandoff, options }: Props) {
     setRows(connections);
     setSelectedId((current) => connections.some((row) => row.id === current) ? current : connections[0]?.id || "");
   }, []);
-  useEffect(() => { void load().catch((error: Error) => setNotice(error.message)); }, [load]);
+
+  useEffect(() => {
+    void load().catch((error: Error) => setNotice(error.message));
+  }, [load]);
 
   async function request(path: string, method: string, body: unknown, success: string) {
-    setBusy(true); setNotice("");
+    setBusy(true);
+    setNotice("");
     try {
-      const response = await fetch(path, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const response = await fetch(path, {
+        method,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
       const json = await response.json();
       if (!response.ok) throw new Error(json?.error?.message || "فشلت العملية.");
-      setNotice(success); await load();
-    } catch (error) { setNotice(error instanceof Error ? error.message : "فشلت العملية."); }
-    finally { setBusy(false); }
+      setNotice(success);
+      await load();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "فشلت العملية.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return <div className="grid gap-6 xl:grid-cols-[330px_1fr]">
@@ -97,7 +211,11 @@ export function ChannelManager({ canManage, canHandoff, options }: Props) {
         <p className="text-xs text-slate-500">{row.displayAddress || row.status} · webhook: {row.webhookStatus}</p>
         {row.lastErrorCode ? <p className="text-xs text-red-600">{row.lastErrorCode}</p> : null}
       </button>)}</div>
-      {canManage ? <form className="mt-5 space-y-2 border-t pt-4 dark:border-slate-800" action={async (data) => request("/api/dashboard/channels", "POST", { name: data.get("name"), phoneNumberId: data.get("phoneNumberId") || undefined, displayAddress: data.get("displayAddress") || undefined }, "تمت إضافة WhatsApp.")}>
+      {canManage ? <form className="mt-5 space-y-2 border-t pt-4 dark:border-slate-800" action={async (data) => request("/api/dashboard/channels", "POST", {
+        name: data.get("name"),
+        phoneNumberId: data.get("phoneNumberId") || undefined,
+        displayAddress: data.get("displayAddress") || undefined,
+      }, "تمت إضافة WhatsApp.")}>
         <h3 className="text-sm font-semibold">إضافة WhatsApp</h3>
         <input name="name" required placeholder="اسم الاتصال" className="w-full rounded-lg border px-3 py-2 dark:bg-slate-900" />
         <input name="phoneNumberId" placeholder="Phone Number ID" className="w-full rounded-lg border px-3 py-2 dark:bg-slate-900" />
@@ -107,10 +225,22 @@ export function ChannelManager({ canManage, canHandoff, options }: Props) {
     </aside>
     <main className="rounded-2xl border bg-white p-5 dark:border-slate-800 dark:bg-slate-950">
       {!selected ? <p>اختر قناة.</p> : <form key={selected.id} className="space-y-5" action={async (data) => request("/api/dashboard/channels", "PATCH", {
-        id: selected.id, name: data.get("name"), enabled: data.get("enabled") === "on",
-        defaultAgentId: data.get("agentId") || null, defaultProviderCredentialId: data.get("providerId") || null,
-        defaultModel: data.get("model") || null, inboxId: data.get("inboxId") || null, workflowId: data.get("workflowId") || null,
-        settings: { welcomeMessage: data.get("welcomeMessage"), autoReplyEnabled: data.get("autoReplyEnabled") === "on", language: data.get("language") || "ar", memoryEnabled: data.get("memoryEnabled") === "on", historyEnabled: data.get("historyEnabled") === "on", handoffMode: data.get("handoffMode") || "ai_then_human" }
+        id: selected.id,
+        name: data.get("name"),
+        enabled: data.get("enabled") === "on",
+        defaultAgentId: data.get("agentId") || null,
+        defaultProviderCredentialId: data.get("providerId") || null,
+        defaultModel: data.get("model") || null,
+        inboxId: data.get("inboxId") || null,
+        workflowId: data.get("workflowId") || null,
+        settings: {
+          welcomeMessage: data.get("welcomeMessage"),
+          autoReplyEnabled: data.get("autoReplyEnabled") === "on",
+          language: data.get("language") || "ar",
+          memoryEnabled: data.get("memoryEnabled") === "on",
+          historyEnabled: data.get("historyEnabled") === "on",
+          handoffMode: data.get("handoffMode") || "ai_then_human",
+        },
       }, "تم حفظ إعدادات القناة.")}>
         <div className="flex justify-between"><div><h2 className="text-lg font-semibold">{selected.name}</h2><p className="text-sm text-slate-500">{selected.kind} · {selected.status}</p></div><label><input name="enabled" type="checkbox" defaultChecked={selected.enabled} /> مفعّل</label></div>
         <div className="grid gap-4 md:grid-cols-2">
@@ -133,3 +263,5 @@ export function ChannelManager({ canManage, canHandoff, options }: Props) {
   </div>;
 }
 ''')
+
+print("channel platform remediation applied")
