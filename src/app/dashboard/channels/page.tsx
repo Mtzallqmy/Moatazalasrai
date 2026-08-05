@@ -1,0 +1,73 @@
+// Server page supplies organization-scoped binding options to the channel manager.
+import { and, asc, eq } from "drizzle-orm";
+import { redirect } from "next/navigation";
+import { db } from "@/db";
+import { channelInboxes, channelWorkflows } from "@/db/channel-schema";
+import { agents, mcpTools, organizationMembers, providerCredentials, users } from "@/db/schema";
+import { ChannelManager } from "@/components/channel-manager";
+import { DashboardShell } from "@/components/dashboard-shell";
+import { currentSession } from "@/lib/auth/session";
+import { can } from "@/lib/auth/permissions";
+
+export default async function ChannelsPage() {
+  const session = await currentSession();
+  if (!session) redirect("/login");
+  if (!session.organizationId || !session.organizationName || !session.role) redirect("/select-organization");
+  if (!can(session.role, "channels:read")) redirect("/dashboard");
+
+  const [agentRows, providerRows, toolRows, inboxRows, workflowRows, memberRows] = await Promise.all([
+    db().select({ id: agents.id, name: agents.name, status: agents.status }).from(agents).where(and(
+      eq(agents.organizationId, session.organizationId),
+      eq(agents.status, "published"),
+    )).orderBy(asc(agents.name)),
+    db().select({
+      id: providerCredentials.id,
+      name: providerCredentials.name,
+      provider: providerCredentials.provider,
+      models: providerCredentials.discoveredModels,
+      enabled: providerCredentials.enabled,
+    }).from(providerCredentials).where(and(
+      eq(providerCredentials.organizationId, session.organizationId),
+      eq(providerCredentials.validationStatus, "verified"),
+      eq(providerCredentials.enabled, true),
+    )).orderBy(asc(providerCredentials.name)),
+    db().select({ id: mcpTools.id, name: mcpTools.name, title: mcpTools.title, risk: mcpTools.risk }).from(mcpTools).where(and(
+      eq(mcpTools.organizationId, session.organizationId),
+      eq(mcpTools.enabled, true),
+    )).orderBy(asc(mcpTools.name)),
+    db().select({ id: channelInboxes.id, name: channelInboxes.name }).from(channelInboxes).where(and(
+      eq(channelInboxes.organizationId, session.organizationId),
+      eq(channelInboxes.enabled, true),
+    )).orderBy(asc(channelInboxes.name)),
+    db().select({ id: channelWorkflows.id, name: channelWorkflows.name }).from(channelWorkflows).where(and(
+      eq(channelWorkflows.organizationId, session.organizationId),
+      eq(channelWorkflows.enabled, true),
+    )).orderBy(asc(channelWorkflows.name)),
+    db().select({ id: users.id, name: users.name, email: users.email, role: organizationMembers.role }).from(organizationMembers)
+      .innerJoin(users, eq(users.id, organizationMembers.userId))
+      .where(eq(organizationMembers.organizationId, session.organizationId))
+      .orderBy(asc(users.name)),
+  ]);
+
+  return (
+    <DashboardShell
+      session={session}
+      activePath="/dashboard/channels"
+      title="القنوات وصناديق المحادثات"
+      description="إدارة Telegram وWhatsApp من مسار موحد مع توجيه الوكلاء والمزودات والأدوات والصلاحيات والتحويل البشري."
+    >
+      <ChannelManager
+        canManage={can(session.role, "channels:manage")}
+        canHandoff={can(session.role, "channels:handoff")}
+        options={{
+          agents: agentRows,
+          providers: providerRows,
+          tools: toolRows,
+          inboxes: inboxRows,
+          workflows: workflowRows,
+          members: memberRows,
+        }}
+      />
+    </DashboardShell>
+  );
+}
