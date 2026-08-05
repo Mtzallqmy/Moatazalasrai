@@ -3,6 +3,10 @@ import { db } from "@/db";
 import { mobileSessions, organizationMembers, platformApiKeys } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
 import { hashApiKey, secureHashEquals } from "@/lib/security/encryption";
+import {
+  enterTenantDatabaseContext,
+  runWithSystemDatabaseContext,
+} from "@/lib/security/database-context";
 
 export type ApiScope =
   | "agents:read" | "agents:write"
@@ -45,13 +49,14 @@ export async function authenticateApiKey(request: Request): Promise<ApiPrincipal
   if (!token) return null;
 
   const tokenHash = hashApiKey(token);
-  const [key] = await db()
+  const [key] = await runWithSystemDatabaseContext("api-key-token-lookup", () => db()
     .select()
     .from(platformApiKeys)
     .where(eq(platformApiKeys.keyHash, tokenHash))
-    .limit(1);
+    .limit(1));
 
   if (key && !key.revoked && (!key.expiresAt || key.expiresAt > new Date())) {
+    enterTenantDatabaseContext(key.organizationId, key.createdByUserId);
     const staleBefore = new Date(Date.now() - 15 * 60_000);
     await db().update(platformApiKeys).set({ lastUsedAt: new Date() }).where(and(
       eq(platformApiKeys.id, key.id),
@@ -68,7 +73,7 @@ export async function authenticateApiKey(request: Request): Promise<ApiPrincipal
     };
   }
 
-  const [mobile] = await db().select({
+  const [mobile] = await runWithSystemDatabaseContext("mobile-access-token-lookup", () => db().select({
     id: mobileSessions.id,
     userId: mobileSessions.userId,
     organizationId: mobileSessions.organizationId,
@@ -84,8 +89,9 @@ export async function authenticateApiKey(request: Request): Promise<ApiPrincipal
       isNull(mobileSessions.revokedAt),
       gt(mobileSessions.accessExpiresAt, new Date()),
     ))
-    .limit(1);
+    .limit(1));
   if (!mobile) return null;
+  enterTenantDatabaseContext(mobile.organizationId, mobile.userId);
   const mobileScopes = mobile.role === "owner" || mobile.role === "admin"
     ? ["agents:read", "agents:write", "chat:write", "conversations:read", "conversations:write", "files:read", "files:write", "runs:read", "runs:write", "integrations:read", "integrations:write", "providers:read", "providers:write", "mcp:read", "mcp:write", "teams:read", "teams:write"]
     : mobile.role === "developer"
