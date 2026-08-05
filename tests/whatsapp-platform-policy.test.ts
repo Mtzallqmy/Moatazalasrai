@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ChannelConnectionSettings, ChannelPermissionName } from "@/db/channel-schema";
 import {
   channelPolicyForWhatsApp,
   connectionForWhatsAppPolicy,
@@ -16,7 +17,7 @@ describe("central WhatsApp policy", () => {
     workflowId: null,
     allowedTools: ["00000000-0000-4000-8000-000000000005"],
     allowedActions: ["search"],
-    permissions: ["ai.chat", "agent.use", "tools.execute"] as const,
+    permissions: ["ai.chat", "agent.use", "tools.execute"] as ChannelPermissionName[],
     monthlyLimit: 25,
     autoReplyEnabled: true,
     humanHandoffEnabled: true,
@@ -27,7 +28,16 @@ describe("central WhatsApp policy", () => {
   };
 
   it("routes through the assigned agent/provider/model without mutating the stored connection", () => {
-    const stored = {
+    const stored: {
+      defaultAgentId: string | null;
+      defaultProviderCredentialId: string | null;
+      defaultModel: string | null;
+      inboxId: string | null;
+      workflowId: string | null;
+      enabled: boolean;
+      status: string;
+      settings: ChannelConnectionSettings;
+    } = {
       defaultAgentId: null,
       defaultProviderCredentialId: null,
       defaultModel: null,
@@ -35,7 +45,7 @@ describe("central WhatsApp policy", () => {
       workflowId: null,
       enabled: true,
       status: "healthy",
-      settings: { handoffMode: "ai" as const, historyEnabled: true },
+      settings: { handoffMode: "ai", historyEnabled: true },
     };
     const routed = connectionForWhatsAppPolicy(stored, policy);
     expect(routed.defaultAgentId).toBe(policy.agentId);
@@ -70,7 +80,7 @@ describe("central WhatsApp policy", () => {
       workflowId: null,
       enabled: true,
       status: "healthy",
-      settings: { handoffMode: "ai" as const },
+      settings: { handoffMode: "ai" } as ChannelConnectionSettings,
     }, { ...policy, forceHumanHandoff: true });
     expect(routed.settings.handoffMode).toBe("human");
   });
