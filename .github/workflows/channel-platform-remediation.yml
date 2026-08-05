@@ -1,0 +1,244 @@
+name: Channel Platform Remediation
+
+on:
+  push:
+    branches: [feat/channel-platform-whatsapp]
+    paths:
+      - .github/workflows/channel-platform-remediation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  remediate:
+    if: ${{ !contains(github.event.head_commit.message || '', '[channel-remediation]') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/channel-platform-whatsapp
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Apply channel fixes
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new, count=1):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f'missing patch anchor in {path}: {old[:80]!r}')
+              p.write_text(text.replace(old, new, count))
+
+          replace(
+              'src/db/channel-schema.ts',
+              '    days: Record<string, Array<{ start: string; end: string }>>;\n  };',
+              '    days: Record<string, Array<{ start: string; end: string }>>;\n  } | null;',
+          )
+
+          replace(
+              'src/lib/channels/router.ts',
+              '  channelContacts,\n  channelConversationLinks,',
+              '  channelContacts,\n  channelConnections,\n  channelConversationLinks,',
+          )
+
+          runtime = Path('src/lib/agents/runtime.ts')
+          text = runtime.read_text()
+          anchor = '  media?: ProviderContentPart[];\n}) {'
+          if anchor not in text:
+              raise SystemExit('executeAgentRun input anchor missing')
+          text = text.replace(anchor, '  media?: ProviderContentPart[];\n  allowedToolIds?: readonly string[];\n}) {', 1)
+          call_anchor = '      state: toolState,\n    });'
+          if call_anchor not in text:
+              raise SystemExit('loadAgentMcpTools call anchor missing')
+          text = text.replace(call_anchor, '      allowedToolIds: input.allowedToolIds,\n      state: toolState,\n    });', 1)
+          runtime.write_text(text)
+
+          telegram = Path('src/lib/channels/telegram-adapter.ts')
+          text = telegram.read_text()
+          text = text.replace('  ChannelAdapterContext,\n  ChannelIncomingAttachment,\n  ChannelIncomingMessage,\n', '  ChannelIncomingAttachment,\n')
+          text = text.replace(
+              '      const bot = await verifyTelegramToken(context.credentials.token);',
+              '      const bot = await verifyTelegramToken(context.credentials.token) as { id: string | number; first_name?: string; username?: string };',
+          )
+          telegram.write_text(text)
+
+          component = Path('src/components/channel-manager.tsx')
+          component.write_text(r'''"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+
+type Option = { id: string; name: string };
+type ProviderOption = Option & { provider: string; models: unknown; enabled: boolean };
+type ToolOption = Option & { title: string | null; risk: string };
+type MemberOption = Option & { email: string; role: string };
+type Connection = {
+  id: string;
+  kind: "telegram" | "whatsapp";
+  name: string;
+  displayAddress: string | null;
+  status: string;
+  enabled: boolean;
+  webhookStatus: string;
+  lastErrorCode: string | null;
+  defaultAgentId: string | null;
+  defaultProviderCredentialId: string | null;
+  defaultModel: string | null;
+  inboxId: string | null;
+  workflowId: string | null;
+  settings: Record<string, unknown>;
+};
+
+type Props = {
+  canManage: boolean;
+  canHandoff: boolean;
+  options: {
+    agents: Array<Option & { status: string }>;
+    providers: ProviderOption[];
+    tools: ToolOption[];
+    inboxes: Option[];
+    workflows: Option[];
+    members: MemberOption[];
+  };
+};
+
+function payloadData(value: unknown) {
+  if (!value || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  return record.data ?? record;
+}
+
+export function ChannelManager({ canManage, canHandoff, options }: Props) {
+  const [connections, setConnections] = useState<Connection[]>([]);
+  const [selectedId, setSelectedId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+  const selected = useMemo(() => connections.find((item) => item.id === selectedId) ?? null, [connections, selectedId]);
+
+  const load = useCallback(async () => {
+    const response = await fetch("/api/dashboard/channels", { cache: "no-store" });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body?.error?.message || "تعذر تحميل القنوات.");
+    const data = payloadData(body) as { connections?: Connection[] };
+    const rows = data.connections ?? [];
+    setConnections(rows);
+    setSelectedId((current) => current && rows.some((row) => row.id === current) ? current : rows[0]?.id ?? "");
+  }, []);
+
+  useEffect(() => { void load().catch((error: Error) => setNotice(error.message)); }, [load]);
+
+  async function mutate(url: string, init: RequestInit, success: string) {
+    setBusy(true);
+    setNotice("");
+    try {
+      const response = await fetch(url, { ...init, headers: { "content-type": "application/json", ...(init.headers || {}) } });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body?.error?.message || "فشلت العملية.");
+      setNotice(success);
+      await load();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "فشلت العملية.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addWhatsApp(formData: FormData) {
+    await mutate("/api/dashboard/channels", {
+      method: "POST",
+      body: JSON.stringify({
+        name: String(formData.get("name") || "WhatsApp"),
+        phoneNumberId: String(formData.get("phoneNumberId") || "") || undefined,
+        displayAddress: String(formData.get("displayAddress") || "") || undefined,
+      }),
+    }, "تمت إضافة اتصال WhatsApp والتحقق منه.");
+  }
+
+  async function save(formData: FormData) {
+    if (!selected) return;
+    await mutate("/api/dashboard/channels", {
+      method: "PATCH",
+      body: JSON.stringify({
+        id: selected.id,
+        name: String(formData.get("name") || selected.name),
+        enabled: formData.get("enabled") === "on",
+        defaultAgentId: String(formData.get("agentId") || "") || null,
+        defaultProviderCredentialId: String(formData.get("providerId") || "") || null,
+        defaultModel: String(formData.get("model") || "") || null,
+        inboxId: String(formData.get("inboxId") || "") || null,
+        workflowId: String(formData.get("workflowId") || "") || null,
+        settings: {
+          welcomeMessage: String(formData.get("welcomeMessage") || ""),
+          autoReplyEnabled: formData.get("autoReplyEnabled") === "on",
+          language: String(formData.get("language") || "ar"),
+          memoryEnabled: formData.get("memoryEnabled") === "on",
+          historyEnabled: formData.get("historyEnabled") === "on",
+          monthlyMessageLimit: Number(formData.get("monthlyMessageLimit") || 0) || undefined,
+          handoffMode: String(formData.get("handoffMode") || "ai_then_human"),
+        },
+      }),
+    }, "تم حفظ إعدادات القناة.");
+  }
+
+  return <div className="grid gap-6 xl:grid-cols-[340px_1fr]">
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-950">
+      <div className="mb-4 flex items-center justify-between"><h2 className="font-semibold">الاتصالات</h2><span className="text-xs text-slate-500">{connections.length}</span></div>
+      <div className="space-y-2">{connections.map((connection) => <button key={connection.id} onClick={() => setSelectedId(connection.id)} className={`w-full rounded-xl border p-3 text-right ${selectedId === connection.id ? "border-blue-500" : "border-slate-200 dark:border-slate-800"}`}>
+        <div className="flex justify-between gap-2"><strong>{connection.name}</strong><span className="text-xs">{connection.kind}</span></div>
+        <div className="mt-1 text-xs text-slate-500">{connection.displayAddress || connection.status} · Webhook: {connection.webhookStatus}</div>
+        {connection.lastErrorCode ? <div className="mt-1 text-xs text-red-600">{connection.lastErrorCode}</div> : null}
+      </button>)}</div>
+      {canManage ? <form action={addWhatsApp} className="mt-5 space-y-3 border-t pt-4 dark:border-slate-800">
+        <h3 className="text-sm font-semibold">إضافة WhatsApp</h3>
+        <input name="name" placeholder="اسم الاتصال" className="w-full rounded-lg border px-3 py-2 dark:bg-slate-900" required />
+        <input name="phoneNumberId" placeholder="Phone Number ID (اختياري عند استخدام البيئة)" className="w-full rounded-lg border px-3 py-2 dark:bg-slate-900" />
+        <input name="displayAddress" placeholder="رقم العرض" className="w-full rounded-lg border px-3 py-2 dark:bg-slate-900" />
+        <button disabled={busy} className="w-full rounded-lg bg-blue-600 px-3 py-2 text-white disabled:opacity-50">إضافة واختبار</button>
+      </form> : null}
+    </section>
+
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-950">
+      {!selected ? <p className="text-slate-500">اختر اتصالًا أو أضف اتصال WhatsApp.</p> : <form key={selected.id} action={save} className="space-y-5">
+        <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">{selected.name}</h2><p className="text-sm text-slate-500">{selected.kind} · {selected.status}</p></div><label className="flex items-center gap-2"><input name="enabled" type="checkbox" defaultChecked={selected.enabled} /> مفعّل</label></div>
+        <div className="grid gap-4 md:grid-cols-2">
+          <label className="space-y-1 text-sm">الاسم<input name="name" defaultValue={selected.name} className="w-full rounded-lg border px-3 py-2 dark:bg-slate-900" /></label>
+          <label className="space-y-1 text-sm">الوكيل الافتراضي<select name="agentId" defaultValue={selected.defaultAgentId || ""} className="w-full rounded-lg border px-3 py-2 dark:bg-slate-900"><option value="">بدون</option>{options.agents.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select></label>
+          <label className="space-y-1 text-sm">المزود الافتراضي<select name="providerId" defaultValue={selected.defaultProviderCredentialId || ""} className="w-full rounded-lg border px-3 py-2 dark:bg-slate-900"><option value="">بدون</option>{options.providers.map((o) => <option key={o.id} value={o.id}>{o.name} · {o.provider}</option>)}</select></label>
+          <label className="space-y-1 text-sm">النموذج<input name="model" defaultValue={selected.defaultModel || ""} className="w-full rounded-lg border px-3 py-2 dark:bg-slate-900" /></label>
+          <label className="space-y-1 text-sm">صندوق المحادثات<select name="inboxId" defaultValue={selected.inboxId || ""} className="w-full rounded-lg border px-3 py-2 dark:bg-slate-900"><option value="">بدون</option>{options.inboxes.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select></label>
+          <label className="space-y-1 text-sm">سير العمل<select name="workflowId" defaultValue={selected.workflowId || ""} className="w-full rounded-lg border px-3 py-2 dark:bg-slate-900"><option value="">بدون</option>{options.workflows.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select></label>
+          <label className="space-y-1 text-sm">اللغة<input name="language" defaultValue={String(selected.settings.language || "ar")} className="w-full rounded-lg border px-3 py-2 dark:bg-slate-900" /></label>
+          <label className="space-y-1 text-sm">نمط التحويل<select name="handoffMode" defaultValue={String(selected.settings.handoffMode || "ai_then_human")} className="w-full rounded-lg border px-3 py-2 dark:bg-slate-900"><option value="ai">AI فقط</option><option value="human">بشري فقط</option><option value="ai_then_human">AI ثم بشري</option><option value="human_then_ai">بشري ثم AI</option><option value="keyword">حسب الكلمات</option><option value="business_hours">حسب ساعات العمل</option><option value="agent_failure">عند فشل الوكيل</option><option value="user_request">بطلب المستخدم</option></select></label>
+          <label className="space-y-1 text-sm md:col-span-2">رسالة الترحيب<textarea name="welcomeMessage" defaultValue={String(selected.settings.welcomeMessage || "")} className="min-h-24 w-full rounded-lg border px-3 py-2 dark:bg-slate-900" /></label>
+          <label className="space-y-1 text-sm">الحد الشهري<input name="monthlyMessageLimit" type="number" min="0" defaultValue={Number(selected.settings.monthlyMessageLimit || 0)} className="w-full rounded-lg border px-3 py-2 dark:bg-slate-900" /></label>
+        </div>
+        <div className="flex flex-wrap gap-4 text-sm"><label><input name="autoReplyEnabled" type="checkbox" defaultChecked={Boolean(selected.settings.autoReplyEnabled)} /> رد تلقائي</label><label><input name="memoryEnabled" type="checkbox" defaultChecked={Boolean(selected.settings.memoryEnabled)} /> ذاكرة</label><label><input name="historyEnabled" type="checkbox" defaultChecked={Boolean(selected.settings.historyEnabled)} /> سجل المحادثة</label></div>
+        <div className="rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-900">الأدوات المتاحة: {options.tools.length} · أعضاء الفريق: {options.members.length} · التحويل البشري: {canHandoff ? "مسموح" : "غير مسموح"}</div>
+        {canManage ? <div className="flex flex-wrap gap-2"><button disabled={busy} className="rounded-lg bg-blue-600 px-4 py-2 text-white disabled:opacity-50">حفظ</button><button type="button" disabled={busy} onClick={() => void mutate("/api/dashboard/channels/test", { method: "POST", body: JSON.stringify({ connectionId: selected.id }) }, "نجح اختبار الاتصال.")} className="rounded-lg border px-4 py-2">اختبار الاتصال</button><button type="button" disabled={busy} onClick={() => void mutate("/api/dashboard/channels/unlink", { method: "POST", body: JSON.stringify({ connectionId: selected.id }) }, "تم فصل الاتصال.")} className="rounded-lg border border-red-300 px-4 py-2 text-red-700">فصل</button></div> : null}
+      </form>}
+      {notice ? <p className="mt-4 rounded-lg bg-slate-100 p-3 text-sm dark:bg-slate-900">{notice}</p> : null}
+    </section>
+  </div>;
+}
+''')
+          PY
+      - name: Install and validate
+        run: |
+          npm ci --no-audit --no-fund
+          npm run lint
+          npm run typecheck
+          npm test
+          npm run build
+      - name: Commit remediation
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/db/channel-schema.ts src/lib/channels/router.ts src/lib/agents/runtime.ts src/lib/channels/telegram-adapter.ts src/components/channel-manager.tsx
+          git commit -m "fix(channels): complete shared WhatsApp management [channel-remediation]"
+          git push origin HEAD:feat/channel-platform-whatsapp
