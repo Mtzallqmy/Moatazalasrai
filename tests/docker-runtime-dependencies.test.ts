@@ -23,6 +23,7 @@ describe("production Docker runtime dependencies", () => {
     expect(dockerfile).toContain("test -f /app/scripts/setup-telegram-webhook.mjs");
     expect(dockerfile).toContain("test -f /app/scripts/check-telegram-schema.mjs");
     expect(dockerfile).toContain("test -f /app/drizzle/0039_central_telegram_bot.sql");
+    expect(dockerfile).toContain("test -f /app/drizzle/0040_telegram_admin_default_permissions.sql");
     expect(dockerfile).toContain("test -f /app/scripts/start-production.mjs");
     expect(dockerfile).toContain("test -f /app/scripts/validate-runtime-env.mjs");
   });
