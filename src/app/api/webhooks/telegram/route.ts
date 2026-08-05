@@ -48,7 +48,7 @@ function messageData(update: TelegramUpdate) {
   const chatId = message?.chat?.id;
   const telegramUserId = user?.id;
   const text = (callback?.data ?? message?.text ?? message?.caption ?? "").trim();
-  if (chatId === undefined || telegramUserId === undefined) return null;
+  if (!user || chatId === undefined || telegramUserId === undefined) return null;
   return { message, user, chatId: String(chatId), telegramUserId: String(telegramUserId), text };
 }
 
@@ -197,7 +197,9 @@ export async function POST(request: Request) {
       VALUES (NULL, ${String(update.update_id)}, 'accepted')
       RETURNING "id"
     `);
-    rowId = databaseRows<{ id: string }>(inserted)[0]?.id ?? null;
+    const rows = databaseRows(inserted);
+    const candidate = rows[0]?.id;
+    rowId = typeof candidate === "string" ? candidate : null;
   } catch (error) {
     const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
     if (code === "23505") return apiSuccess({ accepted: true, duplicate: true }, requestId);
