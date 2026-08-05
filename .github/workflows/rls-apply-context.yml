@@ -1,0 +1,97 @@
+# Temporary one-shot patcher; removed after integrating request and worker database contexts.
+name: RLS Apply Context
+
+on:
+  pull_request:
+    branches: [main]
+    types: [synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'feat/postgres-rls-isolation'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: feat/postgres-rls-isolation
+          fetch-depth: 0
+      - name: Patch authenticated requests, auth bootstrap, workers, and migrations
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          function replace(path, before, after) {
+            const value = fs.readFileSync(path, 'utf8');
+            if (!value.includes(before)) throw new Error(`Missing block in ${path}`);
+            fs.writeFileSync(path, value.replace(before, after));
+          }
+
+          replace('src/lib/auth/authorization.ts',
+            'import { can, type Permission } from "@/lib/auth/permissions";\n',
+            'import { can, type Permission } from "@/lib/auth/permissions";\nimport { enterTenantDatabaseContext } from "@/lib/security/database-context";\n');
+          replace('src/lib/auth/authorization.ts',
+            '  if (permission && !can(session.role, permission)) {',
+            '  enterTenantDatabaseContext(session.organizationId, session.userId);\n  if (permission && !can(session.role, permission)) {');
+
+          replace('src/lib/auth/session.ts',
+            'import { ApiError } from "@/lib/http/api";\n',
+            'import { ApiError } from "@/lib/http/api";\nimport { enterUserDatabaseContext, runWithSystemDatabaseContext } from "@/lib/security/database-context";\n');
+          replace('src/lib/auth/session.ts',
+            '  const [base] = await db()\n    .select({',
+            '  const [base] = await runWithSystemDatabaseContext("session-token-lookup", () => db()\n    .select({');
+          replace('src/lib/auth/session.ts',
+            '    ))\n    .limit(1);\n\n  if (!base) return null;',
+            '    ))\n    .limit(1));\n\n  if (!base) return null;\n  enterUserDatabaseContext(base.userId, base.activeOrganizationId);');
+          replace('src/lib/auth/session.ts',
+            '  let activeOrganizationId = base.activeOrganizationId;\n',
+            '  let activeOrganizationId = base.activeOrganizationId;\n');
+          replace('src/lib/auth/session.ts',
+            '  const [membership] = activeOrganizationId\n',
+            '  enterUserDatabaseContext(base.userId, activeOrganizationId);\n  const [membership] = activeOrganizationId\n');
+          replace('src/lib/auth/session.ts',
+            'export async function setActiveOrganization(userId: string, sessionId: string, organizationId: string) {\n',
+            'export async function setActiveOrganization(userId: string, sessionId: string, organizationId: string) {\n  enterUserDatabaseContext(userId, organizationId);\n');
+
+          replace('scripts/migrate.mjs',
+            '    await client.query("BEGIN");\n',
+            '    await client.query("BEGIN");\n    await client.query("SELECT set_config(\'app.rls_bypass\', \'on\', true)");\n');
+
+          const taskPath = 'src/worker/task-list.ts';
+          let taskSource = fs.readFileSync(taskPath, 'utf8');
+          taskSource = taskSource.replace('import type { TaskList } from "graphile-worker";\n', 'import type { TaskList } from "graphile-worker";\nimport { runWithSystemDatabaseContext, runWithTenantDatabaseContext } from "@/lib/security/database-context";\n');
+          taskSource = taskSource.replace('export const taskList = {', `type WorkerTask = TaskList[string];
+
+function scopedTask(taskName: string, task: WorkerTask): WorkerTask {
+  return async (payload, helpers) => {
+    const organizationId = payload && typeof payload === "object" && "organizationId" in payload
+      ? String((payload as { organizationId?: unknown }).organizationId ?? "")
+      : "";
+    if (organizationId) {
+      return runWithTenantDatabaseContext(organizationId, null, () => task(payload, helpers));
+    }
+    return runWithSystemDatabaseContext(\`worker:\${taskName}\`, () => task(payload, helpers));
+  };
+}
+
+export const taskList = {`);
+          for (const [name, fn] of [
+            ['agent-run-resume','agentRunResumeTask'], ['agent-team-run','agentTeamRunTask'],
+            ['browser-task-execute','browserTaskExecuteTask'], ['browser-task-resume','browserTaskResumeTask'],
+            ['document-parse','documentParseTask'], ['sandbox-create','sandboxCreateTask'],
+            ['sandbox-execute','sandboxExecuteTask'], ['sandbox-resume','sandboxResumeTask'],
+            ['sandbox-reset','sandboxResetTask'], ['sandbox-cleanup','sandboxCleanupTask'],
+          ]) {
+            taskSource = taskSource.replace(`  "${name}": ${fn},`, `  "${name}": scopedTask("${name}", ${fn}),`);
+          }
+          taskSource = taskSource.replace('  "sandbox-artifact-cleanup": sandboxCleanupTask,', '  "sandbox-artifact-cleanup": scopedTask("sandbox-artifact-cleanup", sandboxCleanupTask),');
+          taskSource = taskSource.replace('  "sandbox-health-check": sandboxCleanupTask,', '  "sandbox-health-check": scopedTask("sandbox-health-check", sandboxCleanupTask),');
+          fs.writeFileSync(taskPath, taskSource);
+          NODE
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/lib/auth/authorization.ts src/lib/auth/session.ts src/worker/task-list.ts scripts/migrate.mjs
+          git commit -m "feat(rls): propagate tenant database context"
+          git push origin HEAD:feat/postgres-rls-isolation
