@@ -7,17 +7,29 @@ function requireAll(feature, names) {
   if (missing.length) throw new Error(`${feature} is enabled but required environment variables are missing: ${missing.join(", ")}`);
 }
 
+function publicAppUrl(feature) {
+  const value = process.env.PUBLIC_APP_URL?.trim() || process.env.APP_URL?.trim();
+  if (!value) throw new Error(`${feature} requires PUBLIC_APP_URL or APP_URL.`);
+  const parsed = new URL(value);
+  if (process.env.NODE_ENV === "production" && parsed.protocol !== "https:") {
+    throw new Error("PUBLIC_APP_URL or APP_URL must use HTTPS in production.");
+  }
+  return value;
+}
+
 export function validateOptionalRuntimeEnvironment() {
   if (enabled("TURNSTILE_ENABLED")) {
     requireAll("Turnstile", ["NEXT_PUBLIC_TURNSTILE_SITE_KEY", "TURNSTILE_SECRET_KEY"]);
     if (process.env.NODE_ENV === "production") requireAll("Turnstile", ["TURNSTILE_EXPECTED_HOSTNAME"]);
   }
+
   const storage = process.env.OBJECT_STORAGE_DRIVER?.trim().toLowerCase() || "database";
   if (!new Set(["database", "local", "r2"]).has(storage)) throw new Error("OBJECT_STORAGE_DRIVER must be database, local or r2.");
   if (storage === "r2") {
     requireAll("R2", ["R2_BUCKET_NAME", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"]);
     if (!process.env.R2_ACCOUNT_ID?.trim() && !process.env.R2_ENDPOINT?.trim()) throw new Error("R2 requires R2_ACCOUNT_ID or R2_ENDPOINT.");
   }
+
   if (enabled("CLOUDFLARE_AI_GATEWAY_ENABLED")) {
     requireAll("Cloudflare AI Gateway", [
       "CLOUDFLARE_ACCOUNT_ID",
@@ -27,6 +39,30 @@ export function validateOptionalRuntimeEnvironment() {
   if (enabled("AI_PROVIDER_DIRECT_FALLBACK_ENABLED") && !enabled("AI_PROVIDER_FALLBACK_ENABLED")) {
     throw new Error("AI_PROVIDER_DIRECT_FALLBACK_ENABLED requires AI_PROVIDER_FALLBACK_ENABLED=true.");
   }
+
+  if (enabled("TELEGRAM_INTEGRATION_ENABLED")) {
+    requireAll("Telegram central bot", [
+      "TELEGRAM_BOT_TOKEN",
+      "TELEGRAM_WEBHOOK_SECRET",
+      "TELEGRAM_LINK_CODE_SECRET",
+    ]);
+    publicAppUrl("Telegram central bot");
+    if (process.env.TELEGRAM_WEBHOOK_SECRET.trim().length < 16) {
+      throw new Error("TELEGRAM_WEBHOOK_SECRET must contain at least 16 characters.");
+    }
+    if (process.env.TELEGRAM_LINK_CODE_SECRET.trim().length < 32) {
+      throw new Error("TELEGRAM_LINK_CODE_SECRET must contain at least 32 characters.");
+    }
+    const explicitWebhook = process.env.TELEGRAM_WEBHOOK_URL?.trim();
+    if (explicitWebhook && process.env.NODE_ENV === "production" && !explicitWebhook.startsWith("https://")) {
+      throw new Error("TELEGRAM_WEBHOOK_URL must use HTTPS in production.");
+    }
+    const updateMode = process.env.TELEGRAM_UPDATE_MODE?.trim().toLowerCase() || "webhook";
+    if (!new Set(["webhook", "polling"]).has(updateMode)) {
+      throw new Error("TELEGRAM_UPDATE_MODE must be webhook or polling.");
+    }
+  }
+
   if (enabled("WHATSAPP_INTEGRATION_ENABLED")) {
     requireAll("WhatsApp Business Platform", [
       "META_APP_ID",
@@ -39,9 +75,7 @@ export function validateOptionalRuntimeEnvironment() {
       "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
       "WHATSAPP_CONNECT_TOKEN_SECRET",
     ]);
-    if (!process.env.PUBLIC_APP_URL?.trim() && !process.env.APP_URL?.trim()) {
-      throw new Error("WhatsApp Business Platform requires PUBLIC_APP_URL or APP_URL.");
-    }
+    publicAppUrl("WhatsApp Business Platform");
     for (const name of ["META_APP_ID", "WHATSAPP_PHONE_NUMBER_ID", "WHATSAPP_BUSINESS_ACCOUNT_ID"]) {
       if (!/^\d{5,30}$/.test(process.env[name].trim())) throw new Error(`${name} must contain digits only.`);
     }
@@ -50,12 +84,6 @@ export function validateOptionalRuntimeEnvironment() {
     }
     if (!/^\d{8,20}$/.test(process.env.WHATSAPP_DISPLAY_PHONE_NUMBER.replace(/\D/g, ""))) {
       throw new Error("WHATSAPP_DISPLAY_PHONE_NUMBER is invalid.");
-    }
-    const publicUrl = process.env.PUBLIC_APP_URL?.trim() || process.env.APP_URL?.trim();
-    if (!publicUrl) throw new Error("WhatsApp Business Platform requires PUBLIC_APP_URL or APP_URL.");
-    const parsedUrl = new URL(publicUrl);
-    if (process.env.NODE_ENV === "production" && parsedUrl.protocol !== "https:") {
-      throw new Error("PUBLIC_APP_URL or APP_URL must use HTTPS in production.");
     }
     if (process.env.META_APP_SECRET.trim().length < 16) throw new Error("META_APP_SECRET is too short.");
     if (process.env.WHATSAPP_ACCESS_TOKEN.trim().length < 20) throw new Error("WHATSAPP_ACCESS_TOKEN is too short.");
