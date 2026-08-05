@@ -33,27 +33,13 @@ function databaseCode(error: unknown) {
 async function processLegacyEvent(eventId: string, message: WhatsAppIncomingMessage) {
   try {
     await processWhatsAppMessage(message);
-    await db().update(whatsappWebhookEvents).set({
-      status: "completed",
-      completedAt: new Date(),
-    }).where(eq(whatsappWebhookEvents.id, eventId));
+    await db().update(whatsappWebhookEvents).set({ status: "completed", completedAt: new Date() }).where(eq(whatsappWebhookEvents.id, eventId));
   } catch (error) {
     const errorCode = error instanceof Error && /^[A-Z0-9_:-]{1,120}$/.test(error.message)
       ? error.message
-      : error instanceof Error
-        ? error.name.slice(0, 120)
-        : "WHATSAPP_PROCESSING_FAILED";
-    await db().update(whatsappWebhookEvents).set({
-      status: "failed",
-      errorCode,
-      completedAt: new Date(),
-    }).where(eq(whatsappWebhookEvents.id, eventId));
-    console.error(JSON.stringify({
-      level: "error",
-      event: "whatsapp.webhook.legacy_processing_failed",
-      eventId,
-      errorCode,
-    }));
+      : error instanceof Error ? error.name.slice(0, 120) : "WHATSAPP_PROCESSING_FAILED";
+    await db().update(whatsappWebhookEvents).set({ status: "failed", errorCode, completedAt: new Date() }).where(eq(whatsappWebhookEvents.id, eventId));
+    console.error(JSON.stringify({ level: "error", event: "whatsapp.webhook.legacy_processing_failed", eventId, errorCode }));
   }
 }
 
@@ -72,10 +58,7 @@ export async function GET(request: Request) {
   if (mode !== "subscribe" || !challenge || !secureStringEquals(config.webhookVerifyToken, verifyToken)) {
     return new Response(null, { status: 403, headers: { "cache-control": "no-store" } });
   }
-  return new Response(challenge, {
-    status: 200,
-    headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
-  });
+  return new Response(challenge, { status: 200, headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
 }
 
 export async function POST(request: Request) {
@@ -84,30 +67,17 @@ export async function POST(request: Request) {
     await hydrateRuntimeForRequest();
     const config = requireWhatsAppConfig();
     const contentLength = Number(request.headers.get("content-length") ?? 0);
-    if (Number.isFinite(contentLength) && contentLength > MAX_WEBHOOK_BYTES) {
-      return apiFailure(413, "PAYLOAD_TOO_LARGE", "حجم Webhook أكبر من الحد المسموح.", requestId);
-    }
+    if (Number.isFinite(contentLength) && contentLength > MAX_WEBHOOK_BYTES) return apiFailure(413, "PAYLOAD_TOO_LARGE", "حجم Webhook أكبر من الحد المسموح.", requestId);
     const rawBody = await request.text();
-    if (new TextEncoder().encode(rawBody).byteLength > MAX_WEBHOOK_BYTES) {
-      return apiFailure(413, "PAYLOAD_TOO_LARGE", "حجم Webhook أكبر من الحد المسموح.", requestId);
-    }
-    if (!verifyMetaWebhookSignature(rawBody, request.headers.get("x-hub-signature-256"), config.appSecret)) {
-      return apiFailure(401, "WHATSAPP_SIGNATURE_INVALID", "تعذر التحقق من توقيع Webhook.", requestId);
-    }
+    if (new TextEncoder().encode(rawBody).byteLength > MAX_WEBHOOK_BYTES) return apiFailure(413, "PAYLOAD_TOO_LARGE", "حجم Webhook أكبر من الحد المسموح.", requestId);
+    if (!verifyMetaWebhookSignature(rawBody, request.headers.get("x-hub-signature-256"), config.appSecret)) return apiFailure(401, "WHATSAPP_SIGNATURE_INVALID", "تعذر التحقق من توقيع Webhook.", requestId);
     let payload: unknown;
-    try { payload = JSON.parse(rawBody); } catch {
-      return apiFailure(400, "INVALID_JSON", "صيغة Webhook غير صالحة.", requestId);
-    }
+    try { payload = JSON.parse(rawBody); } catch { return apiFailure(400, "INVALID_JSON", "صيغة Webhook غير صالحة.", requestId); }
 
     const extracted = extractWhatsAppMessages(payload);
     const normalized = whatsappChannelAdapter.normalizeIncoming(payload, { externalAccountId: config.phoneNumberId });
     const phoneNumberKey = normalized.find((item) => item.externalAccountId)?.externalAccountId ?? config.phoneNumberId;
-    await enforceRateLimit({
-      scope: "whatsapp.webhook.phone",
-      key: phoneNumberKey,
-      limit: 3_000,
-      windowMs: 60_000,
-    });
+    await enforceRateLimit({ scope: "whatsapp.webhook.phone", key: phoneNumberKey, limit: 3_000, windowMs: 60_000 });
 
     const legacyTasks: Array<{ eventId: string; message: WhatsAppIncomingMessage }> = [];
     const channelTasks: Array<{
@@ -122,16 +92,13 @@ export async function POST(request: Request) {
 
     for (const item of extracted) {
       const parsed = parseWhatsAppCommand(item.message);
-      const legacyCommand = parsed.kind === "connect"
-        || parsed.kind === "account"
-        || parsed.kind === "open_chat"
-        || parsed.kind === "disconnect";
-      if (!legacyCommand) continue;
+      const deterministicCommand = parsed.kind !== "unknown";
+      if (!deterministicCommand) continue;
       try {
         const [event] = await db().insert(whatsappWebhookEvents).values({
           messageId: item.message.id,
           phoneNumberId: item.phoneNumberId ?? config.phoneNumberId,
-          eventType: `legacy:${parsed.kind}`,
+          eventType: `command:${parsed.kind}`,
         }).returning({ id: whatsappWebhookEvents.id });
         if (event) legacyTasks.push({ eventId: event.id, message: item.message });
       } catch (error) {
@@ -140,65 +107,29 @@ export async function POST(request: Request) {
       }
     }
 
-    const legacyIds = new Set(legacyTasks.map((task) => task.message.id));
+    const commandIds = new Set(legacyTasks.map((task) => task.message.id));
     for (const incoming of normalized) {
-      if (legacyIds.has(incoming.eventId)) continue;
+      if (commandIds.has(incoming.eventId)) continue;
       const sender = await resolveWhatsAppSender(incoming.senderExternalId);
-      if (!sender) {
-        unresolvedSenders += 1;
-        continue;
-      }
-      const policy = await resolveEffectiveWhatsAppPolicy({
-        organizationId: sender.organizationId,
-        userId: sender.userId,
-      });
-      if (policy.status === "disabled" || !policy.autoReplyEnabled) {
-        disabledPolicies += 1;
-        continue;
-      }
+      if (!sender) { unresolvedSenders += 1; continue; }
+      const policy = await resolveEffectiveWhatsAppPolicy({ organizationId: sender.organizationId, userId: sender.userId });
+      if (policy.status === "disabled" || !policy.autoReplyEnabled) { disabledPolicies += 1; continue; }
       const baseConnection = await ensureOrganizationWhatsAppProjection(sender.organizationId);
       const connection = connectionForWhatsAppPolicy(baseConnection, policy);
-      const enabled = await isFeatureEnabled(
-        connection.organizationId,
-        "whatsapp_integration",
-        incoming.senderExternalId,
-      );
-      if (!enabled) {
-        featureDisabled += 1;
-        continue;
-      }
-      channelTasks.push({
-        connection,
-        incoming,
-        routingPolicy: channelPolicyForWhatsApp(connection.id, policy),
-      });
+      const enabled = await isFeatureEnabled(connection.organizationId, "whatsapp_integration", incoming.senderExternalId);
+      if (!enabled) { featureDisabled += 1; continue; }
+      channelTasks.push({ connection, incoming, routingPolicy: channelPolicyForWhatsApp(connection.id, policy) });
     }
 
     if (legacyTasks.length > 0 || channelTasks.length > 0) {
       after(async () => {
         await Promise.allSettled([
           ...legacyTasks.map((task) => processLegacyEvent(task.eventId, task.message)),
-          ...channelTasks.map((task) => withWhatsAppChannelPolicy({
-            organizationId: task.connection.organizationId,
-            connectionId: task.connection.id,
-            routingPolicy: task.routingPolicy,
-          }, () => routeIncomingChannelMessage({
-            connection: task.connection,
-            incoming: task.incoming,
-          }))),
+          ...channelTasks.map((task) => withWhatsAppChannelPolicy({ organizationId: task.connection.organizationId, connectionId: task.connection.id, routingPolicy: task.routingPolicy }, () => routeIncomingChannelMessage({ connection: task.connection, incoming: task.incoming }))),
         ]);
       });
     }
-    return apiSuccess({
-      accepted: true,
-      messages: legacyTasks.length + channelTasks.length,
-      legacyCommands: legacyTasks.length,
-      channelMessages: channelTasks.length,
-      duplicates,
-      unresolvedSenders,
-      disabledPolicies,
-      featureDisabled,
-    }, requestId);
+    return apiSuccess({ accepted: true, messages: legacyTasks.length + channelTasks.length, legacyCommands: legacyTasks.length, channelMessages: channelTasks.length, duplicates, unresolvedSenders, disabledPolicies, featureDisabled }, requestId);
   } catch (error) {
     return handleApiError(error, requestId, "/api/webhooks/whatsapp");
   }
