@@ -1,6 +1,7 @@
 import { assertSessionPermission, requireSession, type Permission } from "@/lib/auth/authorization";
 import { contentOperationSchema, type ContentOperation } from "@/lib/admin/content-contracts";
 import { executeContentOperation, loadContentManager } from "@/lib/admin/content-service";
+import { requireModuleActive } from "@/lib/control-plane/modules";
 import { apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { enforceRateLimit, requestClientKey } from "@/lib/security/rate-limit";
 
@@ -19,6 +20,7 @@ export async function GET(request: Request) {
   const requestId = getRequestId(request);
   try {
     const session = await requireSession("content:read");
+    await requireModuleActive(session.organizationId, "content_management");
     return apiSuccess(await loadContentManager(session.organizationId), requestId);
   } catch (error) {
     return handleApiError(error, requestId, "/api/dashboard/content");
@@ -30,6 +32,7 @@ export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const session = await requireSession();
+    await requireModuleActive(session.organizationId, "content_management");
     await enforceRateLimit({
       scope: "dashboard.content.mutate",
       key: `${session.organizationId}:${session.userId}:${requestClientKey(request)}`,
