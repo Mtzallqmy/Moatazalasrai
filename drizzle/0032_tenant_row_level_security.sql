@@ -8,11 +8,9 @@ END
 $$;
 
 GRANT moataz_app_runtime TO CURRENT_USER;
-GRANT USAGE ON SCHEMA public, graphile_worker TO moataz_app_runtime;
+GRANT USAGE ON SCHEMA public TO moataz_app_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO moataz_app_runtime;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO moataz_app_runtime;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA graphile_worker TO moataz_app_runtime;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA graphile_worker TO moataz_app_runtime;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO moataz_app_runtime;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO moataz_app_runtime;
 
