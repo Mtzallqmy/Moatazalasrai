@@ -74,7 +74,10 @@ export interface ChannelAdapter {
   readonly capabilities: ReadonlySet<
     "text" | "images" | "files" | "audio" | "video" | "interactive" | "read_receipts" | "reply"
   >;
-  normalizeIncoming(payload: unknown): ChannelIncomingMessage[];
+  normalizeIncoming(
+    payload: unknown,
+    hints?: { externalAccountId?: string },
+  ): ChannelIncomingMessage[];
   send(context: ChannelAdapterContext, message: ChannelOutgoingMessage): Promise<{ externalMessageId: string }>;
   markRead?(context: ChannelAdapterContext, externalMessageId: string): Promise<void>;
   downloadAttachment?(
