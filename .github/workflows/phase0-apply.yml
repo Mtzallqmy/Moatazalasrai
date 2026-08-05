@@ -126,11 +126,25 @@ jobs:
 
       - name: Verify migration invariants
         run: |
-          if git grep -nE 'from ["'"']postgres["'"']|require\(["'"']postgres["'"']\)' -- '*.ts' '*.tsx' '*.js' '*.mjs' '*.cjs'; then
-            echo "postgres-js imports remain" >&2
-            exit 1
-          fi
-          node -e "const p=require('./package.json'); if(p.dependencies.postgres) process.exit(1); if(!p.dependencies.pg) process.exit(1); if(p.devDependencies.vitest !== '^4.1.10') process.exit(1)"
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          function filesBelow(directory) {
+            if (!fs.existsSync(directory)) return [];
+            return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+              const target = path.join(directory, entry.name);
+              return entry.isDirectory() ? filesBelow(target) : [target];
+            });
+          }
+          const roots = ['scripts', 'src', 'tests', 'e2e'];
+          const files = roots.flatMap(filesBelow).filter((file) => /\.(?:ts|tsx|js|mjs|cjs)$/.test(file));
+          const remaining = files.filter((file) => /from ["']postgres["']|require\(["']postgres["']\)/.test(fs.readFileSync(file, 'utf8')));
+          if (remaining.length) throw new Error(`postgres-js imports remain: ${remaining.join(', ')}`);
+          const manifest = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          if (manifest.dependencies.postgres || !manifest.dependencies.pg || manifest.devDependencies.vitest !== '^4.1.10') {
+            throw new Error('Package manifest PostgreSQL or Vitest invariant failed.');
+          }
+          NODE
           git diff --check
 
       - name: Commit implementation
