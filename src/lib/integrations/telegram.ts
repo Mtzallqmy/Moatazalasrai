@@ -93,7 +93,9 @@ export function sendTelegramMessage(input: {
   removeKeyboard?: boolean;
 }) {
   const text = input.text.length > 4000 ? `${input.text.slice(0, 3990)}…` : input.text;
-  const legacyRows = input.buttons?.slice(0, 12).map((button) => [{ title: button.title, id: button.id }]);
+  const legacyRows: TelegramInlineButton[][] | undefined = input.buttons
+    ?.slice(0, 12)
+    .map((button) => [{ title: button.title, id: button.id }]);
   const rows = (input.buttonRows ?? legacyRows)?.slice(0, 8).map((row) => row.slice(0, 4).map((button) => ({
     text: button.title.slice(0, 64),
     ...(button.url ? { url: button.url } : { callback_data: (button.id ?? "telegram.help").slice(0, 64) }),
