@@ -4,6 +4,10 @@ import { cookies } from "next/headers";
 import { db } from "@/db";
 import { organizationMembers, organizations, sessions, users } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
+import {
+  enterUserDatabaseContext,
+  runWithSystemDatabaseContext,
+} from "@/lib/security/database-context";
 
 export const SESSION_COOKIE = "moataz_session";
 const SESSION_DAYS = 30;
@@ -20,6 +24,7 @@ export async function createSession(input: {
   ipAddress?: string;
   userAgent?: string;
 }) {
+  enterUserDatabaseContext(input.userId, input.activeOrganizationId);
   const token = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000);
   const values: {
@@ -55,17 +60,20 @@ export async function revokeCurrentSession() {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
   if (token) {
-    await db().update(sessions).set({ revokedAt: new Date() }).where(eq(sessions.tokenHash, hashToken(token)));
+    await runWithSystemDatabaseContext("revoke-current-session-by-token", () =>
+      db().update(sessions).set({ revokedAt: new Date() }).where(eq(sessions.tokenHash, hashToken(token))));
   }
   store.delete(SESSION_COOKIE);
 }
 
 export async function revokeAllSessions(userId: string) {
+  enterUserDatabaseContext(userId);
   await db().update(sessions).set({ revokedAt: new Date() }).where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)));
   (await cookies()).delete(SESSION_COOKIE);
 }
 
 export async function setActiveOrganization(userId: string, sessionId: string, organizationId: string) {
+  enterUserDatabaseContext(userId, organizationId);
   const [membership] = await db()
     .select({ id: organizationMembers.id })
     .from(organizationMembers)
@@ -95,7 +103,7 @@ export async function currentSession() {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
   if (!token) return null;
 
-  const [base] = await db()
+  const [base] = await runWithSystemDatabaseContext("session-token-lookup", () => db()
     .select({
       sessionId: sessions.id,
       activeOrganizationId: sessions.activeOrganizationId,
@@ -112,11 +120,12 @@ export async function currentSession() {
       gt(sessions.expiresAt, new Date()),
       gt(sessions.lastSeenAt, new Date(Date.now() - SESSION_IDLE_DAYS * 24 * 60 * 60 * 1000)),
     ))
-    .limit(1);
+    .limit(1));
 
   if (!base) return null;
 
   let activeOrganizationId = base.activeOrganizationId;
+  enterUserDatabaseContext(base.userId, activeOrganizationId);
   if (!activeOrganizationId) {
     const memberships = await db()
       .select({ organizationId: organizationMembers.organizationId })
@@ -126,10 +135,12 @@ export async function currentSession() {
       .limit(2);
     if (memberships.length === 1) {
       activeOrganizationId = memberships[0].organizationId;
+      enterUserDatabaseContext(base.userId, activeOrganizationId);
       await db().update(sessions).set({ activeOrganizationId }).where(eq(sessions.id, base.sessionId));
     }
   }
 
+  enterUserDatabaseContext(base.userId, activeOrganizationId);
   const [membership] = activeOrganizationId
     ? await db()
       .select({
@@ -147,11 +158,13 @@ export async function currentSession() {
     : [];
 
   if (activeOrganizationId && !membership) {
+    enterUserDatabaseContext(base.userId);
     await db().update(sessions).set({ activeOrganizationId: null }).where(eq(sessions.id, base.sessionId));
   }
 
   const staleBefore = new Date(Date.now() - LAST_SEEN_WRITE_INTERVAL_MS);
   if (base.lastSeenAt < staleBefore) {
+    enterUserDatabaseContext(base.userId, membership?.organizationId ?? null);
     await db()
       .update(sessions)
       .set({ lastSeenAt: new Date() })
