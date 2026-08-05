@@ -64,10 +64,13 @@ function attachments(message: TelegramMessage): ChannelIncomingAttachment[] {
   }
   const audio = message.audio ?? message.voice;
   if (audio?.file_id) {
+    const audioFilename = "file_name" in audio && typeof audio.file_name === "string"
+      ? audio.file_name
+      : `telegram-${message.message_id ?? "voice"}.ogg`;
     output.push({
       externalId: audio.file_id,
       kind: "audio",
-      filename: "file_name" in audio ? audio.file_name : `telegram-${message.message_id ?? "voice"}.ogg`,
+      filename: audioFilename,
       mimeType: audio.mime_type,
       sizeBytes: audio.file_size,
     });
