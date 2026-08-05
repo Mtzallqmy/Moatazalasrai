@@ -50,5 +50,9 @@ CREATE TABLE IF NOT EXISTS "telegram_feature_permissions" (
 );
 CREATE INDEX IF NOT EXISTS "telegram_feature_permissions_org_user_idx" ON "telegram_feature_permissions" ("organization_id", "user_id");
 
+ALTER TABLE "telegram_updates" ALTER COLUMN "integration_id" DROP NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS "telegram_updates_central_update_unique_idx"
+  ON "telegram_updates" ("update_id") WHERE "integration_id" IS NULL;
+
 -- Legacy per-organization Telegram integrations remain readable for history but are no longer used by the central webhook.
 COMMENT ON TABLE "telegram_account_links" IS 'Central platform Telegram bot account links';
