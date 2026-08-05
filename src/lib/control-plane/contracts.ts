@@ -4,15 +4,35 @@ import { ALL_PERMISSIONS } from "@/lib/auth/permissions";
 const uuid = z.string().uuid();
 const key = z.string().trim().min(2).max(100).regex(/^[a-z0-9][a-z0-9_.-]*$/);
 const channel = z.enum(["whatsapp", "email", "push", "internal"]);
+const moduleStatus = z.enum(["active", "disabled", "hidden", "deleted"]);
 
 export const controlPlaneOperationSchema = z.discriminatedUnion("operation", [
+  z.object({
+    operation: z.literal("module.create"),
+    key,
+    name: z.string().trim().min(2).max(120),
+    description: z.string().trim().max(1_000).optional(),
+    status: moduleStatus.default("active"),
+    position: z.number().int().min(0).max(10_000).default(100),
+    config: z.record(z.string(), z.unknown()).default({}),
+  }).strict(),
   z.object({
     operation: z.literal("module.update"),
     id: uuid,
     name: z.string().trim().min(2).max(120).optional(),
-    status: z.enum(["active", "disabled", "hidden", "deleted"]).optional(),
+    status: moduleStatus.optional(),
     position: z.number().int().min(0).max(10_000).optional(),
     config: z.record(z.string(), z.unknown()).optional(),
+  }).strict(),
+  z.object({
+    operation: z.literal("feature.upsert"),
+    id: uuid.optional(),
+    key,
+    name: z.string().trim().min(2).max(160),
+    description: z.string().trim().max(1_000).optional(),
+    enabled: z.boolean().default(false),
+    rolloutPercentage: z.number().int().min(0).max(100).default(100),
+    config: z.record(z.string(), z.unknown()).default({}),
   }).strict(),
   z.object({
     operation: z.literal("feature.update"),
@@ -43,6 +63,11 @@ export const controlPlaneOperationSchema = z.discriminatedUnion("operation", [
     roleId: uuid,
   }).strict(),
   z.object({
+    operation: z.literal("role.unassign"),
+    organizationMemberId: uuid,
+    roleId: uuid,
+  }).strict(),
+  z.object({
     operation: z.literal("template.upsert"),
     id: uuid.optional(),
     key,
@@ -57,6 +82,8 @@ export const controlPlaneOperationSchema = z.discriminatedUnion("operation", [
     whatsappTemplateStatus: z.string().trim().max(80).default("not_submitted"),
     enabled: z.boolean().default(true),
   }).strict(),
+  z.object({ operation: z.literal("template.delete"), id: uuid }).strict(),
+  z.object({ operation: z.literal("template.restore"), id: uuid }).strict(),
   z.object({
     operation: z.literal("rule.upsert"),
     id: uuid.optional(),
@@ -69,6 +96,8 @@ export const controlPlaneOperationSchema = z.discriminatedUnion("operation", [
     priority: z.number().int().min(0).max(10_000).default(100),
     enabled: z.boolean().default(true),
   }).strict(),
+  z.object({ operation: z.literal("rule.delete"), id: uuid }).strict(),
+  z.object({ operation: z.literal("rule.restore"), id: uuid }).strict(),
   z.object({ operation: z.literal("trash.restore"), id: uuid }).strict(),
   z.object({ operation: z.literal("trash.purge"), id: uuid }).strict(),
 ]);
