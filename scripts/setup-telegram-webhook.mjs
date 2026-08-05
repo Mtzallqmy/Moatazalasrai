@@ -59,12 +59,17 @@ await call("setWebhook", {
 
 const verified = await call("getWebhookInfo");
 if (verified?.url !== publicUrl) throw new Error("Telegram webhook verification failed: URL mismatch.");
-if (verified?.last_error_message) {
-  throw new Error(`Telegram webhook reports an error: ${String(verified.last_error_message).slice(0, 240)}`);
-}
 const allowedUpdates = Array.isArray(verified?.allowed_updates) ? verified.allowed_updates : [];
 for (const update of ["message", "callback_query"]) {
   if (!allowedUpdates.includes(update)) throw new Error(`Telegram webhook is missing allowed update: ${update}.`);
+}
+if (verified?.last_error_message) {
+  console.warn(JSON.stringify({
+    level: "warn",
+    event: "telegram.webhook.previous_delivery_error",
+    message: String(verified.last_error_message).slice(0, 240),
+    lastErrorAt: verified.last_error_date ?? null,
+  }));
 }
 
 console.log(JSON.stringify({
