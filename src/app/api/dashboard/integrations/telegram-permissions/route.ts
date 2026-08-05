@@ -1,7 +1,11 @@
 import { z } from "zod";
 import { requireSession } from "@/lib/auth/authorization";
-import { apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
-import { setTelegramFeaturePermission, TELEGRAM_FEATURE_KEYS } from "@/lib/integrations/telegram-platform";
+import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
+import {
+  setTelegramFeaturePermission,
+  telegramLinkStatus,
+  TELEGRAM_FEATURE_KEYS,
+} from "@/lib/integrations/telegram-platform";
 import { enforceRateLimit, requestClientKey } from "@/lib/security/rate-limit";
 
 const schema = z.object({
@@ -12,6 +16,21 @@ const schema = z.object({
 }).strict();
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+export async function GET(request: Request) {
+  const requestId = getRequestId(request);
+  try {
+    const session = await requireSession("integrations:manage");
+    const userId = new URL(request.url).searchParams.get("userId");
+    if (!userId || !z.string().uuid().safeParse(userId).success) {
+      throw new ApiError(400, "USER_ID_REQUIRED", "اختر مستخدمًا صالحًا.");
+    }
+    return apiSuccess(await telegramLinkStatus(userId, session.organizationId), requestId);
+  } catch (error) {
+    return handleApiError(error, requestId, "/api/dashboard/integrations/telegram-permissions");
+  }
+}
 
 export async function PATCH(request: Request) {
   const requestId = getRequestId(request);
