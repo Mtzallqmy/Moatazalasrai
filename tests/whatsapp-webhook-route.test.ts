@@ -28,21 +28,55 @@ const connection = {
   updatedAt: new Date(),
 };
 
+const effectivePolicy = {
+  organizationId: connection.organizationId,
+  userId: "00000000-0000-4000-8000-000000000012",
+  agentId: null,
+  providerCredentialId: null,
+  modelId: null,
+  teamId: null,
+  inboxId: null,
+  workflowId: null,
+  allowedTools: [],
+  allowedActions: [],
+  permissions: ["ai.chat", "agent.use", "conversation.open"],
+  monthlyLimit: null,
+  autoReplyEnabled: true,
+  humanHandoffEnabled: true,
+  memoryEnabled: true,
+  filesEnabled: true,
+  status: "active" as const,
+  forceHumanHandoff: false,
+};
+
 const mocks = vi.hoisted(() => ({
   processMessage: vi.fn(async () => undefined),
   routeIncoming: vi.fn(async () => ({ duplicate: false })),
-  channelConnection: vi.fn(async () => connection),
   featureEnabled: vi.fn(async () => true),
   insertReturning: vi.fn(async () => [{ id: "event-id" }]),
   updateWhere: vi.fn(async () => []),
+  resolveSender: vi.fn(),
+  resolvePolicy: vi.fn(),
+  ensureProjection: vi.fn(),
 }));
 
 vi.mock("@/lib/integrations/whatsapp/commands", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/integrations/whatsapp/commands")>();
   return { ...actual, processWhatsAppMessage: mocks.processMessage };
 });
-vi.mock("@/lib/channels/connections", () => ({
-  channelConnectionForWebhook: mocks.channelConnection,
+vi.mock("@/lib/channels/whatsapp-platform", () => ({
+  resolveWhatsAppSender: mocks.resolveSender,
+  resolveEffectiveWhatsAppPolicy: mocks.resolvePolicy,
+  ensureOrganizationWhatsAppProjection: mocks.ensureProjection,
+  connectionForWhatsAppPolicy: (value: typeof connection) => value,
+  channelPolicyForWhatsApp: () => ({
+    settings: {},
+    permissions: new Set(["ai.chat", "agent.use", "conversation.open"]),
+    blockedOperations: new Set(["financial", "sensitive"]),
+    allowedCommands: new Set(),
+    allowedToolIds: [],
+  }),
+  withWhatsAppChannelPolicy: (_input: unknown, callback: () => Promise<unknown>) => callback(),
 }));
 vi.mock("@/lib/channels/router", () => ({
   routeIncomingChannelMessage: mocks.routeIncoming,
@@ -93,10 +127,16 @@ beforeEach(() => {
   });
   resetEnvForTests();
   for (const mock of Object.values(mocks)) mock.mockClear();
-  mocks.channelConnection.mockResolvedValue(connection);
   mocks.featureEnabled.mockResolvedValue(true);
   mocks.routeIncoming.mockResolvedValue({ duplicate: false });
   mocks.insertReturning.mockResolvedValue([{ id: "event-id" }]);
+  mocks.resolveSender.mockResolvedValue({
+    organizationId: connection.organizationId,
+    userId: effectivePolicy.userId,
+    linked: true,
+  });
+  mocks.resolvePolicy.mockResolvedValue(effectivePolicy);
+  mocks.ensureProjection.mockResolvedValue(connection);
 });
 
 afterEach(() => {
