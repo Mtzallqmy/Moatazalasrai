@@ -1,0 +1,57 @@
+# Temporary same-repository rewrite, restricted to the channel platform branch.
+name: Channel Runtime Policy PR Rewrite
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+permissions:
+  contents: write
+jobs:
+  rewrite:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'feat/channel-platform-whatsapp'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: feat/channel-platform-whatsapp
+          fetch-depth: 0
+      - name: Rewrite runtime contracts
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          def once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f"{label}: expected 1 match, found {count}")
+              return text.replace(old, new, 1)
+
+          path = Path('src/lib/ai-sdk/runtime.ts')
+          text = path.read_text()
+          text = once(text, '  runId: string;\n  allocateStep: () => number;\n}) {', '  runId: string;\n  allowedToolIds?: readonly string[] | null;\n  allocateStep: () => number;\n}) {', 'runtimeTools')
+          text = once(text, '    runId: input.runId,\n    state,\n  });', '    runId: input.runId,\n    allowedToolIds: input.allowedToolIds,\n    state,\n  });', 'tool loader')
+          text = once(text, '  resumeMessages?: ModelMessage[];\n  temperature: number;', '  resumeMessages?: ModelMessage[];\n  allowedToolIds?: readonly string[] | null;\n  temperature: number;', 'execute input')
+          text = once(text, '  context: ProviderMessage[];\n  temperature: number;', '  context: ProviderMessage[];\n  allowedToolIds?: readonly string[] | null;\n  temperature: number;', 'stream input')
+          path.write_text(text)
+
+          path = Path('src/lib/agents/runtime.ts')
+          text = path.read_text()
+          text = once(text, 'import { and, asc, count, desc, eq, isNull } from "drizzle-orm";', 'import { and, asc, count, desc, eq, inArray, isNull } from "drizzle-orm";', 'inArray import')
+          text = once(text, 'async function hasEnabledAgentTools(organizationId: string, agentId: string) {\n  const [row] = await db().select({ value: count() }).from(agentMcpTools)', 'async function hasEnabledAgentTools(\n  organizationId: string,\n  agentId: string,\n  allowedToolIds?: readonly string[] | null,\n) {\n  if (allowedToolIds && allowedToolIds.length === 0) return false;\n  const [row] = await db().select({ value: count() }).from(agentMcpTools)', 'tool check')
+          text = once(text, '      eq(agentMcpTools.agentId, agentId),\n      eq(mcpTools.organizationId, organizationId),', '      eq(agentMcpTools.agentId, agentId),\n      allowedToolIds ? inArray(agentMcpTools.toolId, [...allowedToolIds]) : undefined,\n      eq(mcpTools.organizationId, organizationId),', 'tool filter')
+          text = once(text, '  media?: ProviderContentPart[];\n}) {\n  const [agent]', '  media?: ProviderContentPart[];\n  allowedToolIds?: readonly string[] | null;\n}) {\n  const [agent]', 'prepare input')
+          text = once(text, '    hasEnabledAgentTools(input.organizationId, input.agentId),', '    hasEnabledAgentTools(input.organizationId, input.agentId, input.allowedToolIds),', 'tool detection')
+          text = once(text, '  media?: ProviderContentPart[];\n}) {\n  const requestId = input.requestId ?? crypto.randomUUID();', '  media?: ProviderContentPart[];\n  allowedToolIds?: readonly string[] | null;\n}) {\n  const requestId = input.requestId ?? crypto.randomUUID();', 'execute input')
+          text = once(text, '          context: prepared.context,\n          temperature: prepared.version.temperatureMilli / 1000,', '          context: prepared.context,\n          allowedToolIds: input.allowedToolIds,\n          temperature: prepared.version.temperatureMilli / 1000,', 'execute call')
+          text = once(text, '  media?: ProviderContentPart[];\n}) {\n  const prepared = await prepareAgentRun(input);', '  media?: ProviderContentPart[];\n  allowedToolIds?: readonly string[] | null;\n}) {\n  const prepared = await prepareAgentRun(input);', 'stream input')
+          text = once(text, '          context: prepared.context,\n          temperature: prepared.version.temperatureMilli / 1000,\n          maxOutputTokens: prepared.version.maxOutputTokens,\n          abortSignal: controller.signal,\n          allocateStep,\n        })) {', '          context: prepared.context,\n          allowedToolIds: input.allowedToolIds,\n          temperature: prepared.version.temperatureMilli / 1000,\n          maxOutputTokens: prepared.version.maxOutputTokens,\n          abortSignal: controller.signal,\n          allocateStep,\n        })) {', 'stream call')
+          path.write_text(text)
+          PY
+      - name: Commit rewrite
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/lib/ai-sdk/runtime.ts src/lib/agents/runtime.ts
+          git commit -m "feat(channels): enforce channel tool policy in agent runtime"
+          git push origin HEAD:feat/channel-platform-whatsapp
