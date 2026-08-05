@@ -6,6 +6,7 @@ import { channelInboxes, channelWorkflows } from "@/db/channel-schema";
 import { agents, mcpTools, organizationMembers, providerCredentials, users } from "@/db/schema";
 import { ChannelManager } from "@/components/channel-manager";
 import { DashboardShell } from "@/components/dashboard-shell";
+import { WhatsAppPolicyManager } from "@/components/whatsapp-policy-manager";
 import { currentSession } from "@/lib/auth/session";
 import { can } from "@/lib/auth/permissions";
 
@@ -49,25 +50,40 @@ export default async function ChannelsPage() {
       .orderBy(asc(users.name)),
   ]);
 
+  const members = memberRows.map((member) => ({ ...member, name: member.name ?? member.email }));
+  const canManage = can(session.role, "channels:manage");
+
   return (
     <DashboardShell
       session={session}
       activePath="/dashboard/channels"
       title="القنوات وصناديق المحادثات"
-      description="إدارة Telegram وWhatsApp من مسار موحد مع توجيه الوكلاء والمزودات والأدوات والصلاحيات والتحويل البشري."
+      description="إدارة Telegram وقناة WhatsApp المركزية مع توجيه الوكلاء والمزودات والأدوات والصلاحيات والتحويل البشري."
     >
-      <ChannelManager
-        canManage={can(session.role, "channels:manage")}
-        canHandoff={can(session.role, "channels:handoff")}
-        options={{
-          agents: agentRows,
-          providers: providerRows,
-          tools: toolRows,
-          inboxes: inboxRows,
-          workflows: workflowRows,
-          members: memberRows.map((member) => ({ ...member, name: member.name ?? member.email })),
-        }}
-      />
+      <div className="space-y-6">
+        <WhatsAppPolicyManager
+          canManage={canManage}
+          role={session.role}
+          options={{
+            agents: agentRows.map(({ id, name }) => ({ id, name })),
+            providers: providerRows.map(({ id, name, models }) => ({ id, name, models })),
+            tools: toolRows,
+            members: members.map(({ id, name, email }) => ({ id, name, email })),
+          }}
+        />
+        <ChannelManager
+          canManage={canManage}
+          canHandoff={can(session.role, "channels:handoff")}
+          options={{
+            agents: agentRows,
+            providers: providerRows,
+            tools: toolRows,
+            inboxes: inboxRows,
+            workflows: workflowRows,
+            members,
+          }}
+        />
+      </div>
     </DashboardShell>
   );
 }
