@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { CheckCircle2, Copy, ExternalLink, Link2, Send, ShieldCheck } from "lucide-react";
 
 const featureLabels: Record<string, string> = {
   "telegram.chat": "الدردشة",
@@ -28,6 +29,7 @@ type LinkStatus = {
 };
 type Member = { id: string; name: string; email: string };
 type Api<T> = { success?: boolean; data?: T; error?: { message?: string } };
+type LinkCode = { value: string; deepLink: string; expiresAt: string };
 
 export function CentralTelegramManager(props: {
   initialStatus: LinkStatus;
@@ -38,33 +40,75 @@ export function CentralTelegramManager(props: {
   const [status, setStatus] = useState(props.initialStatus);
   const [selectedUserId, setSelectedUserId] = useState(props.currentUserId);
   const [adminStatus, setAdminStatus] = useState<LinkStatus>(props.initialStatus);
-  const [code, setCode] = useState<{ value: string; deepLink: string; expiresAt: string } | null>(null);
+  const [code, setCode] = useState<LinkCode | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
 
-  async function refreshOwn() {
+  const refreshOwn = useCallback(async () => {
     const response = await fetch("/api/telegram/link-status", { cache: "no-store" });
     const payload = await response.json() as Api<LinkStatus>;
     if (!response.ok || !payload.success || !payload.data) throw new Error(payload.error?.message ?? "تعذر تحميل حالة الربط.");
     setStatus(payload.data);
     if (selectedUserId === props.currentUserId) setAdminStatus(payload.data);
-  }
+  }, [props.currentUserId, selectedUserId]);
 
-  async function createCode() {
-    setBusy(true); setMessage("");
+  useEffect(() => {
+    const synchronize = () => {
+      if (document.visibilityState === "visible") void refreshOwn().catch(() => undefined);
+    };
+    window.addEventListener("pageshow", synchronize);
+    document.addEventListener("visibilitychange", synchronize);
+    return () => {
+      window.removeEventListener("pageshow", synchronize);
+      document.removeEventListener("visibilitychange", synchronize);
+    };
+  }, [refreshOwn]);
+
+  useEffect(() => {
+    if (!code || status.linked) return;
+    const expiresAt = new Date(code.expiresAt).getTime();
+    const timer = window.setInterval(() => {
+      if (Date.now() >= expiresAt) {
+        window.clearInterval(timer);
+        return;
+      }
+      void refreshOwn().catch(() => undefined);
+    }, 4_000);
+    return () => window.clearInterval(timer);
+  }, [code, refreshOwn, status.linked]);
+
+  async function createCodeAndOpenBot() {
+    setBusy(true);
+    setMessage("");
     try {
       const response = await fetch("/api/telegram/link-code", { method: "POST" });
       const payload = await response.json() as Api<{ code: string; deepLink: string; expiresAt: string }>;
       if (!response.ok || !payload.success || !payload.data) throw new Error(payload.error?.message ?? "تعذر إنشاء رمز الربط.");
-      setCode({ value: payload.data.code, deepLink: payload.data.deepLink, expiresAt: payload.data.expiresAt });
-      setMessage("أرسل الرمز إلى البوت أو افتح الرابط. لن يظهر الرمز مجددًا بعد مغادرة الصفحة.");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "تعذر إنشاء رمز الربط."); }
-    finally { setBusy(false); }
+      const nextCode = { value: payload.data.code, deepLink: payload.data.deepLink, expiresAt: payload.data.expiresAt };
+      setCode(nextCode);
+      setMessage("تم إنشاء الرمز. يجري فتح بوت Telegram لإكمال الربط.");
+      setBusy(false);
+      window.location.assign(nextCode.deepLink);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "تعذر إنشاء رمز الربط.");
+      setBusy(false);
+    }
+  }
+
+  async function copyCode() {
+    if (!code) return;
+    try {
+      await navigator.clipboard.writeText(code.value);
+      setMessage("تم نسخ رمز الربط.");
+    } catch {
+      setMessage(`انسخ رمز الربط يدويًا: ${code.value}`);
+    }
   }
 
   async function unlink() {
     if (!window.confirm("فصل حساب Telegram؟")) return;
-    setBusy(true); setMessage("");
+    setBusy(true);
+    setMessage("");
     try {
       const response = await fetch("/api/telegram/link", { method: "DELETE" });
       const payload = await response.json() as Api<unknown>;
@@ -72,23 +116,32 @@ export function CentralTelegramManager(props: {
       setCode(null);
       await refreshOwn();
       setMessage("تم فصل حساب Telegram.");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "تعذر فصل الحساب."); }
-    finally { setBusy(false); }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "تعذر فصل الحساب.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function loadUser(userId: string) {
-    setSelectedUserId(userId); setBusy(true); setMessage("");
+    setSelectedUserId(userId);
+    setBusy(true);
+    setMessage("");
     try {
       const response = await fetch(`/api/dashboard/integrations/telegram-permissions?userId=${encodeURIComponent(userId)}`, { cache: "no-store" });
       const payload = await response.json() as Api<LinkStatus>;
       if (!response.ok || !payload.success || !payload.data) throw new Error(payload.error?.message ?? "تعذر تحميل صلاحيات المستخدم.");
       setAdminStatus(payload.data);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "تعذر تحميل صلاحيات المستخدم."); }
-    finally { setBusy(false); }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "تعذر تحميل صلاحيات المستخدم.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function toggleFeature(featureKey: string, enabled: boolean) {
-    setBusy(true); setMessage("");
+    setBusy(true);
+    setMessage("");
     try {
       const response = await fetch("/api/dashboard/integrations/telegram-permissions", {
         method: "PATCH",
@@ -98,66 +151,103 @@ export function CentralTelegramManager(props: {
       const payload = await response.json() as Api<unknown>;
       if (!response.ok || !payload.success) throw new Error(payload.error?.message ?? "تعذر تحديث الصلاحية.");
       await loadUser(selectedUserId);
-      setMessage("تم تحديث صلاحية Telegram وتطبق على الرسالة التالية.");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "تعذر تحديث الصلاحية."); }
-    finally { setBusy(false); }
+      setMessage("تم تحديث صلاحية Telegram، وسيطبق التغيير على الرسالة التالية.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "تعذر تحديث الصلاحية.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   const enabledFeatures = new Set(adminStatus.permissions.filter((item) => item.enabled).map((item) => item.featureKey));
   const displayName = [status.link?.firstName, status.link?.lastName].filter(Boolean).join(" ") || status.link?.username || "حساب Telegram";
+  const botLink = code?.deepLink ?? (status.botUsername ? `https://t.me/${status.botUsername}` : null);
 
   return (
-    <section className="soft-card space-y-5 p-5">
-      <div>
-        <h2 className="font-bold">ربط تيليجرام</h2>
-        <p className="mt-2 text-sm leading-7 text-stone-400">تستخدم المنصة بوتًا مركزيًا واحدًا. لا تُخزن أي Bot Token داخل المؤسسة.</p>
-      </div>
-      <div className="rounded-2xl border border-white/10 p-4 text-sm">
-        <p>الحالة: <strong>{status.linked ? "مرتبط" : "غير مرتبط"}</strong></p>
-        {status.linked ? (
-          <div className="mt-2 space-y-1 text-stone-400">
-            <p>{displayName}{status.link?.username ? ` — @${status.link.username}` : ""}</p>
-            <p>تاريخ الربط: {status.link?.linkedAt ? new Date(status.link.linkedAt).toLocaleString("ar") : "—"}</p>
-            <p>آخر نشاط: {status.link?.lastSeenAt ? new Date(status.link.lastSeenAt).toLocaleString("ar") : "—"}</p>
+    <section className="soft-card telegram-link-card">
+      <div className="telegram-link-card__header">
+        <div className="telegram-link-card__identity">
+          <span className="telegram-link-card__icon" aria-hidden="true"><Send size={21} /></span>
+          <div>
+            <h2 className="telegram-link-card__title">ربط Telegram</h2>
+            <p className="telegram-link-card__description">
+              تستخدم المنصة بوتًا مركزيًا واحدًا. أنشئ رمزًا مؤقتًا وسيتم نقلك مباشرة إلى البوت لإكمال الربط، دون تخزين Bot Token داخل المؤسسة.
+            </p>
           </div>
-        ) : null}
+        </div>
+        <span className="telegram-status-chip" data-ready={Boolean(status.botUsername)}>
+          {status.botUsername ? <CheckCircle2 size={15} /> : <ShieldCheck size={15} />}
+          {status.botUsername ? `البوت جاهز — @${status.botUsername}` : "البوت غير مهيأ"}
+        </span>
       </div>
+
+      <div className="telegram-account-panel">
+        <div>
+          <p className="telegram-account-panel__label">حالة الحساب</p>
+          <p className="telegram-account-panel__value">{status.linked ? `مرتبط — ${displayName}` : "غير مرتبط"}</p>
+          {status.linked && status.link ? (
+            <p className="telegram-code-panel__expiry">
+              آخر نشاط: {new Date(status.link.lastSeenAt).toLocaleString("ar-SA")}
+            </p>
+          ) : null}
+        </div>
+        {status.linked ? <CheckCircle2 size={24} color="var(--success)" aria-label="الحساب مرتبط" /> : <Link2 size={24} color="var(--text-secondary)" aria-label="الحساب غير مرتبط" />}
+      </div>
+
       {code ? (
-        <div className="rounded-2xl border border-emerald-400/30 bg-emerald-400/5 p-4">
-          <p className="text-sm">رمز الربط المؤقت</p>
-          <p className="mt-2 font-latin text-3xl font-bold tracking-[0.35em]" dir="ltr">{code.value}</p>
-          <p className="mt-2 text-xs text-stone-400">ينتهي: {new Date(code.expiresAt).toLocaleString("ar")}</p>
+        <div className="telegram-code-panel">
+          <div className="telegram-code-panel__row">
+            <div>
+              <p className="telegram-code-panel__label">رمز الربط المؤقت</p>
+              <p className="telegram-code-panel__code font-latin" dir="ltr">{code.value}</p>
+              <p className="telegram-code-panel__expiry">ينتهي: {new Date(code.expiresAt).toLocaleString("ar-SA")}</p>
+            </div>
+            <button type="button" className="telegram-icon-button" onClick={() => void copyCode()}>
+              <Copy size={16} /> نسخ الرمز
+            </button>
+          </div>
         </div>
       ) : null}
-      <div className="flex flex-wrap gap-2">
-        <button className="primary-button" disabled={busy} onClick={() => void createCode()}>إنشاء رمز ربط</button>
-        {(code?.deepLink || status.botUsername) ? (
-          <a className="secondary-button" target="_blank" rel="noreferrer" href={code?.deepLink ?? `https://t.me/${status.botUsername}`}>فتح البوت</a>
+
+      <div className="telegram-actions">
+        <button className="primary-button" disabled={busy || !status.botUsername} onClick={() => void createCodeAndOpenBot()}>
+          <Send size={17} /> {busy ? "جارٍ التجهيز…" : "إنشاء رمز وفتح البوت"}
+        </button>
+        {botLink ? (
+          <a className="secondary-button" href={botLink}>
+            <ExternalLink size={17} /> فتح البوت مباشرة
+          </a>
         ) : null}
         {status.linked ? <button className="danger-button" disabled={busy} onClick={() => void unlink()}>فصل الحساب</button> : null}
       </div>
 
       {props.canManage ? (
-        <div className="space-y-4 border-t border-white/10 pt-5">
-          <h3 className="font-semibold">صلاحيات المستخدمين</h3>
-          <label className="grid gap-2 text-sm">المستخدم
-            <select className="form-control" value={selectedUserId} disabled={busy} onChange={(event) => void loadUser(event.target.value)}>
-              {props.members.map((member) => <option key={member.id} value={member.id}>{member.name} — {member.email}</option>)}
-            </select>
-          </label>
-          <p className="text-xs text-stone-400">السياسة Fail-closed: الميزة غير المسجلة أو غير المفعلة ممنوعة.</p>
-          <div className="grid gap-2 md:grid-cols-2">
-            {Object.entries(featureLabels).map(([key, label]) => (
-              <label key={key} className="flex items-center gap-2 rounded-xl border border-white/10 p-3 text-sm">
-                <input type="checkbox" checked={enabledFeatures.has(key)} disabled={busy}
-                  onChange={(event) => void toggleFeature(key, event.target.checked)} />
-                <span>{label}</span>
-              </label>
-            ))}
+        <details className="telegram-permissions">
+          <summary>
+            <span>صلاحيات مستخدمي Telegram</span>
+            <ShieldCheck size={17} aria-hidden="true" />
+          </summary>
+          <div className="telegram-permissions__body">
+            <label className="grid gap-2 text-sm">المستخدم
+              <select className="form-control" value={selectedUserId} disabled={busy} onChange={(event) => void loadUser(event.target.value)}>
+                {props.members.map((member) => <option key={member.id} value={member.id}>{member.name} — {member.email}</option>)}
+              </select>
+            </label>
+            <p className="telegram-code-panel__expiry">السياسة مغلقة افتراضيًا: أي ميزة غير مفعلة صراحةً تبقى ممنوعة.</p>
+            <div className="telegram-feature-grid">
+              {Object.entries(featureLabels).map(([key, label]) => (
+                <label key={key} className="telegram-feature-option">
+                  <input type="checkbox" checked={enabledFeatures.has(key)} disabled={busy}
+                    onChange={(event) => void toggleFeature(key, event.target.checked)} />
+                  <span>{label}</span>
+                </label>
+              ))}
+            </div>
           </div>
-        </div>
+        </details>
       ) : null}
-      {message ? <p role="status" className="text-sm">{message}</p> : null}
+
+      {message ? <p role="status" aria-live="polite" className="telegram-message">{message}</p> : null}
     </section>
   );
 }
