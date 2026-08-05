@@ -8,6 +8,7 @@ export type ApiScope =
   | "agents:read" | "agents:write"
   | "chat:write"
   | "conversations:read" | "conversations:write"
+  | "events:read" | "events:write"
   | "files:read" | "files:write"
   | "runs:read" | "runs:write"
   | "integrations:read" | "integrations:write"
@@ -18,8 +19,8 @@ export type ApiScope =
 
 export const ALL_API_SCOPES = [
   "agents:read", "agents:write", "chat:write", "conversations:read", "conversations:write",
-  "files:read", "files:write", "runs:read", "runs:write", "integrations:read",
-  "integrations:write", "providers:read", "providers:write", "github:read",
+  "events:read", "events:write", "files:read", "files:write", "runs:read", "runs:write",
+  "integrations:read", "integrations:write", "providers:read", "providers:write", "github:read",
   "mcp:read", "mcp:write", "teams:read", "teams:write",
 ] as const satisfies readonly ApiScope[];
 
@@ -87,10 +88,10 @@ export async function authenticateApiKey(request: Request): Promise<ApiPrincipal
     .limit(1);
   if (!mobile) return null;
   const mobileScopes = mobile.role === "owner" || mobile.role === "admin"
-    ? ["agents:read", "agents:write", "chat:write", "conversations:read", "conversations:write", "files:read", "files:write", "runs:read", "runs:write", "integrations:read", "integrations:write", "providers:read", "providers:write", "mcp:read", "mcp:write", "teams:read", "teams:write"]
+    ? ["agents:read", "agents:write", "chat:write", "conversations:read", "conversations:write", "events:read", "events:write", "files:read", "files:write", "runs:read", "runs:write", "integrations:read", "integrations:write", "providers:read", "providers:write", "mcp:read", "mcp:write", "teams:read", "teams:write"]
     : mobile.role === "developer"
-      ? ["agents:read", "agents:write", "chat:write", "conversations:read", "conversations:write", "files:read", "files:write", "runs:read", "runs:write", "integrations:read", "providers:read", "mcp:read", "teams:read"]
-      : ["agents:read", "chat:write", "conversations:read", "conversations:write", "files:read", "files:write", "runs:read", "runs:write", "teams:read"];
+      ? ["agents:read", "agents:write", "chat:write", "conversations:read", "conversations:write", "events:read", "events:write", "files:read", "files:write", "runs:read", "runs:write", "integrations:read", "providers:read", "mcp:read", "teams:read"]
+      : ["agents:read", "chat:write", "conversations:read", "conversations:write", "events:read", "files:read", "files:write", "runs:read", "runs:write", "teams:read"];
   if (mobile.lastUsedAt < new Date(Date.now() - 15 * 60_000)) {
     await db().update(mobileSessions).set({ lastUsedAt: new Date(), updatedAt: new Date() })
       .where(eq(mobileSessions.id, mobile.id));
