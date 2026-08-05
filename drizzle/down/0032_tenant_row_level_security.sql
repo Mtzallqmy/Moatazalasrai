@@ -34,9 +34,18 @@ $$;
 
 REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM moataz_app_runtime;
 REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM moataz_app_runtime;
-REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA graphile_worker FROM moataz_app_runtime;
-REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA graphile_worker FROM moataz_app_runtime;
-REVOKE USAGE ON SCHEMA public, graphile_worker FROM moataz_app_runtime;
+REVOKE USAGE ON SCHEMA public FROM moataz_app_runtime;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'graphile_worker') THEN
+    REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA graphile_worker FROM moataz_app_runtime;
+    REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA graphile_worker FROM moataz_app_runtime;
+    REVOKE USAGE ON SCHEMA graphile_worker FROM moataz_app_runtime;
+  END IF;
+END
+$$;
+
 REVOKE moataz_app_runtime FROM CURRENT_USER;
 
 DO $$
