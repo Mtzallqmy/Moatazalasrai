@@ -1,3 +1,4 @@
+import { synchronizePlatformWhatsAppEndpoint } from "@/lib/channels/whatsapp-platform";
 import { hydrateRuntimeControlPlane } from "@/lib/platform/runtime-control";
 import { initializeWhatsAppFromEnvironment } from "@/lib/platform/whatsapp-environment";
 
@@ -6,5 +7,8 @@ export async function hydrateRuntimeForRequest() {
     return null;
   }
   const report = await initializeWhatsAppFromEnvironment();
+  if (report.enabled && report.inspection.complete && report.inspection.valid) {
+    await synchronizePlatformWhatsAppEndpoint();
+  }
   return hydrateRuntimeControlPlane(report.changed);
 }
