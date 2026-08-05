@@ -11,6 +11,7 @@ import { auditLogs, integrations } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
 import { requireWhatsAppConfig } from "@/lib/integrations/whatsapp/config";
 import { decryptSecret } from "@/lib/security/encryption";
+import { currentWhatsAppChannelPolicy } from "./whatsapp-platform";
 import { channelAdapter } from "./registry";
 import type { ChannelAdapterContext, ChannelKind, ChannelRoutingPolicy } from "./types";
 
@@ -62,6 +63,10 @@ export async function channelAdapterContext(connection: ChannelConnectionRow): P
 }
 
 export async function channelRoutingPolicy(connection: ChannelConnectionRow): Promise<ChannelRoutingPolicy> {
+  const scoped = connection.kind === "whatsapp"
+    ? currentWhatsAppChannelPolicy(connection.organizationId, connection.id)
+    : null;
+  if (scoped) return scoped;
   const [[permission], toolRows] = await Promise.all([
     db().select().from(channelPermissions).where(and(
       eq(channelPermissions.connectionId, connection.id),
@@ -275,10 +280,12 @@ export async function channelConnectionForWebhook(input: {
   kind: ChannelKind;
   externalAccountId?: string;
   integrationId?: string;
+  organizationId?: string;
 }) {
   const rows = await db().select().from(channelConnections).where(and(
     eq(channelConnections.kind, input.kind),
     eq(channelConnections.enabled, true),
+    input.organizationId ? eq(channelConnections.organizationId, input.organizationId) : undefined,
     input.externalAccountId ? eq(channelConnections.externalAccountId, input.externalAccountId) : undefined,
     input.integrationId ? eq(channelConnections.integrationId, input.integrationId) : undefined,
   )).limit(2);
