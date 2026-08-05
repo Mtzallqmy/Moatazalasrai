@@ -119,7 +119,6 @@ export async function currentSession() {
       sessionId: sessions.id,
       activeOrganizationId: sessions.activeOrganizationId,
       lastSeenAt: sessions.lastSeenAt,
-      expiresAt: sessions.expiresAt,
       userId: users.id,
       email: users.email,
       name: users.name,
@@ -135,10 +134,6 @@ export async function currentSession() {
     .limit(1);
 
   if (!base) return null;
-  if (!primaryToken && legacyToken) {
-    store.set(SESSION_COOKIE, legacyToken, cookieOptions(base.expiresAt));
-    store.delete(LEGACY_SESSION_COOKIE);
-  }
 
   let activeOrganizationId = base.activeOrganizationId;
   if (!activeOrganizationId) {
