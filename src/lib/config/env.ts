@@ -1,3 +1,5 @@
+import { telegramPlatformConfig, type TelegramPlatformConfig } from "@/lib/integrations/telegram-platform";
+
 type NodeEnvironment = "development" | "test" | "production";
 type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -10,6 +12,7 @@ type RuntimeEnvironment = {
   bootstrapAdminToken?: string;
   appUrl?: string;
   publicAppUrl?: string;
+  telegram: TelegramPlatformConfig;
   whatsappIntegrationEnabled: boolean;
   metaAppId?: string;
   metaAppSecret?: string;
@@ -128,15 +131,10 @@ function serviceUrl(name: string, nodeEnv: NodeEnvironment): string | undefined 
   if (url.username || url.password || url.hash || url.search) {
     throw new Error(`${name} must not contain credentials, fragments, or query parameters.`);
   }
-  if (nodeEnv === "production" && url.protocol !== "https:") {
-    throw new Error(`${name} must use HTTPS in production.`);
-  }
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new Error(`${name} must use HTTP or HTTPS.`);
-  }
+  if (nodeEnv === "production" && url.protocol !== "https:") throw new Error(`${name} must use HTTPS in production.`);
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error(`${name} must use HTTP or HTTPS.`);
   return url.toString().replace(/\/$/, "");
 }
-
 
 function requireFeatureValue(enabled: boolean, name: string) {
   const value = optional(name);
@@ -165,47 +163,30 @@ function displayPhoneNumber(value: string | undefined) {
 
 export function env(): RuntimeEnvironment {
   if (cached) return cached;
-
   const nodeEnv = parseNodeEnvironment(process.env.NODE_ENV);
   const appUrl = optional("APP_URL");
-  if (nodeEnv === "production" && !appUrl) {
-    throw new Error("APP_URL is required in production.");
-  }
-  if (nodeEnv === "production" && appUrl && !appUrl.startsWith("https://")) {
-    throw new Error("APP_URL must use HTTPS in production.");
-  }
+  if (nodeEnv === "production" && !appUrl) throw new Error("APP_URL is required in production.");
+  if (nodeEnv === "production" && appUrl && !appUrl.startsWith("https://")) throw new Error("APP_URL must use HTTPS in production.");
   const publicAppUrl = serviceUrl("PUBLIC_APP_URL", nodeEnv) ?? appUrl;
+  const telegram = telegramPlatformConfig();
+
   const whatsappIntegrationEnabled = booleanEnv("WHATSAPP_INTEGRATION_ENABLED");
   const metaAppId = numericIdentifier("META_APP_ID", requireFeatureValue(whatsappIntegrationEnabled, "META_APP_ID"));
   const metaAppSecret = requireFeatureValue(whatsappIntegrationEnabled, "META_APP_SECRET");
   const metaGraphApiVersion = graphApiVersion(requireFeatureValue(whatsappIntegrationEnabled, "META_GRAPH_API_VERSION"));
   const whatsappAccessToken = requireFeatureValue(whatsappIntegrationEnabled, "WHATSAPP_ACCESS_TOKEN");
-  const whatsappPhoneNumberId = numericIdentifier(
-    "WHATSAPP_PHONE_NUMBER_ID",
-    requireFeatureValue(whatsappIntegrationEnabled, "WHATSAPP_PHONE_NUMBER_ID"),
-  );
-  const whatsappBusinessAccountId = numericIdentifier(
-    "WHATSAPP_BUSINESS_ACCOUNT_ID",
-    requireFeatureValue(whatsappIntegrationEnabled, "WHATSAPP_BUSINESS_ACCOUNT_ID"),
-  );
-  const whatsappDisplayPhoneNumber = displayPhoneNumber(
-    requireFeatureValue(whatsappIntegrationEnabled, "WHATSAPP_DISPLAY_PHONE_NUMBER"),
-  );
+  const whatsappPhoneNumberId = numericIdentifier("WHATSAPP_PHONE_NUMBER_ID", requireFeatureValue(whatsappIntegrationEnabled, "WHATSAPP_PHONE_NUMBER_ID"));
+  const whatsappBusinessAccountId = numericIdentifier("WHATSAPP_BUSINESS_ACCOUNT_ID", requireFeatureValue(whatsappIntegrationEnabled, "WHATSAPP_BUSINESS_ACCOUNT_ID"));
+  const whatsappDisplayPhoneNumber = displayPhoneNumber(requireFeatureValue(whatsappIntegrationEnabled, "WHATSAPP_DISPLAY_PHONE_NUMBER"));
   const whatsappWebhookVerifyToken = requireFeatureValue(whatsappIntegrationEnabled, "WHATSAPP_WEBHOOK_VERIFY_TOKEN");
   const whatsappConnectTokenSecret = requireFeatureValue(whatsappIntegrationEnabled, "WHATSAPP_CONNECT_TOKEN_SECRET");
   const whatsappConnectTokenTtlMinutes = integerEnv("WHATSAPP_CONNECT_TOKEN_TTL_MINUTES", 10, 5, 60);
 
-  if (whatsappIntegrationEnabled && !publicAppUrl) {
-    throw new Error("PUBLIC_APP_URL or APP_URL is required when WHATSAPP_INTEGRATION_ENABLED is true.");
-  }
+  if (whatsappIntegrationEnabled && !publicAppUrl) throw new Error("PUBLIC_APP_URL or APP_URL is required when WHATSAPP_INTEGRATION_ENABLED is true.");
   if (metaAppSecret && metaAppSecret.length < 16) throw new Error("META_APP_SECRET is too short.");
   if (whatsappAccessToken && whatsappAccessToken.length < 20) throw new Error("WHATSAPP_ACCESS_TOKEN is too short.");
-  if (whatsappWebhookVerifyToken && whatsappWebhookVerifyToken.length < 16) {
-    throw new Error("WHATSAPP_WEBHOOK_VERIFY_TOKEN must contain at least 16 characters.");
-  }
-  if (whatsappConnectTokenSecret && whatsappConnectTokenSecret.length < 32) {
-    throw new Error("WHATSAPP_CONNECT_TOKEN_SECRET must contain at least 32 characters.");
-  }
+  if (whatsappWebhookVerifyToken && whatsappWebhookVerifyToken.length < 16) throw new Error("WHATSAPP_WEBHOOK_VERIFY_TOKEN must contain at least 16 characters.");
+  if (whatsappConnectTokenSecret && whatsappConnectTokenSecret.length < 32) throw new Error("WHATSAPP_CONNECT_TOKEN_SECRET must contain at least 32 characters.");
 
   const browserAgentEnabled = booleanEnv("BROWSER_AGENT_ENABLED");
   const googleOauthIntegrationsEnabled = booleanEnv("GOOGLE_OAUTH_INTEGRATIONS_ENABLED");
@@ -220,31 +201,17 @@ export function env(): RuntimeEnvironment {
   const googleOauthClientSecret = optional("GOOGLE_OAUTH_CLIENT_SECRET");
   const googleOauthRedirectUri = optional("GOOGLE_OAUTH_REDIRECT_URI");
 
-  if (browserInteractiveLoginEnabled && !browserAgentEnabled) {
-    throw new Error("BROWSER_INTERACTIVE_LOGIN_ENABLED requires BROWSER_AGENT_ENABLED.");
-  }
-  if (browserAgentEnabled && (!browserRunnerUrl || !browserRunnerSharedSecret)) {
-    throw new Error("BROWSER_RUNNER_URL and BROWSER_RUNNER_SHARED_SECRET are required when browser agents are enabled.");
-  }
-  if (googleOauthIntegrationsEnabled && (!googleOauthClientId || !googleOauthClientSecret || !googleOauthRedirectUri)) {
-    throw new Error("Google OAuth integration variables are required when GOOGLE_OAUTH_INTEGRATIONS_ENABLED is true.");
-  }
+  if (browserInteractiveLoginEnabled && !browserAgentEnabled) throw new Error("BROWSER_INTERACTIVE_LOGIN_ENABLED requires BROWSER_AGENT_ENABLED.");
+  if (browserAgentEnabled && (!browserRunnerUrl || !browserRunnerSharedSecret)) throw new Error("BROWSER_RUNNER_URL and BROWSER_RUNNER_SHARED_SECRET are required when browser agents are enabled.");
+  if (googleOauthIntegrationsEnabled && (!googleOauthClientId || !googleOauthClientSecret || !googleOauthRedirectUri)) throw new Error("Google OAuth integration variables are required when GOOGLE_OAUTH_INTEGRATIONS_ENABLED is true.");
   if (googleOauthRedirectUri) {
     let redirect: URL;
     try { redirect = new URL(googleOauthRedirectUri); } catch { throw new Error("GOOGLE_OAUTH_REDIRECT_URI must be a valid URL."); }
-    if (nodeEnv === "production" && redirect.protocol !== "https:") {
-      throw new Error("GOOGLE_OAUTH_REDIRECT_URI must use HTTPS in production.");
-    }
+    if (nodeEnv === "production" && redirect.protocol !== "https:") throw new Error("GOOGLE_OAUTH_REDIRECT_URI must use HTTPS in production.");
   }
-  if (sandboxEnabled && (!sandboxRunnerUrl || !sandboxRunnerSharedSecret)) {
-    throw new Error("SANDBOX_RUNNER_URL and SANDBOX_RUNNER_SHARED_SECRET are required when SANDBOX_ENABLED is true.");
-  }
-  if (browserRunnerSharedSecret && browserRunnerSharedSecret.length < 32) {
-    throw new Error("BROWSER_RUNNER_SHARED_SECRET must contain at least 32 characters.");
-  }
-  if (sandboxRunnerSharedSecret && sandboxRunnerSharedSecret.length < 32) {
-    throw new Error("SANDBOX_RUNNER_SHARED_SECRET must contain at least 32 characters.");
-  }
+  if (sandboxEnabled && (!sandboxRunnerUrl || !sandboxRunnerSharedSecret)) throw new Error("SANDBOX_RUNNER_URL and SANDBOX_RUNNER_SHARED_SECRET are required when SANDBOX_ENABLED is true.");
+  if (browserRunnerSharedSecret && browserRunnerSharedSecret.length < 32) throw new Error("BROWSER_RUNNER_SHARED_SECRET must contain at least 32 characters.");
+  if (sandboxRunnerSharedSecret && sandboxRunnerSharedSecret.length < 32) throw new Error("SANDBOX_RUNNER_SHARED_SECRET must contain at least 32 characters.");
 
   const config: RuntimeEnvironment = {
     nodeEnv,
@@ -252,6 +219,7 @@ export function env(): RuntimeEnvironment {
     credentialEncryptionKey: validateEncryptionKey(required("CREDENTIAL_ENCRYPTION_KEY")),
     credentialEncryptionKeyId: encryptionKeyId(process.env.CREDENTIAL_ENCRYPTION_KEY_ID),
     credentialEncryptionPreviousKeys: previousEncryptionKeys(process.env.CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS),
+    telegram,
     whatsappIntegrationEnabled,
     whatsappConnectTokenTtlMinutes,
     logLevel: parseLogLevel(process.env.LOG_LEVEL),
