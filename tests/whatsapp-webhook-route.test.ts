@@ -2,8 +2,37 @@ import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetEnvForTests } from "@/lib/config/env";
 
+const connection = {
+  id: "00000000-0000-4000-8000-000000000010",
+  organizationId: "00000000-0000-4000-8000-000000000011",
+  kind: "whatsapp" as const,
+  integrationId: null,
+  name: "WhatsApp",
+  externalAccountId: "1234567890",
+  displayAddress: "+967700000000",
+  credentialSource: "environment",
+  defaultAgentId: null,
+  defaultProviderCredentialId: null,
+  defaultModel: null,
+  inboxId: null,
+  workflowId: null,
+  settings: {},
+  status: "healthy",
+  enabled: true,
+  webhookStatus: "configured",
+  webhookLastVerifiedAt: null,
+  lastHealthAt: null,
+  lastErrorCode: null,
+  createdByUserId: null,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+};
+
 const mocks = vi.hoisted(() => ({
   processMessage: vi.fn(async () => undefined),
+  routeIncoming: vi.fn(async () => ({ duplicate: false })),
+  channelConnection: vi.fn(async () => connection),
+  featureEnabled: vi.fn(async () => true),
   insertReturning: vi.fn(async () => [{ id: "event-id" }]),
   updateWhere: vi.fn(async () => []),
 }));
@@ -12,6 +41,15 @@ vi.mock("@/lib/integrations/whatsapp/commands", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/integrations/whatsapp/commands")>();
   return { ...actual, processWhatsAppMessage: mocks.processMessage };
 });
+vi.mock("@/lib/channels/connections", () => ({
+  channelConnectionForWebhook: mocks.channelConnection,
+}));
+vi.mock("@/lib/channels/router", () => ({
+  routeIncomingChannelMessage: mocks.routeIncoming,
+}));
+vi.mock("@/lib/control-plane/features", () => ({
+  isFeatureEnabled: mocks.featureEnabled,
+}));
 vi.mock("@/lib/security/rate-limit", () => ({ enforceRateLimit: vi.fn(async () => undefined) }));
 vi.mock("@/db", () => ({
   db: () => ({
@@ -54,9 +92,11 @@ beforeEach(() => {
     WHATSAPP_CONNECT_TOKEN_TTL_MINUTES: "10",
   });
   resetEnvForTests();
-  mocks.processMessage.mockClear();
-  mocks.insertReturning.mockClear();
-  mocks.updateWhere.mockClear();
+  for (const mock of Object.values(mocks)) mock.mockClear();
+  mocks.channelConnection.mockResolvedValue(connection);
+  mocks.featureEnabled.mockResolvedValue(true);
+  mocks.routeIncoming.mockResolvedValue({ duplicate: false });
+  mocks.insertReturning.mockResolvedValue([{ id: "event-id" }]);
 });
 
 afterEach(() => {
@@ -80,7 +120,7 @@ describe("WhatsApp webhook route", () => {
     expect(invalid.status).toBe(403);
   });
 
-  it("accepts a correctly signed POST and processes every message in the arrays", async () => {
+  it("routes ordinary messages through the channel platform and keeps account commands compatible", async () => {
     const { POST } = await import("@/app/api/webhooks/whatsapp/route");
     const raw = JSON.stringify({
       entry: [{ changes: [{ value: {
@@ -98,8 +138,10 @@ describe("WhatsApp webhook route", () => {
       body: raw,
     }));
     expect(response.status).toBe(200);
-    expect(mocks.insertReturning).toHaveBeenCalledTimes(2);
-    await vi.waitFor(() => expect(mocks.processMessage).toHaveBeenCalledTimes(2));
+    expect((await response.json()).data).toMatchObject({ legacyCommands: 1, channelMessages: 1 });
+    expect(mocks.insertReturning).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(mocks.processMessage).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(mocks.routeIncoming).toHaveBeenCalledTimes(1));
   });
 
   it("acknowledges status-only events without scheduling message processing", async () => {
@@ -116,10 +158,11 @@ describe("WhatsApp webhook route", () => {
     expect(response.status).toBe(200);
     expect((await response.json()).data).toMatchObject({ messages: 0, duplicates: 0 });
     expect(mocks.processMessage).not.toHaveBeenCalled();
+    expect(mocks.routeIncoming).not.toHaveBeenCalled();
   });
 
-  it("treats a repeated message ID as an idempotent duplicate", async () => {
-    mocks.insertReturning.mockRejectedValueOnce({ code: "23505" });
+  it("delegates repeated message IDs to the idempotent channel router", async () => {
+    mocks.routeIncoming.mockResolvedValueOnce({ duplicate: true });
     const { POST } = await import("@/app/api/webhooks/whatsapp/route");
     const raw = JSON.stringify({
       entry: [{ changes: [{ value: {
@@ -134,8 +177,8 @@ describe("WhatsApp webhook route", () => {
       body: raw,
     }));
     expect(response.status).toBe(200);
-    expect((await response.json()).data).toMatchObject({ messages: 0, duplicates: 1 });
-    expect(mocks.processMessage).not.toHaveBeenCalled();
+    expect((await response.json()).data).toMatchObject({ messages: 1, channelMessages: 1 });
+    await vi.waitFor(() => expect(mocks.routeIncoming).toHaveBeenCalledTimes(1));
   });
 
   it("rejects a POST with an invalid signature before database processing", async () => {
@@ -147,5 +190,6 @@ describe("WhatsApp webhook route", () => {
     }));
     expect(response.status).toBe(401);
     expect(mocks.insertReturning).not.toHaveBeenCalled();
+    expect(mocks.routeIncoming).not.toHaveBeenCalled();
   });
 });

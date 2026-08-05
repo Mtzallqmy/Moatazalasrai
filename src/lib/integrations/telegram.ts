@@ -1,3 +1,4 @@
+// Telegram Bot API client used by the shared channel adapter and legacy integrations.
 import { ApiError } from "@/lib/http/api";
 import { integrationFetch } from "./http";
 
@@ -33,7 +34,7 @@ async function telegramCall<T>(
       response.status === 401 ? 422 : 502,
       response.status === 401 ? "TELEGRAM_TOKEN_INVALID" : "TELEGRAM_API_ERROR",
       response.status === 401 ? "توكن Telegram غير صالح." : "رفض Telegram طلب التكامل.",
-      { telegramStatus: payload?.error_code },
+      { telegramStatus: payload?.error_code, telegramDescription: payload?.description?.slice(0, 240) },
     );
   }
   return payload.result;
@@ -51,7 +52,7 @@ export function configureTelegramWebhook(input: {
   return telegramCall<boolean>(input.token, "setWebhook", {
     url: input.url,
     secret_token: input.secretToken,
-    allowed_updates: ["message"],
+    allowed_updates: ["message", "callback_query"],
     drop_pending_updates: false,
   });
 }
@@ -60,12 +61,30 @@ export function sendTelegramMessage(input: {
   token: string;
   chatId: string;
   text: string;
+  replyToMessageId?: string;
+  buttons?: Array<{ id: string; title: string }>;
 }) {
   const text = input.text.length > 4000 ? `${input.text.slice(0, 3990)}…` : input.text;
-  return telegramCall<Record<string, unknown>>(input.token, "sendMessage", {
+  return telegramCall<{ message_id?: number }>(input.token, "sendMessage", {
     chat_id: input.chatId,
     text,
     disable_web_page_preview: true,
+    ...(input.replyToMessageId ? { reply_parameters: { message_id: Number(input.replyToMessageId) } } : {}),
+    ...(input.buttons?.length ? {
+      reply_markup: {
+        inline_keyboard: input.buttons.slice(0, 12).map((button) => [{
+          text: button.title.slice(0, 64),
+          callback_data: button.id.slice(0, 64),
+        }]),
+      },
+    } : {}),
+  });
+}
+
+export function answerTelegramCallback(input: { token: string; callbackQueryId: string; text?: string }) {
+  return telegramCall<boolean>(input.token, "answerCallbackQuery", {
+    callback_query_id: input.callbackQueryId,
+    ...(input.text ? { text: input.text.slice(0, 200) } : {}),
   });
 }
 
@@ -84,8 +103,8 @@ export async function downloadTelegramFile(token: string, fileId: string): Promi
   );
   if (!response.ok) throw new ApiError(502, "TELEGRAM_FILE_DOWNLOAD_FAILED", "تعذر تنزيل ملف Telegram.");
   const content = Buffer.from(await response.arrayBuffer());
-  if (content.byteLength > 10 * 1024 * 1024) {
-    throw new ApiError(413, "FILE_TOO_LARGE", "حجم الملف يتجاوز 10 ميجابايت.");
+  if (content.byteLength > 20 * 1024 * 1024) {
+    throw new ApiError(413, "FILE_TOO_LARGE", "حجم الملف يتجاوز 20 ميجابايت.");
   }
   return { content, filePath: metadata.file_path };
 }

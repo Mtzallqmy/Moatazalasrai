@@ -1,9 +1,11 @@
+// WhatsApp Cloud API client with bounded retries, media support, and safe Meta diagnostics.
 import { ApiError } from "@/lib/http/api";
 import { requireWhatsAppConfig, type WhatsAppRuntimeConfig } from "./config";
 
 const RETRYABLE_STATUSES = new Set([408, 429]);
 const MAX_ATTEMPTS = 3;
 const DEFAULT_TIMEOUT_MS = 15_000;
+const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
 
 type FetchLike = typeof fetch;
 
@@ -30,8 +32,12 @@ export class WhatsAppApiError extends ApiError {
   }
 }
 
+function graphUrl(config: WhatsAppRuntimeConfig, resource: string) {
+  return `https://graph.facebook.com/${encodeURIComponent(config.graphApiVersion)}/${encodeURIComponent(resource)}`;
+}
+
 function graphMessagesUrl(config: WhatsAppRuntimeConfig) {
-  return `https://graph.facebook.com/${encodeURIComponent(config.graphApiVersion)}/${encodeURIComponent(config.phoneNumberId)}/messages`;
+  return `${graphUrl(config, config.phoneNumberId)}/messages`;
 }
 
 function retryableStatus(status: number) {
@@ -47,69 +53,87 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function graphRequest(
-  payload: Record<string, unknown>,
-  options: {
-    config?: WhatsAppRuntimeConfig;
-    fetchImpl?: FetchLike;
-    timeoutMs?: number;
-  } = {},
-) {
-  const config = options.config ?? requireWhatsAppConfig();
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  let lastError: unknown;
+function metaFailure(responseStatus: number, metaError: MetaErrorEnvelope["error"]) {
+  const metaCode = metaError?.code;
+  const metaSubcode = metaError?.error_subcode;
+  const details = {
+    metaStatus: responseStatus,
+    metaCode,
+    metaSubcode,
+    metaType: metaError?.type,
+    traceId: metaError?.fbtrace_id,
+  };
+  if (metaCode === 190 || responseStatus === 401) {
+    return new WhatsAppApiError(502, "WHATSAPP_INVALID_TOKEN", "Access Token الخاص بـMeta غير صالح أو منتهي.", false, details);
+  }
+  if (metaCode === 10 || metaCode === 200 || responseStatus === 403) {
+    return new WhatsAppApiError(502, "WHATSAPP_PERMISSION_MISSING", "يفتقد توكن Meta صلاحية WhatsApp المطلوبة.", false, details);
+  }
+  if (metaCode === 100) {
+    return new WhatsAppApiError(502, "WHATSAPP_PHONE_NUMBER_ID_INVALID", "Phone Number ID أو أحد معاملات Meta غير صحيح.", false, details);
+  }
+  if (metaCode === 131030) {
+    return new WhatsAppApiError(422, "WHATSAPP_RECIPIENT_NOT_ALLOWED", "رقم المستلم غير مسموح له باستقبال رسالة الاختبار في إعداد Meta الحالي.", false, details);
+  }
+  if (metaCode === 131047) {
+    return new WhatsAppApiError(422, "WHATSAPP_TEMPLATE_REQUIRED", "انتهت نافذة المحادثة ويتطلب الإرسال قالبًا معتمدًا من Meta.", false, details);
+  }
+  if (metaCode === 131026) {
+    return new WhatsAppApiError(502, "WHATSAPP_MESSAGE_UNDELIVERABLE", "تعذر تسليم رسالة WhatsApp إلى الرقم المحدد.", false, details);
+  }
+  if (metaCode === 133010) {
+    return new WhatsAppApiError(502, "WHATSAPP_PHONE_NOT_REGISTERED", "رقم WhatsApp Business غير مسجل أو غير جاهز في Cloud API.", false, details);
+  }
+  if (responseStatus === 429) {
+    return new WhatsAppApiError(503, "WHATSAPP_RATE_LIMITED", "بلغ WhatsApp حد الطلبات مؤقتًا.", true, details);
+  }
+  if (responseStatus >= 500) {
+    return new WhatsAppApiError(503, "WHATSAPP_API_UNAVAILABLE", "خدمة WhatsApp غير متاحة مؤقتًا.", true, details);
+  }
+  return new WhatsAppApiError(
+    502,
+    "WHATSAPP_API_REJECTED",
+    metaError?.message ? `رفضت Meta الطلب: ${metaError.message.slice(0, 240)}` : "رفضت Meta طلب WhatsApp.",
+    retryableStatus(responseStatus),
+    details,
+  );
+}
 
+async function fetchJson<T>(input: {
+  url: string;
+  accessToken: string;
+  fetchImpl?: FetchLike;
+  timeoutMs?: number;
+  method?: "GET" | "POST";
+  body?: Record<string, unknown>;
+}): Promise<T> {
+  const fetchImpl = input.fetchImpl ?? fetch;
+  const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  let lastError: unknown;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetchImpl(graphMessagesUrl(config), {
-        method: "POST",
+      const response = await fetchImpl(input.url, {
+        method: input.method ?? "GET",
         redirect: "error",
         cache: "no-store",
         signal: controller.signal,
         headers: {
           accept: "application/json",
-          authorization: `Bearer ${config.accessToken}`,
-          "content-type": "application/json",
+          authorization: `Bearer ${input.accessToken}`,
+          ...(input.body ? { "content-type": "application/json" } : {}),
           "user-agent": "MoatazAgentPlatform/1.0",
         },
-        body: JSON.stringify(payload),
+        ...(input.body ? { body: JSON.stringify(input.body) } : {}),
       });
-      const body = await response.json().catch(() => null) as MetaErrorEnvelope | Record<string, unknown> | null;
-      if (response.ok) return body ?? {};
-
-      const metaError = body && "error" in body ? (body as MetaErrorEnvelope).error : undefined;
-      const retryable = retryableStatus(response.status);
-      const details = {
-        metaStatus: response.status,
-        metaCode: metaError?.code,
-        metaSubcode: metaError?.error_subcode,
-        metaType: metaError?.type,
-        traceId: metaError?.fbtrace_id,
-      };
-      if (!retryable || attempt === MAX_ATTEMPTS - 1) {
-        throw new WhatsAppApiError(
-          response.status === 401 || response.status === 403 ? 502 : response.status >= 500 ? 503 : 502,
-          response.status === 401 || response.status === 403
-            ? "WHATSAPP_AUTH_REJECTED"
-            : response.status === 429
-              ? "WHATSAPP_RATE_LIMITED"
-              : response.status >= 500
-                ? "WHATSAPP_API_UNAVAILABLE"
-                : "WHATSAPP_API_REJECTED",
-          response.status === 401 || response.status === 403
-            ? "رفضت Meta بيانات اعتماد WhatsApp."
-            : response.status === 429
-              ? "بلغ WhatsApp حد الطلبات مؤقتًا."
-              : response.status >= 500
-                ? "خدمة WhatsApp غير متاحة مؤقتًا."
-                : "رفضت Meta طلب WhatsApp.",
-          retryable,
-          details,
-        );
-      }
+      const body = await response.json().catch(() => null) as MetaErrorEnvelope | T | null;
+      if (response.ok && body !== null) return body as T;
+      const metaError = body && typeof body === "object" && "error" in body
+        ? (body as MetaErrorEnvelope).error
+        : undefined;
+      const failure = metaFailure(response.status, metaError);
+      if (!failure.retryable || attempt === MAX_ATTEMPTS - 1) throw failure;
       await sleep(retryDelay(attempt));
     } catch (error) {
       if (error instanceof WhatsAppApiError) throw error;
@@ -129,6 +153,25 @@ async function graphRequest(
     }
   }
   throw lastError;
+}
+
+async function graphRequest(
+  payload: Record<string, unknown>,
+  options: {
+    config?: WhatsAppRuntimeConfig;
+    fetchImpl?: FetchLike;
+    timeoutMs?: number;
+  } = {},
+) {
+  const config = options.config ?? requireWhatsAppConfig();
+  return fetchJson<Record<string, unknown>>({
+    url: graphMessagesUrl(config),
+    accessToken: config.accessToken,
+    fetchImpl: options.fetchImpl,
+    timeoutMs: options.timeoutMs,
+    method: "POST",
+    body: payload,
+  });
 }
 
 function acceptedMessageId(value: unknown) {
@@ -158,6 +201,7 @@ export async function sendTextMessage(input: {
   to: string;
   text: string;
   previewUrl?: boolean;
+  replyToMessageId?: string;
   config?: WhatsAppRuntimeConfig;
   fetchImpl?: FetchLike;
 }) {
@@ -167,6 +211,7 @@ export async function sendTextMessage(input: {
     recipient_type: "individual",
     to: input.to,
     type: "text",
+    ...(input.replyToMessageId ? { context: { message_id: input.replyToMessageId } } : {}),
     text: { preview_url: input.previewUrl ?? false, body: text },
   }, input);
   return assertAcceptedMessage(response);
@@ -207,6 +252,42 @@ export async function sendInteractiveButtons(input: {
   return assertAcceptedMessage(response);
 }
 
+export async function sendInteractiveList(input: {
+  to: string;
+  bodyText: string;
+  buttonText: string;
+  title: string;
+  actions: Array<{ id: string; title: string; description?: string }>;
+  config?: WhatsAppRuntimeConfig;
+  fetchImpl?: FetchLike;
+}) {
+  if (input.actions.length < 1 || input.actions.length > 10) {
+    throw new Error("WhatsApp lists must contain between one and ten rows.");
+  }
+  const response = await graphRequest({
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to: input.to,
+    type: "interactive",
+    interactive: {
+      type: "list",
+      body: { text: input.bodyText.slice(0, 1024) },
+      action: {
+        button: input.buttonText.slice(0, 20),
+        sections: [{
+          title: input.title.slice(0, 24),
+          rows: input.actions.map((action) => ({
+            id: action.id.slice(0, 200),
+            title: action.title.slice(0, 24),
+            ...(action.description ? { description: action.description.slice(0, 72) } : {}),
+          })),
+        }],
+      },
+    },
+  }, input);
+  return assertAcceptedMessage(response);
+}
+
 export async function markMessageAsRead(input: {
   messageId: string;
   config?: WhatsAppRuntimeConfig;
@@ -227,4 +308,74 @@ export async function markMessageAsRead(input: {
     );
   }
   return { success: true as const };
+}
+
+export async function testWhatsAppPhoneNumber(input: {
+  config?: WhatsAppRuntimeConfig;
+  fetchImpl?: FetchLike;
+}) {
+  const config = input.config ?? requireWhatsAppConfig();
+  const url = new URL(graphUrl(config, config.phoneNumberId));
+  url.searchParams.set("fields", "id,display_phone_number,verified_name,quality_rating,code_verification_status,platform_type");
+  return fetchJson<{
+    id: string;
+    display_phone_number?: string;
+    verified_name?: string;
+    quality_rating?: string;
+    code_verification_status?: string;
+    platform_type?: string;
+  }>({
+    url: url.toString(),
+    accessToken: config.accessToken,
+    fetchImpl: input.fetchImpl,
+  });
+}
+
+export async function downloadWhatsAppMedia(input: {
+  mediaId: string;
+  filename?: string;
+  config?: WhatsAppRuntimeConfig;
+  fetchImpl?: FetchLike;
+}) {
+  const config = input.config ?? requireWhatsAppConfig();
+  const metadata = await fetchJson<{ url?: string; mime_type?: string; file_size?: number }>({
+    url: graphUrl(config, input.mediaId),
+    accessToken: config.accessToken,
+    fetchImpl: input.fetchImpl,
+  });
+  if (!metadata.url) {
+    throw new WhatsAppApiError(502, "WHATSAPP_MEDIA_URL_MISSING", "لم تُرجع Meta رابط تنزيل الوسائط.", false);
+  }
+  const mediaUrl = new URL(metadata.url);
+  if (mediaUrl.protocol !== "https:" || mediaUrl.username || mediaUrl.password) {
+    throw new WhatsAppApiError(502, "WHATSAPP_MEDIA_URL_INVALID", "رابط وسائط Meta غير آمن.", false);
+  }
+  if (metadata.file_size && metadata.file_size > MAX_MEDIA_BYTES) {
+    throw new WhatsAppApiError(413, "WHATSAPP_MEDIA_TOO_LARGE", "حجم ملف WhatsApp يتجاوز 20 ميجابايت.", false);
+  }
+  const fetchImpl = input.fetchImpl ?? fetch;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const response = await fetchImpl(mediaUrl, {
+      method: "GET",
+      redirect: "error",
+      cache: "no-store",
+      signal: controller.signal,
+      headers: { authorization: `Bearer ${config.accessToken}`, accept: "application/octet-stream" },
+    });
+    if (!response.ok) throw metaFailure(response.status, undefined);
+    const content = Buffer.from(await response.arrayBuffer());
+    if (content.byteLength > MAX_MEDIA_BYTES) {
+      throw new WhatsAppApiError(413, "WHATSAPP_MEDIA_TOO_LARGE", "حجم ملف WhatsApp يتجاوز 20 ميجابايت.", false);
+    }
+    const mimeType = metadata.mime_type || response.headers.get("content-type") || "application/octet-stream";
+    return {
+      content,
+      mimeType,
+      filename: input.filename?.trim() || `whatsapp-${input.mediaId}`,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 }

@@ -169,6 +169,7 @@ async function runtimeTools(input: {
   userId?: string | null;
   agentId: string;
   runId: string;
+  allowedToolIds?: readonly string[] | null;
   allocateStep: () => number;
 }) {
   const state: ToolRuntimeState = {
@@ -182,6 +183,7 @@ async function runtimeTools(input: {
     userId: input.userId,
     agentId: input.agentId,
     runId: input.runId,
+    allowedToolIds: input.allowedToolIds,
     state,
   });
   return { ...loaded, state };
@@ -266,6 +268,7 @@ export async function executeAiSdkCandidate(input: {
   candidate: AiSdkCandidate;
   context?: ProviderMessage[];
   resumeMessages?: ModelMessage[];
+  allowedToolIds?: readonly string[] | null;
   temperature: number;
   maxOutputTokens: number;
   abortSignal?: AbortSignal;
@@ -376,6 +379,7 @@ export async function* streamAiSdkCandidate(input: {
   candidateIndex: number;
   candidate: AiSdkCandidate;
   context: ProviderMessage[];
+  allowedToolIds?: readonly string[] | null;
   temperature: number;
   maxOutputTokens: number;
   abortSignal?: AbortSignal;

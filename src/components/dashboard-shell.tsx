@@ -2,8 +2,9 @@ import Link from "next/link";
 import { OrganizationSwitcher } from "@/components/organization-switcher";
 import { DashboardNavigation, type DashboardSession } from "@/components/dashboard-navigation";
 import { SiteFooter } from "@/components/site-footer";
+import { loadCustomPermissions } from "@/lib/auth/custom-permissions";
 
-export function DashboardShell({ session, activePath, title, description, actions, children }: {
+export async function DashboardShell({ session, activePath, title, description, actions, children }: {
   session: DashboardSession;
   activePath: string;
   title: string;
@@ -11,9 +12,14 @@ export function DashboardShell({ session, activePath, title, description, action
   actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
+  const permissions = session.organizationId && session.userId
+    ? await loadCustomPermissions(session.organizationId, session.userId)
+    : [];
+  const navigationSession = { ...session, permissions };
+
   return (
     <main className="dashboard-root">
-      <DashboardNavigation session={session} activePath={activePath} />
+      <DashboardNavigation session={navigationSession} activePath={activePath} />
       <section className="dashboard-main" id="main-content">
         <header className="dashboard-header">
           <div className="min-w-0">

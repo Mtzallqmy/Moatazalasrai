@@ -20,12 +20,15 @@ describe("integration agent binding", () => {
     expect(route).toContain("db().transaction");
   });
 
-  it("offers a real Telegram agent selector and preserves historical conversations", async () => {
+  it("offers a real Telegram agent selector and routes through the shared channel platform", async () => {
     const component = await readFile("src/components/integrations-manager.tsx", "utf8");
     const webhook = await readFile("src/app/api/webhooks/telegram/[integrationId]/route.ts", "utf8");
+    const router = await readFile("src/lib/channels/router.ts", "utf8");
     expect(component).toContain("الوكيل المرتبط بهذا البوت");
     expect(component).toContain("agentId: event.target.value || null");
-    expect(webhook).toContain("existing.agentId === input.agentId");
-    expect(webhook).toContain("conversationId: conversation.id");
+    expect(webhook).toContain("ensureTelegramChannelConnection");
+    expect(webhook).toContain("routeIncomingChannelMessage");
+    expect(router).toContain("channelConversationLinks");
+    expect(router).toContain("conversationId: conversation.id");
   });
 });
