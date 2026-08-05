@@ -164,6 +164,7 @@ export async function POST(request: Request) {
     }
     return apiSuccess({
       accepted: true,
+      messages: legacyTasks.length + channelTasks.length,
       legacyCommands: legacyTasks.length,
       channelMessages: channelTasks.length,
       duplicates,
