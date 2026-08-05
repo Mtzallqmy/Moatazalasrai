@@ -25,12 +25,14 @@ describe("integration agent binding", () => {
     const router = await readFile("src/lib/channels/router.ts", "utf8");
     expect(component).toContain("إنشاء رمز وفتح البوت");
     expect(component).toContain("فتح البوت مباشرة");
-    expect(component).toContain("window.location.assign(nextCode.deepLink)");
+    expect(component).toContain("window.location.href = nextCode.deepLink");
+    expect(component).toContain("nextCode.appDeepLink");
     expect(component).toContain('window.addEventListener("pageshow", synchronize)');
     expect(webhook).toContain("resolveTelegramAccount");
     expect(webhook).toContain("telegramFeatureAllowed");
     expect(webhook).toContain("ensureCentralTelegramChannelConnection");
     expect(webhook).toContain("routeIncomingChannelMessage");
+    expect(webhook).toContain("startNewConversation");
     expect(router).toContain("channelConversationLinks");
     expect(router).toContain("conversationId: conversation.id");
   });

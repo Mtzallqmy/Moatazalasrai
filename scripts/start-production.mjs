@@ -6,6 +6,7 @@ import { validateOptionalRuntimeEnvironment } from "./validate-runtime-env.mjs";
 
 const scriptsDirectory = path.dirname(fileURLToPath(import.meta.url));
 const applicationRoot = path.resolve(scriptsDirectory, "..");
+const telegramSchemaScript = path.join(scriptsDirectory, "check-telegram-schema.mjs");
 const telegramSetupScript = path.join(scriptsDirectory, "setup-telegram-webhook.mjs");
 
 validateOptionalRuntimeEnvironment();
@@ -14,43 +15,49 @@ function enabled(name) {
   return process.env[name]?.trim().toLowerCase() === "true";
 }
 
-function telegramWebhookEnabled() {
-  const mode = process.env.TELEGRAM_UPDATE_MODE?.trim().toLowerCase() || "webhook";
-  return enabled("TELEGRAM_INTEGRATION_ENABLED") && mode !== "polling";
-}
-
-function bootstrapTelegramWebhook(attempt) {
-  if (!telegramWebhookEnabled()) return true;
-  if (!existsSync(telegramSetupScript)) {
+function runRequiredScript(input) {
+  if (!existsSync(input.script)) {
     console.error(JSON.stringify({
-      level: "error",
-      event: "telegram.webhook.bootstrap.asset_missing",
-      asset: "scripts/setup-telegram-webhook.mjs",
-      attempt,
+      level: "fatal",
+      event: `${input.event}.asset_missing`,
+      asset: path.relative(applicationRoot, input.script),
     }));
-    return false;
+    process.exit(1);
   }
-
-  console.info(JSON.stringify({ level: "info", event: "telegram.webhook.bootstrap.started", attempt }));
-  const result = spawnSync(process.execPath, [telegramSetupScript], {
+  console.info(JSON.stringify({ level: "info", event: `${input.event}.started` }));
+  const result = spawnSync(process.execPath, [input.script], {
     cwd: applicationRoot,
     env: process.env,
     stdio: "inherit",
-    timeout: 70_000,
+    timeout: input.timeoutMs,
   });
   if (result.error || result.status !== 0) {
     console.error(JSON.stringify({
-      level: "error",
-      event: "telegram.webhook.bootstrap.failed",
+      level: "fatal",
+      event: `${input.event}.failed`,
       errorName: result.error?.name ?? null,
       exitCode: result.status,
       signal: result.signal,
-      attempt,
     }));
-    return false;
+    process.exit(1);
   }
-  console.info(JSON.stringify({ level: "info", event: "telegram.webhook.bootstrap.completed", attempt }));
-  return true;
+  console.info(JSON.stringify({ level: "info", event: `${input.event}.completed` }));
+}
+
+if (enabled("TELEGRAM_INTEGRATION_ENABLED")) {
+  runRequiredScript({
+    event: "telegram.schema.verification",
+    script: telegramSchemaScript,
+    timeoutMs: 30_000,
+  });
+  const mode = process.env.TELEGRAM_UPDATE_MODE?.trim().toLowerCase() || "webhook";
+  if (mode === "webhook") {
+    runRequiredScript({
+      event: "telegram.webhook.bootstrap",
+      script: telegramSetupScript,
+      timeoutMs: 70_000,
+    });
+  }
 }
 
 const host = process.env.APP_HOST?.trim() || process.env.HOSTNAME?.trim() || "0.0.0.0";
@@ -61,8 +68,6 @@ const childArguments = existsSync(standaloneServer)
   ? [standaloneServer]
   : [nextBinary, "start", "-H", host, "-p", port];
 let shutdownSignal;
-let telegramTimer;
-let telegramAttempt = 0;
 
 const next = spawn(process.execPath, childArguments, {
   cwd: applicationRoot,
@@ -70,39 +75,9 @@ const next = spawn(process.execPath, childArguments, {
   stdio: "inherit",
 });
 
-function scheduleTelegramBootstrap(delayMs = 0) {
-  if (!telegramWebhookEnabled() || shutdownSignal) return;
-  if (telegramTimer) clearTimeout(telegramTimer);
-  telegramTimer = setTimeout(() => {
-    if (shutdownSignal) return;
-    telegramAttempt += 1;
-    const succeeded = bootstrapTelegramWebhook(telegramAttempt);
-    if (succeeded) {
-      telegramAttempt = 0;
-      // Reassert the webhook periodically so rotated secrets and repaired DNS self-heal.
-      scheduleTelegramBootstrap(6 * 60 * 60_000);
-      return;
-    }
-    const retryDelay = Math.min(15 * 60_000, 30_000 * (2 ** Math.min(telegramAttempt - 1, 5)));
-    console.warn(JSON.stringify({
-      level: "warn",
-      event: "telegram.webhook.bootstrap.retry_scheduled",
-      retryDelayMs: retryDelay,
-      attempt: telegramAttempt,
-    }));
-    scheduleTelegramBootstrap(retryDelay);
-  }, delayMs);
-  telegramTimer.unref?.();
-}
-
-// Do not make the entire web service depend on an external Telegram API call.
-// The application becomes healthy first, then the central webhook configures and self-heals.
-scheduleTelegramBootstrap(1_000);
-
 function shutdown(signal) {
   if (shutdownSignal) return;
   shutdownSignal = signal;
-  if (telegramTimer) clearTimeout(telegramTimer);
   console.info(JSON.stringify({ level: "info", event: "process.shutdown.requested", signal }));
   if (!next.killed) next.kill(signal);
 }

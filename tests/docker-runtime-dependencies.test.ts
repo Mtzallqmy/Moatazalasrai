@@ -16,9 +16,14 @@ describe("production Docker runtime dependencies", () => {
     const dockerfile = await readFile("Dockerfile", "utf8");
     const startup = await readFile("scripts/start-production.mjs", "utf8");
 
-    expect(startup).toContain('"scripts/setup-telegram-webhook.mjs"');
+    expect(startup).toContain("setup-telegram-webhook.mjs");
+    expect(startup).toContain("check-telegram-schema.mjs");
     expect(dockerfile).toContain("/app/scripts/setup-telegram-webhook.mjs");
+    expect(dockerfile).toContain("/app/scripts/check-telegram-schema.mjs");
     expect(dockerfile).toContain("test -f /app/scripts/setup-telegram-webhook.mjs");
+    expect(dockerfile).toContain("test -f /app/scripts/check-telegram-schema.mjs");
+    expect(dockerfile).toContain("test -f /app/drizzle/0039_central_telegram_bot.sql");
+    expect(dockerfile).toContain("test -f /app/drizzle/0040_telegram_admin_default_permissions.sql");
     expect(dockerfile).toContain("test -f /app/scripts/start-production.mjs");
     expect(dockerfile).toContain("test -f /app/scripts/validate-runtime-env.mjs");
   });

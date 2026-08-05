@@ -28,6 +28,7 @@ type TelegramMessage = {
 type TelegramUpdate = {
   update_id?: number;
   message?: TelegramMessage;
+  edited_message?: TelegramMessage;
   callback_query?: {
     id?: string;
     data?: string;
@@ -117,7 +118,7 @@ export const telegramChannelAdapter: ChannelAdapter = {
         receivedAt: receivedAt(callback.message),
       }];
     }
-    const message = update.message;
+    const message = update.message ?? update.edited_message;
     if (!message || message.chat?.id === undefined) return [];
     const sender = message.from?.id ?? message.chat.id;
     const media = attachments(message);

@@ -1,5 +1,5 @@
 import { createHmac, randomInt } from "node:crypto";
-import { and, eq, gt, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, organizationMembers } from "@/db/schema";
 import { telegramAccountLinks, telegramFeaturePermissions, telegramLinkCodes } from "@/db/telegram-platform-schema";
@@ -18,6 +18,18 @@ export const TELEGRAM_FEATURE_KEYS = [
   "telegram.admin_commands",
 ] as const;
 export type TelegramFeatureKey = typeof TELEGRAM_FEATURE_KEYS[number];
+
+export const TELEGRAM_DEFAULT_ADMIN_FEATURES: TelegramFeatureKey[] = [
+  "telegram.chat",
+  "telegram.agents",
+  "telegram.files",
+  "telegram.images",
+  "telegram.audio",
+  "telegram.video",
+  "telegram.admin_commands",
+];
+
+const TELEGRAM_ADMIN_ROLES = new Set(["owner", "admin"]);
 
 export type TelegramPlatformConfig = {
   enabled: boolean;
@@ -102,6 +114,10 @@ function hashRequestValue(value: string | null | undefined) {
   return createHmac("sha256", secret).update(value.slice(0, 1000)).digest("hex");
 }
 
+function isTelegramAdminRole(role: string | null | undefined) {
+  return Boolean(role && TELEGRAM_ADMIN_ROLES.has(role));
+}
+
 export async function centralTelegramBot() {
   const config = telegramPlatformConfig();
   if (!config.enabled || !config.botToken) throw new ApiError(503, "TELEGRAM_DISABLED", "تكامل Telegram المركزي غير مفعّل.");
@@ -154,6 +170,7 @@ export async function createTelegramLinkCode(input: {
     expiresAt,
     botUsername: bot.username,
     deepLink: `https://t.me/${bot.username}?start=link_${code}`,
+    appDeepLink: `tg://resolve?domain=${bot.username}&start=link_${code}`,
   };
 }
 
@@ -177,16 +194,33 @@ export async function consumeTelegramLinkCode(input: {
       }
       return { ok: false as const };
     }
-    const [existingTelegram] = await tx.select({ userId: telegramAccountLinks.userId, status: telegramAccountLinks.status })
+
+    await tx.execute(sql`
+      SELECT "id" FROM "telegram_account_links"
+      WHERE "telegram_user_id" = ${input.telegramUserId} OR "user_id" = ${code.userId}
+      FOR UPDATE
+    `);
+    const [existingTelegram] = await tx.select({ userId: telegramAccountLinks.userId })
       .from(telegramAccountLinks).where(eq(telegramAccountLinks.telegramUserId, input.telegramUserId)).limit(1);
-    if (existingTelegram && existingTelegram.userId !== code.userId && existingTelegram.status === "active") {
+    if (existingTelegram && existingTelegram.userId !== code.userId) return { ok: false as const };
+
+    const [existingUser] = await tx.select({
+      telegramUserId: telegramAccountLinks.telegramUserId,
+      status: telegramAccountLinks.status,
+    }).from(telegramAccountLinks).where(eq(telegramAccountLinks.userId, code.userId)).limit(1);
+    if (existingUser?.status === "active" && existingUser.telegramUserId !== input.telegramUserId) {
       return { ok: false as const };
     }
-    const [membership] = await tx.select({ userId: organizationMembers.userId }).from(organizationMembers).where(and(
+
+    const [membership] = await tx.select({
+      userId: organizationMembers.userId,
+      role: organizationMembers.role,
+    }).from(organizationMembers).where(and(
       eq(organizationMembers.organizationId, code.organizationId),
       eq(organizationMembers.userId, code.userId),
     )).limit(1);
     if (!membership) return { ok: false as const };
+
     await tx.insert(telegramAccountLinks).values({
       userId: code.userId,
       organizationId: code.organizationId,
@@ -216,6 +250,20 @@ export async function consumeTelegramLinkCode(input: {
         updatedAt: now,
       },
     });
+
+    if (isTelegramAdminRole(membership.role)) {
+      for (const featureKey of TELEGRAM_DEFAULT_ADMIN_FEATURES) {
+        await tx.insert(telegramFeaturePermissions).values({
+          userId: code.userId,
+          organizationId: code.organizationId,
+          featureKey,
+          enabled: true,
+          limits: {},
+          updatedBy: code.userId,
+        }).onConflictDoNothing();
+      }
+    }
+
     await tx.update(telegramLinkCodes).set({ consumedAt: now }).where(eq(telegramLinkCodes.id, code.id));
     await tx.insert(auditLogs).values({
       organizationId: code.organizationId,
@@ -224,7 +272,7 @@ export async function consumeTelegramLinkCode(input: {
       action: "telegram.account.linked",
       resourceType: "telegram_account_link",
       resourceId: code.userId,
-      metadata: {},
+      metadata: { defaultFeaturesSeeded: isTelegramAdminRole(membership.role) },
     });
     return { ok: true as const, userId: code.userId, organizationId: code.organizationId };
   });
@@ -277,11 +325,29 @@ export async function resolveTelegramAccount(telegramUserId: string) {
     eq(telegramAccountLinks.status, "active"),
   )).limit(1);
   if (!link) return null;
-  await db().update(telegramAccountLinks).set({ lastSeenAt: new Date(), updatedAt: new Date() }).where(eq(telegramAccountLinks.id, link.id));
-  return link;
+  const now = new Date();
+  await db().update(telegramAccountLinks).set({ lastSeenAt: now, updatedAt: now }).where(eq(telegramAccountLinks.id, link.id));
+  return { ...link, lastSeenAt: now, updatedAt: now };
+}
+
+export async function telegramEnabledFeatures(userId: string, organizationId: string) {
+  const rows = await db().select({ featureKey: telegramFeaturePermissions.featureKey })
+    .from(telegramFeaturePermissions).where(and(
+      eq(telegramFeaturePermissions.userId, userId),
+      eq(telegramFeaturePermissions.organizationId, organizationId),
+      eq(telegramFeaturePermissions.enabled, true),
+    ));
+  return rows.map((row) => row.featureKey as TelegramFeatureKey);
 }
 
 export async function telegramFeatureAllowed(userId: string, organizationId: string, featureKey: TelegramFeatureKey) {
+  if (featureKey === "telegram.admin_commands") {
+    const [membership] = await db().select({ role: organizationMembers.role }).from(organizationMembers).where(and(
+      eq(organizationMembers.organizationId, organizationId),
+      eq(organizationMembers.userId, userId),
+    )).limit(1);
+    if (!isTelegramAdminRole(membership?.role)) return null;
+  }
   const [row] = await db().select({ enabled: telegramFeaturePermissions.enabled, limits: telegramFeaturePermissions.limits })
     .from(telegramFeaturePermissions).where(and(
       eq(telegramFeaturePermissions.userId, userId),
@@ -299,11 +365,17 @@ export async function setTelegramFeaturePermission(input: {
   limits: Record<string, unknown>;
   actorUserId: string;
 }) {
-  const [membership] = await db().select({ userId: organizationMembers.userId }).from(organizationMembers).where(and(
+  const [membership] = await db().select({
+    userId: organizationMembers.userId,
+    role: organizationMembers.role,
+  }).from(organizationMembers).where(and(
     eq(organizationMembers.organizationId, input.organizationId),
     eq(organizationMembers.userId, input.userId),
   )).limit(1);
   if (!membership) throw new ApiError(404, "TELEGRAM_USER_NOT_FOUND", "المستخدم لا يتبع المؤسسة.");
+  if (input.featureKey === "telegram.admin_commands" && input.enabled && !isTelegramAdminRole(membership.role)) {
+    throw new ApiError(403, "TELEGRAM_ADMIN_COMMANDS_FORBIDDEN", "الأوامر الإدارية متاحة للمشرفين فقط.");
+  }
   const [row] = await db().insert(telegramFeaturePermissions).values({
     userId: input.userId,
     organizationId: input.organizationId,
