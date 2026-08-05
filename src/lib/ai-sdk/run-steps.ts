@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { and, eq, max, sql } from "drizzle-orm";
 import { db } from "@/db";
+import { databaseRows } from "@/db/result";
 import { agentRunSteps } from "@/db/agent-runtime-schema";
 import { runs } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
@@ -22,7 +23,7 @@ export async function createRunStepAllocator(organizationId: string, runId: stri
       WHERE "id" = ${runId} AND "organization_id" = ${organizationId}
       FOR UPDATE
     `);
-    if (lock.length === 0) throw new ApiError(404, "RUN_NOT_FOUND", "عملية التشغيل غير موجودة.");
+    if (databaseRows(lock).length === 0) throw new ApiError(404, "RUN_NOT_FOUND", "عملية التشغيل غير موجودة.");
     const [current] = await tx.select({ value: max(agentRunSteps.stepNumber) })
       .from(agentRunSteps)
       .where(and(

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import postgres, { type Sql } from "postgres";
+import { createTestSqlClient, type Sql } from "../helpers/pg-sql";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 const databaseUrl = process.env.TEST_DATABASE_URL?.trim();
@@ -13,7 +13,7 @@ describeDatabase("Puter client-executed chat persistence", () => {
   beforeAll(() => {
     process.env.DATABASE_URL = databaseUrl!;
     process.env.CREDENTIAL_ENCRYPTION_KEY ??= "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-    sql = postgres(databaseUrl!, { max: 3, prepare: false });
+    sql = createTestSqlClient(databaseUrl!, 3);
   });
 
   afterAll(async () => {

@@ -1,4 +1,5 @@
-import postgres from "postgres";
+// Re-encrypts stored secrets with the active key using one short-lived node-postgres pool.
+import { Pool, type PoolClient } from "pg";
 import { decryptSecret, encryptSecret } from "../src/lib/security/encryption";
 
 const databaseUrl = process.env.DATABASE_URL?.trim();
@@ -6,7 +7,13 @@ const currentKeyId = process.env.CREDENTIAL_ENCRYPTION_KEY_ID?.trim() || "primar
 if (!databaseUrl) throw new Error("DATABASE_URL is required.");
 if (!/^[A-Za-z0-9_-]{1,40}$/.test(currentKeyId)) throw new Error("CREDENTIAL_ENCRYPTION_KEY_ID is invalid.");
 
-const sql = postgres(databaseUrl, { max: 1, prepare: false, connect_timeout: 10 });
+const pool = new Pool({
+  connectionString: databaseUrl,
+  max: 1,
+  connectionTimeoutMillis: 10_000,
+  idleTimeoutMillis: 5_000,
+  allowExitOnIdle: true,
+});
 const currentPrefix = `v2.${currentKeyId}.`;
 let rotated = 0;
 let skipped = 0;
@@ -22,96 +29,143 @@ function replacement(envelope: string, context: string) {
   return next;
 }
 
-async function audit(
-  tx: postgres.TransactionSql,
-  organizationId: string,
-  resourceType: string,
-  resourceId: string,
-) {
-  await tx`
-    INSERT INTO audit_logs (organization_id, actor_type, action, resource_type, resource_id, metadata)
-    VALUES (${organizationId}, 'system', 'secret.reencrypted', ${resourceType}, ${resourceId}, ${tx.json({ keyId: currentKeyId })})
-  `;
+async function transaction<T>(callback: (client: PoolClient) => Promise<T>) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await callback(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function audit(client: PoolClient, organizationId: string, resourceType: string, resourceId: string) {
+  await client.query(
+    `INSERT INTO audit_logs
+      (organization_id, actor_type, action, resource_type, resource_id, metadata)
+     VALUES ($1, 'system', 'secret.reencrypted', $2, $3, $4::jsonb)`,
+    [organizationId, resourceType, resourceId, JSON.stringify({ keyId: currentKeyId })],
+  );
+}
+
+async function rotateSimpleTable(input: {
+  table: "provider_credentials" | "integrations" | "tool_approvals" | "agent_run_checkpoints";
+  secretColumn: "encrypted_secret" | "encrypted_token" | "encrypted_arguments" | "encrypted_state";
+  rows: Array<Record<string, string | null>>;
+  context: (row: Record<string, string | null>) => string;
+  resourceType: string;
+}) {
+  for (const row of input.rows) {
+    const envelope = row[input.secretColumn];
+    const id = row.id;
+    const organizationId = row.organization_id;
+    if (!envelope || !id || !organizationId) continue;
+    const next = replacement(envelope, input.context(row));
+    if (!next) continue;
+    await transaction(async (client) => {
+      const result = await client.query(
+        `UPDATE ${input.table}
+         SET ${input.secretColumn} = $1, updated_at = now()
+         WHERE id = $2 AND organization_id = $3 AND ${input.secretColumn} = $4
+         RETURNING id`,
+        [next, id, organizationId, envelope],
+      );
+      if (result.rowCount) {
+        await audit(client, organizationId, input.resourceType, id);
+        rotated += 1;
+      }
+    });
+  }
 }
 
 try {
-  const providers = await sql<{ id: string; organization_id: string; encrypted_secret: string }[]>`
-    SELECT id, organization_id, encrypted_secret FROM provider_credentials ORDER BY id
-  `;
-  for (const row of providers) {
-    const next = replacement(row.encrypted_secret, `provider:${row.organization_id}`);
-    if (!next) continue;
-    await sql.begin(async (tx) => {
-      const changed = await tx`
-        UPDATE provider_credentials SET encrypted_secret = ${next}, updated_at = now()
-        WHERE id = ${row.id} AND organization_id = ${row.organization_id} AND encrypted_secret = ${row.encrypted_secret}
-        RETURNING id
-      `;
-      if (changed.length) { await audit(tx, row.organization_id, "provider_credential", row.id); rotated += 1; }
-    });
-  }
+  const providers = await pool.query<{ id: string; organization_id: string; encrypted_secret: string }>(
+    "SELECT id, organization_id, encrypted_secret FROM provider_credentials ORDER BY id",
+  );
+  await rotateSimpleTable({
+    table: "provider_credentials",
+    secretColumn: "encrypted_secret",
+    rows: providers.rows,
+    context: (row) => `provider:${row.organization_id}`,
+    resourceType: "provider_credential",
+  });
 
-  const integrations = await sql<{ id: string; organization_id: string; encrypted_token: string }[]>`
-    SELECT id, organization_id, encrypted_token FROM integrations ORDER BY id
-  `;
-  for (const row of integrations) {
-    const next = replacement(row.encrypted_token, `integration:${row.organization_id}`);
-    if (!next) continue;
-    await sql.begin(async (tx) => {
-      const changed = await tx`
-        UPDATE integrations SET encrypted_token = ${next}, updated_at = now()
-        WHERE id = ${row.id} AND organization_id = ${row.organization_id} AND encrypted_token = ${row.encrypted_token}
-        RETURNING id
-      `;
-      if (changed.length) { await audit(tx, row.organization_id, "integration", row.id); rotated += 1; }
-    });
-  }
+  const integrations = await pool.query<{ id: string; organization_id: string; encrypted_token: string }>(
+    "SELECT id, organization_id, encrypted_token FROM integrations ORDER BY id",
+  );
+  await rotateSimpleTable({
+    table: "integrations",
+    secretColumn: "encrypted_token",
+    rows: integrations.rows,
+    context: (row) => `integration:${row.organization_id}`,
+    resourceType: "integration",
+  });
 
-  const servers = await sql<{ id: string; organization_id: string; encrypted_bearer_token: string | null; encrypted_oauth_data: string | null }[]>`
-    SELECT id, organization_id, encrypted_bearer_token, encrypted_oauth_data FROM mcp_servers ORDER BY id
-  `;
-  for (const row of servers) {
+  const servers = await pool.query<{
+    id: string;
+    organization_id: string;
+    encrypted_bearer_token: string | null;
+    encrypted_oauth_data: string | null;
+  }>("SELECT id, organization_id, encrypted_bearer_token, encrypted_oauth_data FROM mcp_servers ORDER BY id");
+  for (const row of servers.rows) {
     for (const field of ["encrypted_bearer_token", "encrypted_oauth_data"] as const) {
       const envelope = row[field];
       if (!envelope) continue;
-      const context = field === "encrypted_bearer_token" ? `mcp:${row.organization_id}` : `mcp-oauth:${row.organization_id}`;
+      const context = field === "encrypted_bearer_token"
+        ? `mcp:${row.organization_id}`
+        : `mcp-oauth:${row.organization_id}`;
       const next = replacement(envelope, context);
       if (!next) continue;
-      await sql.begin(async (tx) => {
-        const changed = field === "encrypted_bearer_token"
-          ? await tx`UPDATE mcp_servers SET encrypted_bearer_token = ${next}, updated_at = now() WHERE id = ${row.id} AND organization_id = ${row.organization_id} AND encrypted_bearer_token = ${envelope} RETURNING id`
-          : await tx`UPDATE mcp_servers SET encrypted_oauth_data = ${next}, updated_at = now() WHERE id = ${row.id} AND organization_id = ${row.organization_id} AND encrypted_oauth_data = ${envelope} RETURNING id`;
-        if (changed.length) { await audit(tx, row.organization_id, "mcp_server", row.id); rotated += 1; }
+      await transaction(async (client) => {
+        const statement = field === "encrypted_bearer_token"
+          ? `UPDATE mcp_servers SET encrypted_bearer_token = $1, updated_at = now()
+             WHERE id = $2 AND organization_id = $3 AND encrypted_bearer_token = $4 RETURNING id`
+          : `UPDATE mcp_servers SET encrypted_oauth_data = $1, updated_at = now()
+             WHERE id = $2 AND organization_id = $3 AND encrypted_oauth_data = $4 RETURNING id`;
+        const result = await client.query(statement, [next, row.id, row.organization_id, envelope]);
+        if (result.rowCount) {
+          await audit(client, row.organization_id, "mcp_server", row.id);
+          rotated += 1;
+        }
       });
     }
   }
 
-  const approvals = await sql<{ id: string; organization_id: string; run_id: string | null; encrypted_arguments: string }[]>`
-    SELECT id, organization_id, run_id, encrypted_arguments FROM tool_approvals
-    WHERE encrypted_arguments IS NOT NULL ORDER BY id
-  `;
-  for (const row of approvals) {
-    const next = replacement(row.encrypted_arguments, `approval:${row.organization_id}:${row.run_id}`);
-    if (!next) continue;
-    await sql.begin(async (tx) => {
-      const changed = await tx`UPDATE tool_approvals SET encrypted_arguments = ${next}, updated_at = now() WHERE id = ${row.id} AND organization_id = ${row.organization_id} AND encrypted_arguments = ${row.encrypted_arguments} RETURNING id`;
-      if (changed.length) { await audit(tx, row.organization_id, "tool_approval", row.id); rotated += 1; }
-    });
-  }
+  const approvals = await pool.query<{
+    id: string;
+    organization_id: string;
+    run_id: string | null;
+    encrypted_arguments: string;
+  }>(`SELECT id, organization_id, run_id, encrypted_arguments
+      FROM tool_approvals WHERE encrypted_arguments IS NOT NULL ORDER BY id`);
+  await rotateSimpleTable({
+    table: "tool_approvals",
+    secretColumn: "encrypted_arguments",
+    rows: approvals.rows,
+    context: (row) => `approval:${row.organization_id}:${row.run_id}`,
+    resourceType: "tool_approval",
+  });
 
-  const checkpoints = await sql<{ id: string; organization_id: string; run_id: string; encrypted_state: string }[]>`
-    SELECT id, organization_id, run_id, encrypted_state FROM agent_run_checkpoints ORDER BY id
-  `;
-  for (const row of checkpoints) {
-    const next = replacement(row.encrypted_state, `checkpoint:${row.organization_id}:${row.run_id}`);
-    if (!next) continue;
-    await sql.begin(async (tx) => {
-      const changed = await tx`UPDATE agent_run_checkpoints SET encrypted_state = ${next}, updated_at = now() WHERE id = ${row.id} AND organization_id = ${row.organization_id} AND encrypted_state = ${row.encrypted_state} RETURNING id`;
-      if (changed.length) { await audit(tx, row.organization_id, "agent_run_checkpoint", row.id); rotated += 1; }
-    });
-  }
+  const checkpoints = await pool.query<{
+    id: string;
+    organization_id: string;
+    run_id: string;
+    encrypted_state: string;
+  }>("SELECT id, organization_id, run_id, encrypted_state FROM agent_run_checkpoints ORDER BY id");
+  await rotateSimpleTable({
+    table: "agent_run_checkpoints",
+    secretColumn: "encrypted_state",
+    rows: checkpoints.rows,
+    context: (row) => `checkpoint:${row.organization_id}:${row.run_id}`,
+    resourceType: "agent_run_checkpoint",
+  });
 
   console.log(JSON.stringify({ level: "info", event: "secrets.reencrypted", keyId: currentKeyId, rotated, skipped }));
 } finally {
-  await sql.end({ timeout: 5 });
+  await pool.end();
 }

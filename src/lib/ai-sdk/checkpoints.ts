@@ -1,6 +1,7 @@
 import { and, desc, eq, gt, max, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
+import { databaseRows } from "@/db/result";
 import { agentRunCheckpoints } from "@/db/agent-runtime-schema";
 import { ApiError } from "@/lib/http/api";
 import { decryptSecret, encryptSecret } from "@/lib/security/encryption";
@@ -42,7 +43,7 @@ export async function saveRunCheckpoint(input: {
       WHERE "id" = ${input.runId} AND "organization_id" = ${input.organizationId}
       FOR UPDATE
     `);
-    if (lock.length === 0) throw new ApiError(404, "RUN_NOT_FOUND", "عملية التشغيل غير موجودة.");
+    if (databaseRows(lock).length === 0) throw new ApiError(404, "RUN_NOT_FOUND", "عملية التشغيل غير موجودة.");
     const [latest] = await tx.select({ version: max(agentRunCheckpoints.version) })
       .from(agentRunCheckpoints)
       .where(and(

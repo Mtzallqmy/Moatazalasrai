@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
-import postgres from "postgres";
+import { createTestSqlClient } from "../tests/helpers/pg-sql";
 
 const enabled = process.env.E2E_BASE_URL
   && process.env.E2E_DATABASE_URL
@@ -14,7 +14,7 @@ test.describe("Puter browser provider", () => {
 
   test("connects, discovers models, streams, persists, and survives reload", async ({ page }) => {
     const email = `puter-e2e-${Date.now()}@example.test`;
-    const sql = postgres(process.env.E2E_DATABASE_URL!, { max: 1, prepare: false });
+    const sql = createTestSqlClient(process.env.E2E_DATABASE_URL!, 1);
     try {
       const organizationId = randomUUID();
       await sql`UPDATE organizations SET public_registration_enabled = false WHERE public_registration_enabled = true`;

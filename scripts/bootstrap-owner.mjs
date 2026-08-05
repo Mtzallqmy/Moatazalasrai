@@ -1,5 +1,7 @@
 import { randomBytes, scrypt } from "node:crypto";
-import postgres from "postgres";
+import pg from "pg";
+
+const { Pool } = pg;
 
 function deriveKey(password, salt, length) {
   return new Promise((resolve, reject) => {
@@ -32,63 +34,81 @@ if (!email || !password) {
   process.exit(0);
 }
 
-const sql = postgres(databaseUrl, {
+const pool = new Pool({
+  connectionString: databaseUrl,
   max: 1,
-  connect_timeout: 10,
-  idle_timeout: 20,
-  prepare: false,
+  connectionTimeoutMillis: 10_000,
+  idleTimeoutMillis: 20_000,
 });
+const client = await pool.connect();
 
 try {
-  const existingUsers = await sql`select id, password_hash from users where email = ${email} limit 1`;
-  let userId = existingUsers[0]?.id;
+  await client.query("BEGIN");
+  const existingUsers = await client.query(
+    "select id, password_hash from users where email = $1 limit 1",
+    [email],
+  );
+  let userId = existingUsers.rows[0]?.id;
 
   if (!userId) {
     const passwordHash = await hashPassword(password);
-    const inserted = await sql`
-      insert into users (email, name, password_hash)
-      values (${email}, ${name}, ${passwordHash})
-      returning id
-    `;
-    userId = inserted[0]?.id;
+    const inserted = await client.query(
+      `insert into users (email, name, password_hash)
+       values ($1, $2, $3)
+       returning id`,
+      [email, name, passwordHash],
+    );
+    userId = inserted.rows[0]?.id;
     if (!userId) throw new Error("Owner user could not be created.");
-  } else if (!existingUsers[0]?.password_hash) {
+  } else if (!existingUsers.rows[0]?.password_hash) {
     const passwordHash = await hashPassword(password);
-    await sql`update users set password_hash = ${passwordHash}, name = coalesce(name, ${name}), updated_at = now() where id = ${userId}`;
+    await client.query(
+      "update users set password_hash = $1, name = coalesce(name, $2), updated_at = now() where id = $3",
+      [passwordHash, name, userId],
+    );
   }
 
-  const memberships = await sql`
-    select organization_id from organization_members where user_id = ${userId} order by created_at asc limit 1
-  `;
-  let organizationId = memberships[0]?.organization_id;
+  const memberships = await client.query(
+    "select organization_id from organization_members where user_id = $1 order by created_at asc limit 1",
+    [userId],
+  );
+  let organizationId = memberships.rows[0]?.organization_id;
 
   if (!organizationId) {
     const slug = `moataz-${randomBytes(4).toString("hex")}`;
-    const insertedOrganizations = await sql`
-      insert into organizations (name, slug)
-      values (${organizationName}, ${slug})
-      returning id
-    `;
-    organizationId = insertedOrganizations[0]?.id;
+    const insertedOrganizations = await client.query(
+      `insert into organizations (name, slug)
+       values ($1, $2)
+       returning id`,
+      [organizationName, slug],
+    );
+    organizationId = insertedOrganizations.rows[0]?.id;
     if (!organizationId) throw new Error("Owner organization could not be created.");
-    await sql`
-      insert into organization_members (organization_id, user_id, role)
-      values (${organizationId}, ${userId}, 'owner')
-      on conflict (organization_id, user_id) do update set role = 'owner'
-    `;
+    await client.query(
+      `insert into organization_members (organization_id, user_id, role)
+       values ($1, $2, 'owner')
+       on conflict (organization_id, user_id) do update set role = 'owner'`,
+      [organizationId, userId],
+    );
   } else {
-    await sql`
-      update organization_members set role = 'owner'
-      where organization_id = ${organizationId} and user_id = ${userId}
-    `;
+    await client.query(
+      "update organization_members set role = 'owner' where organization_id = $1 and user_id = $2",
+      [organizationId, userId],
+    );
   }
 
-  await sql`
-    insert into audit_logs (organization_id, actor_type, actor_id, action, resource_type, resource_id, metadata)
-    values (${organizationId}, 'bootstrap', ${String(userId)}, 'owner.bootstrap.verified', 'user', ${String(userId)}, '{}'::jsonb)
-  `;
+  await client.query(
+    `insert into audit_logs (organization_id, actor_type, actor_id, action, resource_type, resource_id, metadata)
+     values ($1, 'bootstrap', $2, 'owner.bootstrap.verified', 'user', $3, '{}'::jsonb)`,
+    [organizationId, String(userId), String(userId)],
+  );
+  await client.query("COMMIT");
 
   console.log(JSON.stringify({ level: "info", event: "owner.bootstrap.completed", email, organizationId }));
+} catch (error) {
+  await client.query("ROLLBACK").catch(() => undefined);
+  throw error;
 } finally {
-  await sql.end({ timeout: 5 });
+  client.release();
+  await pool.end();
 }

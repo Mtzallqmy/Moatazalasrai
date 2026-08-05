@@ -1,3 +1,4 @@
+# Weekly dependency maintenance with explicit grouped security updates.
 version: 2
 updates:
   - package-ecosystem: npm
@@ -5,13 +6,21 @@ updates:
     schedule:
       interval: weekly
       day: monday
+      time: "04:00"
+      timezone: Asia/Riyadh
     open-pull-requests-limit: 5
     versioning-strategy: increase-if-necessary
     groups:
+      npm-security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
       production-minor-patch:
+        applies-to: version-updates
         dependency-type: production
         update-types: [minor, patch]
       development-minor-patch:
+        applies-to: version-updates
         dependency-type: development
         update-types: [minor, patch]
     ignore:
@@ -25,7 +34,13 @@ updates:
         update-types: [version-update:semver-major]
       - dependency-name: zod
         update-types: [version-update:semver-major]
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
+    groups:
+      github-actions-security:
+        applies-to: security-updates
+        patterns:
+          - "*"

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import postgres, { type Sql } from "postgres";
+import { createTestSqlClient, type Sql } from "../helpers/pg-sql";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 const callRemoteMcpToolMock = vi.hoisted(() => vi.fn(async () => ({
@@ -20,7 +20,7 @@ describeDatabase("Graphile Worker and PostgreSQL runtime", () => {
     process.env.DATABASE_URL = databaseUrl!;
     process.env.CREDENTIAL_ENCRYPTION_KEY ??= "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
     process.env.AI_WORKER_ENABLED = "true";
-    sql = postgres(databaseUrl!, { max: 3, prepare: false });
+    sql = createTestSqlClient(databaseUrl!, 3);
   });
 
   beforeEach(() => {
@@ -309,6 +309,11 @@ describeDatabase("Graphile Worker and PostgreSQL runtime", () => {
     ]);
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     const rejected = results.find((result) => result.status === "rejected");
-    expect(rejected).toMatchObject({ reason: expect.objectContaining({ code: "REFRESH_TOKEN_REUSED" }) });
+    if (!rejected || rejected.status !== "rejected") throw new Error("Expected one rejected refresh rotation.");
+    const rejectedCode = rejected.reason && typeof rejected.reason === "object" && "code" in rejected.reason
+      ? String((rejected.reason as { code?: unknown }).code)
+      : "";
+    // The loser may read before or after the winner commits; both outcomes fail closed and only one rotation succeeds.
+    expect(["REFRESH_TOKEN_REUSED", "REFRESH_TOKEN_INVALID"]).toContain(rejectedCode);
   });
 });

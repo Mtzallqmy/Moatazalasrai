@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { and, count, eq, sql } from "drizzle-orm";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { db } from "@/db";
+import { databaseRows } from "@/db/result";
 import { mcpToolCallsRuntime } from "@/db/agent-runtime-schema";
 import { agentMcpTools, mcpServers, mcpTools } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
@@ -81,7 +82,7 @@ async function reserveCall(input: {
       WHERE "id" = ${input.runId} AND "organization_id" = ${input.organizationId}
       FOR UPDATE
     `);
-    if (locked.length === 0) throw new ApiError(404, "RUN_NOT_FOUND", "عملية التشغيل غير موجودة.");
+    if (databaseRows(locked).length === 0) throw new ApiError(404, "RUN_NOT_FOUND", "عملية التشغيل غير موجودة.");
 
     const [duplicate] = await tx.select().from(mcpToolCallsRuntime).where(and(
       eq(mcpToolCallsRuntime.organizationId, input.organizationId),
