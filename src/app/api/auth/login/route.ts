@@ -1,4 +1,5 @@
 import { asc, eq } from "drizzle-orm";
+import { z } from "zod";
 import { db } from "@/db";
 import { auditLogs, organizationMembers, users } from "@/db/schema";
 import { verifyMfaForLogin } from "@/lib/auth/mfa";
@@ -14,7 +15,7 @@ import { verifyTurnstile } from "@/lib/security/turnstile";
 export const runtime = "nodejs";
 
 const loginWithMfaSchema = loginSchema.extend({
-  mfaCode: loginSchema.shape.password.min(6).max(32).optional(),
+  mfaCode: z.string().trim().min(6).max(32).optional(),
 });
 
 export async function POST(request: Request) {
@@ -31,7 +32,7 @@ export async function POST(request: Request) {
     if (!user?.passwordHash || !(await verifyPassword(body.password, user.passwordHash))) {
       throw new ApiError(401, "INVALID_CREDENTIALS", "بيانات الدخول غير صحيحة.");
     }
-    await verifyMfaForLogin({ userId: user.id, code: body.mfaCode });
+    const mfaVerified = await verifyMfaForLogin({ userId: user.id, code: body.mfaCode });
 
     const memberships = await db()
       .select({ organizationId: organizationMembers.organizationId })
@@ -53,7 +54,7 @@ export async function POST(request: Request) {
       actorId: user.id,
       action: "auth.login",
       resourceType: "session",
-      metadata: { requestId, mfaVerified: true },
+      metadata: { requestId, mfaVerified },
     });
     if (activeOrganizationId) {
       await publishDomainEventBestEffort({
