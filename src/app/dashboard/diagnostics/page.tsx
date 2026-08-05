@@ -2,14 +2,19 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { DiagnosticsPanel } from "@/components/diagnostics-panel";
 import { ProductionControlCenter } from "@/components/production-control-center";
+import { WhatsAppRuntimeStatus } from "@/components/whatsapp-runtime-status";
 import { currentSession } from "@/lib/auth/session";
 import { platformIdentity } from "@/lib/platform/identity";
+import { inspectWhatsAppEnvironment } from "@/lib/platform/whatsapp-environment";
+import styles from "./diagnostics.module.css";
 
 export default async function DiagnosticsPage() {
   const session = await currentSession();
   if (!session) redirect("/login");
   if (!session.organizationId || !session.role) redirect("/select-organization");
   if (!new Set(["owner", "admin"]).has(session.role)) redirect("/forbidden");
+
+  const whatsappEnvironmentManaged = inspectWhatsAppEnvironment().authoritative;
 
   return (
     <main className="app-shell">
@@ -23,7 +28,10 @@ export default async function DiagnosticsPage() {
           </p>
         </header>
 
-        <div className="mt-5"><ProductionControlCenter /></div>
+        {whatsappEnvironmentManaged ? <div className="mt-5"><WhatsAppRuntimeStatus /></div> : null}
+        <div className={`mt-5 ${whatsappEnvironmentManaged ? styles.environmentManaged : ""}`}>
+          <ProductionControlCenter />
+        </div>
         <div className="mt-5"><DiagnosticsPanel /></div>
 
         <footer className="mt-8 border-t border-stone-700/70 py-6 text-center text-sm text-stone-500">
