@@ -1,7 +1,11 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { validateOptionalRuntimeEnvironment } from "./validate-runtime-env.mjs";
+
+const scriptsDirectory = path.dirname(fileURLToPath(import.meta.url));
+const applicationRoot = path.resolve(scriptsDirectory, "..");
 
 validateOptionalRuntimeEnvironment();
 
@@ -13,8 +17,19 @@ function bootstrapTelegramWebhook() {
   const mode = process.env.TELEGRAM_UPDATE_MODE?.trim().toLowerCase() || "webhook";
   if (!enabled("TELEGRAM_INTEGRATION_ENABLED") || mode === "polling") return;
 
+  const setupScript = path.join(scriptsDirectory, "setup-telegram-webhook.mjs");
+  if (!existsSync(setupScript)) {
+    console.error(JSON.stringify({
+      level: "fatal",
+      event: "telegram.webhook.bootstrap.asset_missing",
+      asset: "scripts/setup-telegram-webhook.mjs",
+    }));
+    process.exit(1);
+  }
+
   console.info(JSON.stringify({ level: "info", event: "telegram.webhook.bootstrap.started" }));
-  const result = spawnSync(process.execPath, ["scripts/setup-telegram-webhook.mjs"], {
+  const result = spawnSync(process.execPath, [setupScript], {
+    cwd: applicationRoot,
     env: process.env,
     stdio: "inherit",
     timeout: 70_000,
@@ -36,14 +51,15 @@ bootstrapTelegramWebhook();
 
 const host = process.env.APP_HOST?.trim() || process.env.HOSTNAME?.trim() || "0.0.0.0";
 const port = process.env.PORT?.trim() || "3000";
-const standaloneServer = path.resolve("server.js");
-const nextBinary = "node_modules/next/dist/bin/next";
+const standaloneServer = path.join(applicationRoot, "server.js");
+const nextBinary = path.join(applicationRoot, "node_modules/next/dist/bin/next");
 const childArguments = existsSync(standaloneServer)
   ? [standaloneServer]
   : [nextBinary, "start", "-H", host, "-p", port];
 let shutdownSignal;
 
 const next = spawn(process.execPath, childArguments, {
+  cwd: applicationRoot,
   env: { ...process.env, HOSTNAME: host, PORT: port },
   stdio: "inherit",
 });
