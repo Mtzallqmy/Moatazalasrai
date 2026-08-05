@@ -3,6 +3,7 @@ import type { ToolSet } from "ai";
 import { db } from "@/db";
 import { organizationMembers, runs } from "@/db/schema";
 import { agentToolBindings } from "@/db/tool-registry-schema";
+import { createBrowserTools } from "@/lib/ai-sdk/browser-tools";
 import { loadBoundMcpTools, type ToolRuntimeState } from "@/lib/ai-sdk/mcp-tool-loader";
 import { createSandboxTools } from "@/lib/ai-sdk/sandbox-tools";
 
@@ -53,6 +54,14 @@ export async function loadUnifiedAgentTools(input: {
         agentId: input.agentId,
         runId: input.runId,
         requestId: `agent-run:${input.runId}`,
+        state: input.state,
+      }), names));
+      Object.assign(internalTools, selectedInternalTools(createBrowserTools({
+        organizationId: input.organizationId,
+        userId: input.userId,
+        role: membership.role,
+        agentId: input.agentId,
+        runId: input.runId,
         state: input.state,
       }), names));
     }
