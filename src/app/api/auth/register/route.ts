@@ -3,10 +3,11 @@ import { db } from "@/db";
 import { auditLogs, organizationMembers, organizations, users } from "@/db/schema";
 import { hashPassword } from "@/lib/auth/password";
 import { createSession } from "@/lib/auth/session";
+import { publishDomainEventBestEffort } from "@/lib/events/publish";
 import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { registerSchema } from "@/lib/http/contracts";
-import { enforceRateLimit, requestClientKey } from "@/lib/security/rate-limit";
 import { anonymizeIp, clientIp } from "@/lib/security/client-ip";
+import { enforceRateLimit, requestClientKey } from "@/lib/security/rate-limit";
 import { verifyTurnstile } from "@/lib/security/turnstile";
 
 export const runtime = "nodejs";
@@ -65,6 +66,21 @@ export async function POST(request: Request) {
       activeOrganizationId: created.organizationId,
       ipAddress: anonymizeIp(clientIp(request).address),
       userAgent: request.headers.get("user-agent") ?? undefined,
+    });
+    await publishDomainEventBestEffort({
+      organizationId: created.organizationId,
+      eventKey: "user.registered",
+      actorType: "user",
+      actorId: created.userId,
+      resourceType: "user",
+      resourceId: created.userId,
+      idempotencyKey: `user.registered:${created.userId}`,
+      payload: {
+        userId: created.userId,
+        name: body.name,
+        email: body.email,
+        role: created.role,
+      },
     });
     return apiSuccess(created, requestId, 201);
   } catch (error) {
