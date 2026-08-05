@@ -59,7 +59,7 @@ export type ChannelConnectionSettings = {
   businessHours?: {
     timezone: string;
     days: Record<string, Array<{ start: string; end: string }>>;
-  };
+  } | null;
   handoffMode?: (typeof channelConversationMode.enumValues)[number];
   escalationRules?: Array<Record<string, unknown>>;
   language?: string;

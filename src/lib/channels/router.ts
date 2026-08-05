@@ -11,6 +11,7 @@ import { db } from "@/db";
 import {
   channelAgentBindings,
   channelContacts,
+  channelConnections,
   channelConversationLinks,
   channelEvents,
   channelHandoffs,

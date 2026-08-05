@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { providerCredentialHealthEvents } from "@/db/provider-health-schema";
 import {
@@ -271,13 +271,19 @@ async function contextMessages(
   };
 }
 
-async function hasEnabledAgentTools(organizationId: string, agentId: string) {
+async function hasEnabledAgentTools(
+  organizationId: string,
+  agentId: string,
+  allowedToolIds?: readonly string[] | null,
+) {
+  if (allowedToolIds && allowedToolIds.length === 0) return false;
   const [row] = await db().select({ value: count() }).from(agentMcpTools)
     .innerJoin(mcpTools, eq(mcpTools.id, agentMcpTools.toolId))
     .innerJoin(mcpServers, eq(mcpServers.id, mcpTools.serverId))
     .where(and(
       eq(agentMcpTools.organizationId, organizationId),
       eq(agentMcpTools.agentId, agentId),
+      allowedToolIds ? inArray(agentMcpTools.toolId, [...allowedToolIds]) : undefined,
       eq(mcpTools.organizationId, organizationId),
       eq(mcpTools.enabled, true),
       eq(mcpServers.organizationId, organizationId),
@@ -299,6 +305,7 @@ export async function prepareAgentRun(input: {
   model?: string;
   inputKind?: InputKind;
   media?: ProviderContentPart[];
+  allowedToolIds?: readonly string[] | null;
 }) {
   const [agent] = await db().select().from(agents).where(and(
     eq(agents.id, input.agentId),
@@ -327,7 +334,7 @@ export async function prepareAgentRun(input: {
       eq(providerCredentials.enabled, true),
       eq(providerCredentials.validationStatus, "verified"),
     )),
-    hasEnabledAgentTools(input.organizationId, input.agentId),
+    hasEnabledAgentTools(input.organizationId, input.agentId, input.allowedToolIds),
   ]);
   const now = new Date();
   const usableCredentials = credentials.filter((credential) =>
@@ -860,6 +867,7 @@ export async function executeAgentRun(input: {
   model?: string;
   inputKind?: InputKind;
   media?: ProviderContentPart[];
+  allowedToolIds?: readonly string[] | null;
 }) {
   const requestId = input.requestId ?? crypto.randomUUID();
   const prepared = await prepareAgentRun({ ...input, requestId });
@@ -898,6 +906,7 @@ export async function executeAgentRun(input: {
           candidateIndex,
           candidateRecord: candidate,
           context: prepared.context,
+          allowedToolIds: input.allowedToolIds,
           temperature: prepared.version.temperatureMilli / 1000,
           maxOutputTokens: prepared.version.maxOutputTokens,
           abortSignal: controller.signal,
@@ -1011,6 +1020,7 @@ export async function* streamAgentRun(input: {
   model?: string;
   inputKind?: InputKind;
   media?: ProviderContentPart[];
+  allowedToolIds?: readonly string[] | null;
 }) {
   const prepared = await prepareAgentRun(input);
   await beginProviderRequest(input.organizationId, prepared.run.id);
@@ -1050,6 +1060,7 @@ export async function* streamAgentRun(input: {
           candidateIndex,
           candidateRecord: candidate,
           context: prepared.context,
+          allowedToolIds: input.allowedToolIds,
           temperature: prepared.version.temperatureMilli / 1000,
           maxOutputTokens: prepared.version.maxOutputTokens,
           abortSignal: controller.signal,

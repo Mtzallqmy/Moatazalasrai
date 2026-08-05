@@ -7,9 +7,7 @@ import {
 } from "@/lib/integrations/telegram";
 import type {
   ChannelAdapter,
-  ChannelAdapterContext,
   ChannelIncomingAttachment,
-  ChannelIncomingMessage,
 } from "./types";
 
 type TelegramUser = { id?: number; username?: string; first_name?: string; last_name?: string; language_code?: string };
@@ -164,7 +162,7 @@ export const telegramChannelAdapter: ChannelAdapter = {
     if (context.credentials.kind !== "telegram") throw new Error("TELEGRAM_CREDENTIALS_REQUIRED");
     const started = performance.now();
     try {
-      const bot = await verifyTelegramToken(context.credentials.token);
+      const bot = await verifyTelegramToken(context.credentials.token) as { id: string | number; first_name?: string; username?: string };
       if (context.externalAccountId && context.externalAccountId !== String(bot.id)) {
         throw new ApiError(422, "TELEGRAM_BOT_ID_MISMATCH", "توكن Telegram يعود لبوت مختلف عن الاتصال المحفوظ.");
       }
