@@ -15,6 +15,23 @@ export type TelegramBot = {
   first_name: string;
 };
 
+export type TelegramInlineButton = {
+  title: string;
+  id?: string;
+  url?: string;
+};
+
+export const CENTRAL_TELEGRAM_COMMANDS = [
+  { command: "start", description: "بدء البوت وعرض الحالة" },
+  { command: "help", description: "عرض جميع الأوامر" },
+  { command: "status", description: "حالة الربط والميزات" },
+  { command: "agents", description: "عرض الوكلاء المتاحين" },
+  { command: "new", description: "بدء محادثة جديدة" },
+  { command: "files", description: "تعليمات إرسال الملفات" },
+  { command: "unlink", description: "فصل حساب Telegram" },
+  { command: "cancel", description: "إلغاء العملية الحالية" },
+] as const;
+
 async function telegramCall<T>(
   token: string,
   method: string,
@@ -52,8 +69,16 @@ export function configureTelegramWebhook(input: {
   return telegramCall<boolean>(input.token, "setWebhook", {
     url: input.url,
     secret_token: input.secretToken,
-    allowed_updates: ["message", "callback_query"],
+    allowed_updates: ["message", "edited_message", "callback_query"],
     drop_pending_updates: false,
+  });
+}
+
+export function registerCentralTelegramCommands(token: string) {
+  return telegramCall<boolean>(token, "setMyCommands", {
+    commands: CENTRAL_TELEGRAM_COMMANDS,
+    scope: { type: "all_private_chats" },
+    language_code: "ar",
   });
 }
 
@@ -63,21 +88,33 @@ export function sendTelegramMessage(input: {
   text: string;
   replyToMessageId?: string;
   buttons?: Array<{ id: string; title: string }>;
+  buttonRows?: TelegramInlineButton[][];
+  replyKeyboard?: string[][];
+  removeKeyboard?: boolean;
 }) {
   const text = input.text.length > 4000 ? `${input.text.slice(0, 3990)}…` : input.text;
+  const legacyRows = input.buttons?.slice(0, 12).map((button) => [{ title: button.title, id: button.id }]);
+  const rows = (input.buttonRows ?? legacyRows)?.slice(0, 8).map((row) => row.slice(0, 4).map((button) => ({
+    text: button.title.slice(0, 64),
+    ...(button.url ? { url: button.url } : { callback_data: (button.id ?? "telegram.help").slice(0, 64) }),
+  })));
+  const replyMarkup = rows?.length
+    ? { inline_keyboard: rows }
+    : input.replyKeyboard?.length
+      ? {
+          keyboard: input.replyKeyboard.slice(0, 8).map((row) => row.slice(0, 4).map((label) => ({ text: label.slice(0, 64) }))),
+          resize_keyboard: true,
+          is_persistent: true,
+        }
+      : input.removeKeyboard
+        ? { remove_keyboard: true }
+        : undefined;
   return telegramCall<{ message_id?: number }>(input.token, "sendMessage", {
     chat_id: input.chatId,
     text,
     disable_web_page_preview: true,
     ...(input.replyToMessageId ? { reply_parameters: { message_id: Number(input.replyToMessageId) } } : {}),
-    ...(input.buttons?.length ? {
-      reply_markup: {
-        inline_keyboard: input.buttons.slice(0, 12).map((button) => [{
-          text: button.title.slice(0, 64),
-          callback_data: button.id.slice(0, 64),
-        }]),
-      },
-    } : {}),
+    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
   });
 }
 
