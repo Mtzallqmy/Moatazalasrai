@@ -1,15 +1,22 @@
+# Keep development artifacts, secrets, and repository metadata out of Docker layers.
 node_modules
 .next
 .git
+.gitignore
 .openai
 .sites-runtime
 .npm-cache
-.github
-tests
-e2e
-apps/mobile
 coverage
 test-results
 playwright-report
+*.log
+npm-debug.log*
+.DS_Store
+.env
+.env.*
+!.env.example
+apps/mobile
+tests
+e2e
+.github
 *.md
-.env*
