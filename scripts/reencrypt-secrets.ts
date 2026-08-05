@@ -62,7 +62,9 @@ async function rotateSimpleTable(input: {
 }) {
   for (const row of input.rows) {
     const envelope = row[input.secretColumn];
-    if (!envelope || !row.id || !row.organization_id) continue;
+    const id = row.id;
+    const organizationId = row.organization_id;
+    if (!envelope || !id || !organizationId) continue;
     const next = replacement(envelope, input.context(row));
     if (!next) continue;
     await transaction(async (client) => {
@@ -71,10 +73,10 @@ async function rotateSimpleTable(input: {
          SET ${input.secretColumn} = $1, updated_at = now()
          WHERE id = $2 AND organization_id = $3 AND ${input.secretColumn} = $4
          RETURNING id`,
-        [next, row.id, row.organization_id, envelope],
+        [next, id, organizationId, envelope],
       );
       if (result.rowCount) {
-        await audit(client, row.organization_id, input.resourceType, row.id);
+        await audit(client, organizationId, input.resourceType, id);
         rotated += 1;
       }
     });
