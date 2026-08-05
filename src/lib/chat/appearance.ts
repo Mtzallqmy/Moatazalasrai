@@ -1,4 +1,4 @@
-export const chatThemeIds = ["moataz", "whatsapp", "chatgpt", "telegram"] as const;
+export const chatThemeIds = ["moataz", "whatsapp", "telegram"] as const;
 export const chatWallpaperIds = ["clean", "soft-grid", "doodles", "bubbles"] as const;
 
 export type ChatThemeId = (typeof chatThemeIds)[number];
@@ -20,9 +20,8 @@ export const chatThemeOptions: ReadonlyArray<{
   description: string;
 }> = [
   { id: "moataz", label: "معتز", description: "هوية المنصة الهادئة والمتزنة" },
-  { id: "whatsapp", label: "واتساب", description: "فقاعات خضراء مريحة للمحادثات اليومية" },
-  { id: "chatgpt", label: "ChatGPT", description: "سطور أوسع وقراءة مريحة للنصوص الطويلة" },
-  { id: "telegram", label: "تيليجرام", description: "ألوان زرقاء صافية وفقاعات خفيفة" },
+  { id: "whatsapp", label: "واتساب", description: "ألوان خضراء دافئة مستوحاة من واتساب" },
+  { id: "telegram", label: "تليجرام", description: "ألوان زرقاء صافية مستوحاة من تليجرام" },
 ];
 
 export const chatWallpaperOptions: ReadonlyArray<{
