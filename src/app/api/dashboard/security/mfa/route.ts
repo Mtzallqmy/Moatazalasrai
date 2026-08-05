@@ -7,7 +7,8 @@ import {
   mfaStatus,
   regenerateRecoveryCodes,
 } from "@/lib/auth/mfa";
-import { apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
+import { isFeatureEnabled } from "@/lib/control-plane/features";
+import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { enforceRateLimit, requestClientKey } from "@/lib/security/rate-limit";
 
 export const runtime = "nodejs";
@@ -43,6 +44,9 @@ export async function POST(request: Request) {
     });
     const operation = await parseJson(request, operationSchema, 16 * 1024);
     if (operation.operation === "begin") {
+      if (!(await isFeatureEnabled(session.organizationId, "mfa", session.userId))) {
+        throw new ApiError(403, "MFA_FEATURE_DISABLED", "إعداد المصادقة متعددة العوامل غير متاح داخل المؤسسة حاليًا.");
+      }
       return apiSuccess(await beginMfaEnrollment({
         userId: session.userId,
         organizationId: session.organizationId,
