@@ -1,5 +1,5 @@
 import { makeWorkerUtils, type WorkerUtils } from "graphile-worker";
-import { env } from "@/lib/config/env";
+import { getPostgresPool } from "@/db/pool";
 import type {
   AgentRunResumePayload,
   AgentTeamRunPayload,
@@ -16,7 +16,7 @@ let workerUtilsPromise: Promise<WorkerUtils> | null = null;
 
 export function getWorkerUtils() {
   if (!workerUtilsPromise) {
-    workerUtilsPromise = makeWorkerUtils({ connectionString: env().databaseUrl }).catch((error) => {
+    workerUtilsPromise = makeWorkerUtils({ pgPool: getPostgresPool() }).catch((error) => {
       workerUtilsPromise = null;
       throw error;
     });

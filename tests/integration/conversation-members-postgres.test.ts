@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import postgres, { type Sql } from "postgres";
+import { createTestSqlClient, type Sql } from "../helpers/pg-sql";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 const databaseUrl = process.env.TEST_DATABASE_URL?.trim();
@@ -21,7 +21,7 @@ describeDatabase("conversation member authorization", () => {
   beforeAll(async () => {
     process.env.DATABASE_URL = databaseUrl!;
     process.env.CREDENTIAL_ENCRYPTION_KEY ??= "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-    sql = postgres(databaseUrl!, { max: 3, prepare: false });
+    sql = createTestSqlClient(databaseUrl!, 3);
     await sql`INSERT INTO organizations (id, name, slug) VALUES (${organizationId}, 'Conversation ACL', ${`conversation-acl-${organizationId}`})`;
     for (const [id, label] of [[ownerId, "owner"], [readerId, "reader"], [writerId, "writer"], [managerId, "manager"], [outsiderId, "outsider"]] as const) {
       await sql`INSERT INTO users (id, email, name) VALUES (${id}, ${`${label}-${id}@example.test`}, ${label})`;

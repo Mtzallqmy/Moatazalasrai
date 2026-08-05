@@ -2,9 +2,10 @@ import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import postgres from "postgres";
+import pg from "pg";
 import { splitSqlStatements } from "./sql-utils.mjs";
 
+const { Pool } = pg;
 const databaseUrl = process.env.DATABASE_URL?.trim();
 if (!databaseUrl) throw new Error("DATABASE_URL is required to run database migrations.");
 
@@ -12,11 +13,11 @@ const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const migrationDirectory = path.resolve(scriptDirectory, "../drizzle");
 const parsedTimeout = Number.parseInt(process.env.MIGRATION_TIMEOUT_MS ?? "45000", 10);
 const timeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout >= 5_000 ? parsedTimeout : 45_000;
-const sql = postgres(databaseUrl, {
+const pool = new Pool({
+  connectionString: databaseUrl,
   max: 1,
-  connect_timeout: Math.ceil(timeoutMs / 1_000),
-  idle_timeout: 20,
-  prepare: false,
+  connectionTimeoutMillis: timeoutMs,
+  idleTimeoutMillis: 20_000,
 });
 
 function checksum(content) {
@@ -37,15 +38,35 @@ async function withTimeout(action, label) {
   }
 }
 
+async function applyMigration(name, digest, statements) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    for (const statement of statements) {
+      await client.query(statement);
+    }
+    await client.query(
+      'INSERT INTO "_platform_migrations" ("name", "checksum") VALUES ($1, $2)',
+      [name, digest],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 try {
   await withTimeout(
     () =>
-      sql.unsafe(
+      pool.query(
         `CREATE TABLE IF NOT EXISTS "_platform_migrations" (
-        "name" text PRIMARY KEY,
-        "checksum" text NOT NULL,
-        "applied_at" timestamptz NOT NULL DEFAULT now()
-      )`,
+          "name" text PRIMARY KEY,
+          "checksum" text NOT NULL,
+          "applied_at" timestamptz NOT NULL DEFAULT now()
+        )`,
       ),
     "Creating migration metadata table",
   );
@@ -62,12 +83,12 @@ try {
     const content = await readFile(path.join(migrationDirectory, name), "utf8");
     const digest = checksum(content);
     const existing = await withTimeout(
-      () => sql`SELECT "checksum" FROM "_platform_migrations" WHERE "name" = ${name} LIMIT 1`,
+      () => pool.query('SELECT "checksum" FROM "_platform_migrations" WHERE "name" = $1 LIMIT 1', [name]),
       `Reading migration ${name}`,
     );
 
-    if (existing[0]) {
-      if (existing[0].checksum !== digest) {
+    if (existing.rows[0]) {
+      if (existing.rows[0].checksum !== digest) {
         throw new Error(`Migration ${name} was already applied with a different checksum.`);
       }
       console.log(JSON.stringify({ level: "info", event: "migration.skipped", name }));
@@ -80,13 +101,7 @@ try {
     }
 
     await withTimeout(
-      () =>
-        sql.begin(async (tx) => {
-          for (const statement of statements) {
-            await tx.unsafe(statement);
-          }
-          await tx`INSERT INTO "_platform_migrations" ("name", "checksum") VALUES (${name}, ${digest})`;
-        }),
+      () => applyMigration(name, digest, statements),
       `Applying migration ${name}`,
     );
 
@@ -97,5 +112,5 @@ try {
 
   console.log(JSON.stringify({ level: "info", event: "migrations.completed", count: migrationFiles.length }));
 } finally {
-  await sql.end({ timeout: 5 });
+  await pool.end();
 }

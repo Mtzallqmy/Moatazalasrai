@@ -1,5 +1,6 @@
 import { and, eq, max, sql } from "drizzle-orm";
 import { db } from "@/db";
+import { databaseRows } from "@/db/result";
 import { runEvents, runs } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
 
@@ -15,7 +16,7 @@ export async function appendRunEvents(input: {
       WHERE "id" = ${input.runId} AND "organization_id" = ${input.organizationId}
       FOR UPDATE
     `);
-    if (lock.length === 0) throw new ApiError(404, "RUN_NOT_FOUND", "عملية التشغيل غير موجودة.");
+    if (databaseRows(lock).length === 0) throw new ApiError(404, "RUN_NOT_FOUND", "عملية التشغيل غير موجودة.");
     const [current] = await tx.select({ sequence: max(runEvents.sequence) }).from(runEvents)
       .innerJoin(runs, eq(runs.id, runEvents.runId))
       .where(and(eq(runEvents.runId, input.runId), eq(runs.organizationId, input.organizationId)));

@@ -1,27 +1,11 @@
-import { drizzle } from "drizzle-orm/postgres-js";
-import postgres from "postgres";
-import { env } from "@/lib/config/env";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { getPostgresPool } from "@/db/pool";
 import * as schema from "./schema";
-
-let client: ReturnType<typeof postgres> | null = null;
-
-function getClient() {
-  if (!client) {
-    client = postgres(env().databaseUrl, {
-      max: 10,
-      connect_timeout: 10,
-      idle_timeout: 20,
-      max_lifetime: 60 * 30,
-      prepare: false,
-    });
-  }
-  return client;
-}
 
 let database: ReturnType<typeof drizzle<typeof schema>> | null = null;
 
 export function db() {
-  if (!database) database = drizzle(getClient(), { schema });
+  database ??= drizzle(getPostgresPool(), { schema });
   return database;
 }
 
@@ -85,8 +69,8 @@ export async function checkDatabase(): Promise<{
   worker: { active: boolean; lastSeenAt: string | null };
 }> {
   const startedAt = performance.now();
-  const sql = getClient();
-  const rows = await sql`
+  const pool = getPostgresPool();
+  const tableResult = await pool.query<Record<string, string | null>>(`
     SELECT
       to_regclass('public.organizations')::text AS organizations,
       to_regclass('public.users')::text AS users,
@@ -138,19 +122,19 @@ export async function checkDatabase(): Promise<{
       to_regclass('public.sandbox_files')::text AS sandbox_files,
       to_regclass('public.sandbox_artifacts')::text AS sandbox_artifacts,
       to_regclass('public.platform_runtime_settings')::text AS platform_runtime_settings
-  `;
-  const state = rows[0] as Record<string, string | null> | undefined;
+  `);
+  const state = tableResult.rows[0];
   const missingTables = requiredTables.filter((table) => !state?.[table]);
   if (missingTables.length > 0) {
     throw new Error(`Database schema is incomplete: ${missingTables.join(", ")}`);
   }
 
-  const heartbeatRows = await sql<{ last_seen_at: Date | null }[]>`
+  const heartbeatResult = await pool.query<{ last_seen_at: Date | null }>(`
     SELECT max(last_seen_at) AS last_seen_at
     FROM worker_heartbeats
     WHERE stopping_at IS NULL
-  `;
-  const lastSeenAt = heartbeatRows[0]?.last_seen_at ?? null;
+  `);
+  const lastSeenAt = heartbeatResult.rows[0]?.last_seen_at ?? null;
   const active = Boolean(lastSeenAt && Date.now() - lastSeenAt.getTime() <= 90_000);
 
   return {

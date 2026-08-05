@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import postgres, { type Sql } from "postgres";
+import { createTestSqlClient, type Sql } from "../helpers/pg-sql";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 const databaseUrl = process.env.TEST_DATABASE_URL?.trim();
@@ -11,7 +11,7 @@ describeDatabase("Cloudflare provider platform persistence", () => {
   const userIds = new Set<string>();
 
   beforeAll(() => {
-    sql = postgres(databaseUrl!, { max: 3, prepare: false });
+    sql = createTestSqlClient(databaseUrl!, 3);
   });
 
   afterAll(async () => {

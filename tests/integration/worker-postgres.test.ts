@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import postgres, { type Sql } from "postgres";
+import { createTestSqlClient, type Sql } from "../helpers/pg-sql";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 const callRemoteMcpToolMock = vi.hoisted(() => vi.fn(async () => ({
@@ -20,7 +20,7 @@ describeDatabase("Graphile Worker and PostgreSQL runtime", () => {
     process.env.DATABASE_URL = databaseUrl!;
     process.env.CREDENTIAL_ENCRYPTION_KEY ??= "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
     process.env.AI_WORKER_ENABLED = "true";
-    sql = postgres(databaseUrl!, { max: 3, prepare: false });
+    sql = createTestSqlClient(databaseUrl!, 3);
   });
 
   beforeEach(() => {

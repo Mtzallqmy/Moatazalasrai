@@ -1,15 +1,21 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { validateOptionalRuntimeEnvironment } from "./validate-runtime-env.mjs";
 
 validateOptionalRuntimeEnvironment();
 
-const host = process.env.APP_HOST?.trim() || "0.0.0.0";
+const host = process.env.APP_HOST?.trim() || process.env.HOSTNAME?.trim() || "0.0.0.0";
 const port = process.env.PORT?.trim() || "3000";
+const standaloneServer = path.resolve("server.js");
 const nextBinary = "node_modules/next/dist/bin/next";
+const childArguments = existsSync(standaloneServer)
+  ? [standaloneServer]
+  : [nextBinary, "start", "-H", host, "-p", port];
 let shutdownSignal;
 
-const next = spawn(process.execPath, [nextBinary, "start", "-H", host, "-p", port], {
-  env: process.env,
+const next = spawn(process.execPath, childArguments, {
+  env: { ...process.env, HOSTNAME: host, PORT: port },
   stdio: "inherit",
 });
 

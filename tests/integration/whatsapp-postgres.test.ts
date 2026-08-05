@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import postgres, { type Sql } from "postgres";
+import { createTestSqlClient, type Sql } from "../helpers/pg-sql";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { resetEnvForTests } from "@/lib/config/env";
 import {
@@ -35,7 +35,7 @@ describeDatabase("WhatsApp Business Platform persistence", () => {
     process.env.WHATSAPP_CONNECT_TOKEN_SECRET = "connect-token-secret-32-characters-minimum";
     process.env.WHATSAPP_CONNECT_TOKEN_TTL_MINUTES = "10";
     resetEnvForTests();
-    sql = postgres(databaseUrl!, { max: 3, prepare: false });
+    sql = createTestSqlClient(databaseUrl!, 3);
   });
 
   afterAll(async () => {
