@@ -56,6 +56,7 @@ export async function loadAgentMcpTools(input: {
   agentId: string;
   runId: string;
   userId?: string | null;
+  allowedToolIds?: readonly string[] | null;
   state: ToolRuntimeState;
 }) {
   const [agent] = await db().select({ id: agents.id }).from(agents).where(and(
@@ -82,10 +83,14 @@ export async function loadAgentMcpTools(input: {
       eq(mcpServers.enabled, true),
       eq(mcpServers.status, "connected"),
     ));
+  const allowlist = input.allowedToolIds === undefined || input.allowedToolIds === null
+    ? null
+    : new Set(input.allowedToolIds);
+  const effectiveRows = allowlist ? rows.filter((row) => allowlist.has(row.tool.id)) : rows;
 
   const bindings = new Map<string, AgentToolBinding>();
   const tools: ToolSet = {};
-  for (const row of rows) {
+  for (const row of effectiveRows) {
     const safeName = safeToolName(row.tool.id);
     const approvalMode = row.approvalMode === "always" || row.approvalMode === "never"
       ? row.approvalMode
@@ -150,5 +155,5 @@ export async function loadAgentMcpTools(input: {
       },
     });
   }
-  return { tools, bindings, hasTools: rows.length > 0 };
+  return { tools, bindings, hasTools: effectiveRows.length > 0 };
 }
