@@ -14,6 +14,10 @@ export type Permission =
   | "organization:manage"
   | "integrations:read"
   | "integrations:manage"
+  | "channels:read"
+  | "channels:manage"
+  | "channels:use"
+  | "channels:handoff"
   | "files:read"
   | "files:upload"
   | "files:manage"
@@ -34,7 +38,8 @@ const permissions: Record<Role, ReadonlySet<Permission>> = {
   owner: new Set([
     "providers:read", "providers:manage", "agents:read", "agents:manage", "agents:run",
     "runs:read", "members:read", "members:manage", "audit:read", "organization:manage",
-    "integrations:read", "integrations:manage", "files:read", "files:upload", "files:manage",
+    "integrations:read", "integrations:manage", "channels:read", "channels:manage", "channels:use", "channels:handoff",
+    "files:read", "files:upload", "files:manage",
     "site_connections:read", "site_connections:manage", "site_connections:use", "site_connections:approve",
     "browser_tasks:read", "browser_tasks:run", "browser_tasks:manage", "browser_tasks:approve",
     "sandbox:read", "sandbox:use", "sandbox:manage", "sandbox:approve",
@@ -42,31 +47,34 @@ const permissions: Record<Role, ReadonlySet<Permission>> = {
   admin: new Set([
     "providers:read", "providers:manage", "agents:read", "agents:manage", "agents:run",
     "runs:read", "members:read", "members:manage", "audit:read", "organization:manage",
-    "integrations:read", "integrations:manage", "files:read", "files:upload", "files:manage",
+    "integrations:read", "integrations:manage", "channels:read", "channels:manage", "channels:use", "channels:handoff",
+    "files:read", "files:upload", "files:manage",
     "site_connections:read", "site_connections:manage", "site_connections:use", "site_connections:approve",
     "browser_tasks:read", "browser_tasks:run", "browser_tasks:manage", "browser_tasks:approve",
     "sandbox:read", "sandbox:use", "sandbox:manage", "sandbox:approve",
   ]),
   developer: new Set([
     "providers:read", "providers:manage", "agents:read", "agents:manage", "agents:run", "runs:read",
-    "integrations:read", "files:read", "files:upload", "files:manage",
+    "integrations:read", "channels:read", "channels:manage", "channels:use", "channels:handoff",
+    "files:read", "files:upload", "files:manage",
     "site_connections:read", "site_connections:manage", "site_connections:use",
     "browser_tasks:read", "browser_tasks:run",
     "sandbox:read", "sandbox:use", "sandbox:manage",
   ]),
   operator: new Set([
     "providers:read", "agents:read", "agents:run", "runs:read", "integrations:read",
+    "channels:read", "channels:use", "channels:handoff",
     "files:read", "files:upload", "files:manage",
     "site_connections:read", "site_connections:use", "site_connections:approve",
     "browser_tasks:read", "browser_tasks:run", "browser_tasks:approve",
     "sandbox:read", "sandbox:use", "sandbox:approve",
   ]),
   viewer: new Set([
-    "providers:read", "agents:read", "runs:read", "integrations:read", "files:read",
+    "providers:read", "agents:read", "runs:read", "integrations:read", "channels:read", "files:read",
     "site_connections:read", "browser_tasks:read", "sandbox:read",
   ]),
   member: new Set([
-    "agents:read", "agents:run", "files:read", "files:upload",
+    "agents:read", "agents:run", "channels:read", "channels:use", "files:read", "files:upload",
     "site_connections:read", "site_connections:use",
     "browser_tasks:read", "browser_tasks:run",
     "sandbox:read", "sandbox:use",
