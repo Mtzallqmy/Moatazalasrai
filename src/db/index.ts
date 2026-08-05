@@ -3,8 +3,9 @@ import { getPostgresPool } from "@/db/pool";
 import * as coreSchema from "./schema";
 import * as channelSchema from "./channel-schema";
 import * as controlPlaneSchema from "./control-plane-schema";
+import * as adminSchema from "./admin-schema";
 
-const schema = { ...coreSchema, ...channelSchema, ...controlPlaneSchema };
+const schema = { ...coreSchema, ...channelSchema, ...controlPlaneSchema, ...adminSchema };
 type DatabaseSchema = typeof schema;
 let database: ReturnType<typeof drizzle<DatabaseSchema>> | null = null;
 
@@ -89,6 +90,13 @@ const requiredTables = [
   "notification_rules",
   "notification_deliveries",
   "internal_notifications",
+  "site_pages",
+  "site_page_sections",
+  "site_services",
+  "site_menus",
+  "site_menu_items",
+  "content_revisions",
+  "user_mfa_credentials",
 ] as const;
 
 export async function checkDatabase(): Promise<{
@@ -175,7 +183,14 @@ export async function checkDatabase(): Promise<{
       to_regclass('public.notification_templates')::text AS notification_templates,
       to_regclass('public.notification_rules')::text AS notification_rules,
       to_regclass('public.notification_deliveries')::text AS notification_deliveries,
-      to_regclass('public.internal_notifications')::text AS internal_notifications
+      to_regclass('public.internal_notifications')::text AS internal_notifications,
+      to_regclass('public.site_pages')::text AS site_pages,
+      to_regclass('public.site_page_sections')::text AS site_page_sections,
+      to_regclass('public.site_services')::text AS site_services,
+      to_regclass('public.site_menus')::text AS site_menus,
+      to_regclass('public.site_menu_items')::text AS site_menu_items,
+      to_regclass('public.content_revisions')::text AS content_revisions,
+      to_regclass('public.user_mfa_credentials')::text AS user_mfa_credentials
   `);
   const state = tableResult.rows[0];
   const missingTables = requiredTables.filter((table) => !state?.[table]);
