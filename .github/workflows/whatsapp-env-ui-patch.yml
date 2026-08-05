@@ -1,4 +1,5 @@
 # One-shot branch patcher; removed after making environment-managed WhatsApp read-only.
+# Trigger revision: 2.
 name: WhatsApp Environment UI Patch
 
 on:
