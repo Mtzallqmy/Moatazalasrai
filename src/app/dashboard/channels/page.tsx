@@ -65,7 +65,7 @@ export default async function ChannelsPage() {
           tools: toolRows,
           inboxes: inboxRows,
           workflows: workflowRows,
-          members: memberRows,
+          members: memberRows.map((member) => ({ ...member, name: member.name ?? member.email })),
         }}
       />
     </DashboardShell>
