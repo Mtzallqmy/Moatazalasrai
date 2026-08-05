@@ -17,12 +17,13 @@ const pool = new Pool({
 });
 
 try {
-  const migration = await pool.query(
-    'SELECT 1 FROM "_platform_migrations" WHERE "name" = $1 LIMIT 1',
-    ["0039_central_telegram_bot.sql"],
+  const migrations = await pool.query(
+    'SELECT "name" FROM "_platform_migrations" WHERE "name" = ANY($1::text[])',
+    [["0039_central_telegram_bot.sql", "0040_telegram_admin_default_permissions.sql"]],
   );
-  if (migration.rowCount !== 1) {
-    throw new Error("Required migration 0039_central_telegram_bot.sql has not been applied.");
+  const applied = new Set(migrations.rows.map((row) => String(row.name)));
+  for (const required of ["0039_central_telegram_bot.sql", "0040_telegram_admin_default_permissions.sql"]) {
+    if (!applied.has(required)) throw new Error(`Required migration ${required} has not been applied.`);
   }
 
   const schema = await pool.query(`
@@ -46,7 +47,7 @@ try {
   console.log(JSON.stringify({
     level: "info",
     event: "telegram.schema.verified",
-    migration: "0039_central_telegram_bot.sql",
+    migrations: ["0039_central_telegram_bot.sql", "0040_telegram_admin_default_permissions.sql"],
   }));
 } finally {
   await pool.end();
