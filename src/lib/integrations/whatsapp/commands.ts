@@ -9,17 +9,19 @@ import { maskEmail } from "./crypto";
 import { markMessageAsRead, sendInteractiveButtons, sendTextMessage } from "./client";
 import { requireWhatsAppConfig } from "./config";
 import type { WhatsAppIncomingMessage } from "./webhook";
+import { resolveEffectiveWhatsAppPolicy } from "@/lib/channels/whatsapp-platform";
 
 export const WHATSAPP_COMMAND_IDS = Object.freeze({
   account: "wa.account",
   openChat: "wa.open_chat",
+  status: "wa.status",
   disconnect: "wa.disconnect",
   menu: "wa.menu",
 });
 
 type ParsedCommand =
   | { kind: "connect"; token: string }
-  | { kind: "account" | "open_chat" | "disconnect" | "menu" | "unknown" };
+  | { kind: "account" | "open_chat" | "status" | "disconnect" | "menu" | "unknown" };
 
 function interactiveId(message: WhatsAppIncomingMessage) {
   return message.interactive?.button_reply?.id ?? message.interactive?.list_reply?.id ?? null;
@@ -33,34 +35,38 @@ export function parseWhatsAppCommand(message: WhatsAppIncomingMessage): ParsedCo
   const id = interactiveId(message);
   if (id === WHATSAPP_COMMAND_IDS.account) return { kind: "account" };
   if (id === WHATSAPP_COMMAND_IDS.openChat) return { kind: "open_chat" };
+  if (id === WHATSAPP_COMMAND_IDS.status) return { kind: "status" };
   if (id === WHATSAPP_COMMAND_IDS.disconnect) return { kind: "disconnect" };
   if (id === WHATSAPP_COMMAND_IDS.menu) return { kind: "menu" };
 
   const normalized = text.toLowerCase();
-  if (["القائمة", "قائمة", "menu", "/menu", "ابدأ", "/start"].includes(normalized)) return { kind: "menu" };
-  if (["حسابي", "الحساب"].includes(normalized)) return { kind: "account" };
-  if (["إلغاء الربط", "الغاء الربط", "فصل الحساب"].includes(normalized)) return { kind: "disconnect" };
+  if (["القائمة", "قائمة", "مساعدة", "الأوامر", "الاوامر", "help", "/help", "menu", "/menu", "ابدأ", "/start"].includes(normalized)) return { kind: "menu" };
+  if (["حسابي", "الحساب", "/account"].includes(normalized)) return { kind: "account" };
+  if (["الحالة", "حالة الوكيل", "الإعدادات", "الاعدادات", "status", "/status"].includes(normalized)) return { kind: "status" };
+  if (["فتح الدردشة", "الدردشة", "/chat"].includes(normalized)) return { kind: "open_chat" };
+  if (["إلغاء الربط", "الغاء الربط", "فصل الحساب", "/disconnect"].includes(normalized)) return { kind: "disconnect" };
   return { kind: "unknown" };
 }
 
 export function sendWhatsAppMainMenu(to: string) {
   return sendInteractiveButtons({
     to,
-    bodyText: "اختر خدمة من منصة معتز. لا ننفذ تغييرات حساسة أو مالية من WhatsApp.",
-    footerText: "للقائمة اكتب: القائمة",
+    bodyText: [
+      "اختر خدمة من منصة معتز.",
+      "الأوامر النصية: القائمة، حسابي، الحالة، فتح الدردشة، إلغاء الربط.",
+      "لا ننفذ تغييرات حساسة أو مالية من WhatsApp.",
+    ].join("\n"),
+    footerText: "للمساعدة اكتب: القائمة",
     buttons: [
       { id: WHATSAPP_COMMAND_IDS.account, title: "حسابي" },
+      { id: WHATSAPP_COMMAND_IDS.status, title: "حالة الوكيل" },
       { id: WHATSAPP_COMMAND_IDS.openChat, title: "فتح الدردشة" },
-      { id: WHATSAPP_COMMAND_IDS.disconnect, title: "إلغاء الربط" },
     ],
   });
 }
 
 async function invalidConnectReply(to: string) {
-  await sendTextMessage({
-    to,
-    text: "رمز الربط غير صالح أو انتهت صلاحيته. ارجع إلى الموقع وأنشئ رابطًا جديدًا.",
-  });
+  await sendTextMessage({ to, text: "رمز الربط غير صالح أو انتهت صلاحيته. ارجع إلى الموقع وأنشئ رابطًا جديدًا." });
 }
 
 export async function processWhatsAppMessage(message: WhatsAppIncomingMessage) {
@@ -68,19 +74,12 @@ export async function processWhatsAppMessage(message: WhatsAppIncomingMessage) {
   await markMessageAsRead({ messageId: message.id }).catch(() => undefined);
 
   if (command.kind === "connect") {
-    const result = await consumeWhatsAppConnectToken({
-      token: command.token,
-      waId: message.from,
-      messageId: message.id,
-    });
+    const result = await consumeWhatsAppConnectToken({ token: command.token, waId: message.from, messageId: message.id });
     if (!result.ok) {
       await invalidConnectReply(message.from);
       return;
     }
-    await sendTextMessage({
-      to: message.from,
-      text: "✅ تم ربط حساب WhatsApp بحسابك في منصة معتز بنجاح.",
-    });
+    await sendTextMessage({ to: message.from, text: "✅ تم ربط حساب WhatsApp بحسابك في منصة معتز بنجاح." });
     await sendWhatsAppMainMenu(message.from);
     return;
   }
@@ -100,11 +99,27 @@ export async function processWhatsAppMessage(message: WhatsAppIncomingMessage) {
   if (command.kind === "account") {
     await sendTextMessage({
       to: message.from,
+      text: ["حسابك مرتبط بنجاح.", `الاسم: ${user.name?.trim() || "غير محدد"}`, `البريد: ${maskEmail(user.email)}`, "لأي تعديل حساس افتح الموقع وسجّل الدخول من جديد."].join("\n"),
+    });
+    return;
+  }
+
+  if (command.kind === "status") {
+    if (!user.organizationId) {
+      await sendTextMessage({ to: message.from, text: "الحساب مرتبط، لكن لم تُحدد مؤسسة نشطة. اختر المؤسسة من الموقع ثم أعد الربط." });
+      return;
+    }
+    const policy = await resolveEffectiveWhatsAppPolicy({ organizationId: user.organizationId, userId: user.userId });
+    await sendTextMessage({
+      to: message.from,
       text: [
-        "حسابك مرتبط بنجاح.",
-        `الاسم: ${user.name?.trim() || "غير محدد"}`,
-        `البريد: ${maskEmail(user.email)}`,
-        "لأي تعديل حساس افتح الموقع وسجّل الدخول من جديد.",
+        "حالة WhatsApp:",
+        `الرد الآلي: ${policy.autoReplyEnabled && policy.status === "active" ? "مفعل" : "معطل"}`,
+        `الوكيل: ${policy.agentId ? "محدد" : "غير محدد"}`,
+        `المزود: ${policy.providerCredentialId ? "محدد" : "غير محدد"}`,
+        `النموذج: ${policy.modelId || "غير محدد"}`,
+        `الأدوات المسموحة: ${policy.allowedTools.length}`,
+        `التحويل البشري: ${policy.forceHumanHandoff ? "إجباري" : policy.humanHandoffEnabled ? "متاح" : "معطل"}`,
       ].join("\n"),
     });
     return;
@@ -112,11 +127,7 @@ export async function processWhatsAppMessage(message: WhatsAppIncomingMessage) {
 
   if (command.kind === "open_chat") {
     const config = requireWhatsAppConfig();
-    await sendTextMessage({
-      to: message.from,
-      text: `افتح دردشات المنصة من هذا الرابط:\n${config.publicAppUrl}/dashboard/chat\n\nستحتاج إلى جلسة تسجيل دخول صالحة.`,
-      previewUrl: true,
-    });
+    await sendTextMessage({ to: message.from, text: `افتح دردشات المنصة من هذا الرابط:\n${config.publicAppUrl}/dashboard/chat`, previewUrl: true });
     return;
   }
 
@@ -124,9 +135,7 @@ export async function processWhatsAppMessage(message: WhatsAppIncomingMessage) {
     const result = await disconnectWhatsAppByWaId({ waId: message.from, messageId: message.id });
     await sendTextMessage({
       to: message.from,
-      text: result.disconnected
-        ? "تم إلغاء ربط WhatsApp. لن تصل أي معلومات للحساب عبر هذا الرقم قبل إعادة الربط."
-        : "لا يوجد ارتباط نشط لهذا الرقم.",
+      text: result.disconnected ? "تم إلغاء ربط WhatsApp. لن تصل معلومات الحساب عبر هذا الرقم قبل إعادة الربط." : "لا يوجد ارتباط نشط لهذا الرقم.",
     });
     return;
   }

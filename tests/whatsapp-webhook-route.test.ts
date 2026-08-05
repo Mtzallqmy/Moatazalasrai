@@ -78,12 +78,8 @@ vi.mock("@/lib/channels/whatsapp-platform", () => ({
   }),
   withWhatsAppChannelPolicy: (_input: unknown, callback: () => Promise<unknown>) => callback(),
 }));
-vi.mock("@/lib/channels/router", () => ({
-  routeIncomingChannelMessage: mocks.routeIncoming,
-}));
-vi.mock("@/lib/control-plane/features", () => ({
-  isFeatureEnabled: mocks.featureEnabled,
-}));
+vi.mock("@/lib/channels/router", () => ({ routeIncomingChannelMessage: mocks.routeIncoming }));
+vi.mock("@/lib/control-plane/features", () => ({ isFeatureEnabled: mocks.featureEnabled }));
 vi.mock("@/lib/security/rate-limit", () => ({ enforceRateLimit: vi.fn(async () => undefined) }));
 vi.mock("@/db", () => ({
   db: () => ({
@@ -130,11 +126,7 @@ beforeEach(() => {
   mocks.featureEnabled.mockResolvedValue(true);
   mocks.routeIncoming.mockResolvedValue({ duplicate: false });
   mocks.insertReturning.mockResolvedValue([{ id: "event-id" }]);
-  mocks.resolveSender.mockResolvedValue({
-    organizationId: connection.organizationId,
-    userId: effectivePolicy.userId,
-    linked: true,
-  });
+  mocks.resolveSender.mockResolvedValue({ organizationId: connection.organizationId, userId: effectivePolicy.userId, linked: true });
   mocks.resolvePolicy.mockResolvedValue(effectivePolicy);
   mocks.ensureProjection.mockResolvedValue(connection);
 });
@@ -155,28 +147,21 @@ describe("WhatsApp webhook route", () => {
     const valid = await GET(new Request("https://app.example/api/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=verify-token-123456&hub.challenge=challenge-1"));
     expect(valid.status).toBe(200);
     expect(await valid.text()).toBe("challenge-1");
-
     const invalid = await GET(new Request("https://app.example/api/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=wrong-token-value&hub.challenge=challenge-2"));
     expect(invalid.status).toBe(403);
   });
 
-  it("routes ordinary messages through the channel platform and keeps account commands compatible", async () => {
+  it("routes ordinary messages through the channel platform and handles commands separately", async () => {
     const { POST } = await import("@/app/api/webhooks/whatsapp/route");
-    const raw = JSON.stringify({
-      entry: [{ changes: [{ value: {
-        metadata: { phone_number_id: "1234567890" },
-        messages: [
-          { id: "wamid.1", from: "967711111111", type: "text", text: { body: "القائمة" } },
-          { id: "wamid.2", from: "967722222222", type: "interactive", interactive: { button_reply: { id: "wa.account" } } },
-        ],
-      } }] }],
-    });
+    const raw = JSON.stringify({ entry: [{ changes: [{ value: {
+      metadata: { phone_number_id: "1234567890" },
+      messages: [
+        { id: "wamid.1", from: "967711111111", type: "text", text: { body: "لخص آخر محادثة" } },
+        { id: "wamid.2", from: "967722222222", type: "interactive", interactive: { button_reply: { id: "wa.account" } } },
+      ],
+    } }] }] });
     const signature = `sha256=${createHmac("sha256", process.env.META_APP_SECRET!).update(raw).digest("hex")}`;
-    const response = await POST(new Request("https://app.example/api/webhooks/whatsapp", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-hub-signature-256": signature },
-      body: raw,
-    }));
+    const response = await POST(new Request("https://app.example/api/webhooks/whatsapp", { method: "POST", headers: { "content-type": "application/json", "x-hub-signature-256": signature }, body: raw }));
     expect(response.status).toBe(200);
     expect((await response.json()).data).toMatchObject({ legacyCommands: 1, channelMessages: 1 });
     expect(mocks.insertReturning).toHaveBeenCalledTimes(1);
@@ -186,36 +171,24 @@ describe("WhatsApp webhook route", () => {
 
   it("acknowledges status-only events without scheduling message processing", async () => {
     const { POST } = await import("@/app/api/webhooks/whatsapp/route");
-    const raw = JSON.stringify({
-      entry: [{ changes: [{ value: { metadata: { phone_number_id: "1234567890" }, statuses: [{ id: "wamid.status" }] } }] }],
-    });
+    const raw = JSON.stringify({ entry: [{ changes: [{ value: { metadata: { phone_number_id: "1234567890" }, statuses: [{ id: "wamid.status" }] } }] }] });
     const signature = `sha256=${createHmac("sha256", process.env.META_APP_SECRET!).update(raw).digest("hex")}`;
-    const response = await POST(new Request("https://app.example/api/webhooks/whatsapp", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-hub-signature-256": signature },
-      body: raw,
-    }));
+    const response = await POST(new Request("https://app.example/api/webhooks/whatsapp", { method: "POST", headers: { "content-type": "application/json", "x-hub-signature-256": signature }, body: raw }));
     expect(response.status).toBe(200);
     expect((await response.json()).data).toMatchObject({ messages: 0, duplicates: 0 });
     expect(mocks.processMessage).not.toHaveBeenCalled();
     expect(mocks.routeIncoming).not.toHaveBeenCalled();
   });
 
-  it("delegates repeated message IDs to the idempotent channel router", async () => {
+  it("delegates repeated ordinary message IDs to the idempotent channel router", async () => {
     mocks.routeIncoming.mockResolvedValueOnce({ duplicate: true });
     const { POST } = await import("@/app/api/webhooks/whatsapp/route");
-    const raw = JSON.stringify({
-      entry: [{ changes: [{ value: {
-        metadata: { phone_number_id: "1234567890" },
-        messages: [{ id: "wamid.duplicate", from: "967711111111", type: "text", text: { body: "القائمة" } }],
-      } }] }],
-    });
+    const raw = JSON.stringify({ entry: [{ changes: [{ value: {
+      metadata: { phone_number_id: "1234567890" },
+      messages: [{ id: "wamid.duplicate", from: "967711111111", type: "text", text: { body: "اكتب تقريرًا قصيرًا" } }],
+    } }] }] });
     const signature = `sha256=${createHmac("sha256", process.env.META_APP_SECRET!).update(raw).digest("hex")}`;
-    const response = await POST(new Request("https://app.example/api/webhooks/whatsapp", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-hub-signature-256": signature },
-      body: raw,
-    }));
+    const response = await POST(new Request("https://app.example/api/webhooks/whatsapp", { method: "POST", headers: { "content-type": "application/json", "x-hub-signature-256": signature }, body: raw }));
     expect(response.status).toBe(200);
     expect((await response.json()).data).toMatchObject({ messages: 1, channelMessages: 1 });
     await vi.waitFor(() => expect(mocks.routeIncoming).toHaveBeenCalledTimes(1));
