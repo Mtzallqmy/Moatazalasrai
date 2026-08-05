@@ -1,5 +1,5 @@
 import { assertSessionPermission, requireSession, type Permission } from "@/lib/auth/authorization";
-import { contentOperationSchema } from "@/lib/admin/content-contracts";
+import { contentOperationSchema, type ContentOperation } from "@/lib/admin/content-contracts";
 import { executeContentOperation, loadContentManager } from "@/lib/admin/content-service";
 import { apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { enforceRateLimit, requestClientKey } from "@/lib/security/rate-limit";
@@ -7,7 +7,7 @@ import { enforceRateLimit, requestClientKey } from "@/lib/security/rate-limit";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function permissionFor(operation: Awaited<ReturnType<typeof parseJson<typeof contentOperationSchema>>>): Permission {
+function permissionFor(operation: ContentOperation): Permission {
   if (operation.operation === "page.purge") return "trash:manage";
   if (operation.operation === "service.upsert" || operation.operation.startsWith("service.")) return "services:manage";
   if (operation.operation === "menu.upsert" || operation.operation.startsWith("menu_item.")) return "menus:manage";
