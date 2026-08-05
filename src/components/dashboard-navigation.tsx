@@ -37,11 +37,13 @@ import { LogoutButton } from "@/components/logout-button";
 import { can, type Permission, type Role } from "@/lib/auth/permissions";
 
 export type DashboardSession = {
+  userId?: string;
   name: string | null;
   email: string;
   organizationId: string | null;
   organizationName: string | null;
   role: Role | null;
+  permissions?: Permission[];
 };
 
 type NavigationItem = {
@@ -104,8 +106,10 @@ const navigationGroups: NavigationGroup[] = [
   },
 ];
 
-function itemAllowed(item: NavigationItem, role: Role | null) {
-  return !item.permission || can(role, item.permission);
+function itemAllowed(item: NavigationItem, session: DashboardSession) {
+  return !item.permission
+    || can(session.role, item.permission)
+    || Boolean(session.permissions?.includes(item.permission));
 }
 
 function itemActive(item: NavigationItem, pathname: string) {
@@ -152,7 +156,7 @@ function Sidebar({ session, activePath, close }: {
       </div>
       <nav className="sidebar-nav">
         {navigationGroups.map((group) => {
-          const items = group.items.filter((item) => itemAllowed(item, session.role));
+          const items = group.items.filter((item) => itemAllowed(item, session));
           if (!items.length) return null;
           return (
             <div className="sidebar-nav-group" key={group.label}>
@@ -199,8 +203,8 @@ export function DashboardNavigation({ session, activePath }: { session: Dashboar
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const allowedNavigation = useMemo(
-    () => navigationGroups.flatMap((group) => group.items).filter((item) => itemAllowed(item, session.role)),
-    [session.role],
+    () => navigationGroups.flatMap((group) => group.items).filter((item) => itemAllowed(item, session)),
+    [session],
   );
   const normalizedQuery = query.trim().toLocaleLowerCase("ar");
   const searchResults = allowedNavigation.filter((item) => {
