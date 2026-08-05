@@ -1,4 +1,5 @@
 # Temporary one-shot workflow: thread channel tool allowlists through agent runtime safely.
+# Trigger revision: 1.
 name: Channel Runtime Tool Policy Rewrite
 
 on:
