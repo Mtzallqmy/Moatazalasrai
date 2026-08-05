@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { CheckCircle2, Copy, ExternalLink, Link2, Send, ShieldCheck } from "lucide-react";
 
 const featureLabels: Record<string, string> = {
@@ -44,13 +44,38 @@ export function CentralTelegramManager(props: {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
 
-  async function refreshOwn() {
+  const refreshOwn = useCallback(async () => {
     const response = await fetch("/api/telegram/link-status", { cache: "no-store" });
     const payload = await response.json() as Api<LinkStatus>;
     if (!response.ok || !payload.success || !payload.data) throw new Error(payload.error?.message ?? "تعذر تحميل حالة الربط.");
     setStatus(payload.data);
     if (selectedUserId === props.currentUserId) setAdminStatus(payload.data);
-  }
+  }, [props.currentUserId, selectedUserId]);
+
+  useEffect(() => {
+    const synchronize = () => {
+      if (document.visibilityState === "visible") void refreshOwn().catch(() => undefined);
+    };
+    window.addEventListener("pageshow", synchronize);
+    document.addEventListener("visibilitychange", synchronize);
+    return () => {
+      window.removeEventListener("pageshow", synchronize);
+      document.removeEventListener("visibilitychange", synchronize);
+    };
+  }, [refreshOwn]);
+
+  useEffect(() => {
+    if (!code || status.linked) return;
+    const expiresAt = new Date(code.expiresAt).getTime();
+    const timer = window.setInterval(() => {
+      if (Date.now() >= expiresAt) {
+        window.clearInterval(timer);
+        return;
+      }
+      void refreshOwn().catch(() => undefined);
+    }, 4_000);
+    return () => window.clearInterval(timer);
+  }, [code, refreshOwn, status.linked]);
 
   async function createCodeAndOpenBot() {
     setBusy(true);
