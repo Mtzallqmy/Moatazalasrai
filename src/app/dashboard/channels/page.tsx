@@ -6,8 +6,10 @@ import { channelInboxes, channelWorkflows } from "@/db/channel-schema";
 import { agents, mcpTools, organizationMembers, providerCredentials, users } from "@/db/schema";
 import { ChannelManager } from "@/components/channel-manager";
 import { DashboardShell } from "@/components/dashboard-shell";
+import { WhatsAppPolicyManager } from "@/components/whatsapp-policy-manager";
 import { currentSession } from "@/lib/auth/session";
 import { can } from "@/lib/auth/permissions";
+import { getWhatsAppPolicyAdministration } from "@/lib/channels/whatsapp-policy-admin";
 
 export default async function ChannelsPage() {
   const session = await currentSession();
@@ -15,7 +17,7 @@ export default async function ChannelsPage() {
   if (!session.organizationId || !session.organizationName || !session.role) redirect("/select-organization");
   if (!can(session.role, "channels:read")) redirect("/dashboard");
 
-  const [agentRows, providerRows, toolRows, inboxRows, workflowRows, memberRows] = await Promise.all([
+  const [agentRows, providerRows, toolRows, inboxRows, workflowRows, memberRows, whatsappAdministration] = await Promise.all([
     db().select({ id: agents.id, name: agents.name, status: agents.status }).from(agents).where(and(
       eq(agents.organizationId, session.organizationId),
       eq(agents.status, "published"),
@@ -47,27 +49,54 @@ export default async function ChannelsPage() {
       .innerJoin(users, eq(users.id, organizationMembers.userId))
       .where(eq(organizationMembers.organizationId, session.organizationId))
       .orderBy(asc(users.name)),
+    getWhatsAppPolicyAdministration({ organizationId: session.organizationId }),
   ]);
+
+  const members = memberRows.map((member) => ({ ...member, name: member.name ?? member.email }));
+  const canManage = can(session.role, "channels:manage");
+  const initialWhatsAppData = {
+    endpoint: whatsappAdministration.endpoint ? {
+      displayPhoneNumber: whatsappAdministration.endpoint.displayPhoneNumber,
+      phoneNumberId: whatsappAdministration.endpoint.phoneNumberId,
+      businessAccountId: whatsappAdministration.endpoint.businessAccountId,
+      credentialSource: whatsappAdministration.endpoint.credentialSource,
+      status: whatsappAdministration.endpoint.status,
+    } : null,
+    effective: whatsappAdministration.effective,
+  };
 
   return (
     <DashboardShell
       session={session}
       activePath="/dashboard/channels"
       title="القنوات وصناديق المحادثات"
-      description="إدارة Telegram وWhatsApp من مسار موحد مع توجيه الوكلاء والمزودات والأدوات والصلاحيات والتحويل البشري."
+      description="إدارة Telegram وقناة WhatsApp المركزية مع توجيه الوكلاء والمزودات والأدوات والصلاحيات والتحويل البشري."
     >
-      <ChannelManager
-        canManage={can(session.role, "channels:manage")}
-        canHandoff={can(session.role, "channels:handoff")}
-        options={{
-          agents: agentRows,
-          providers: providerRows,
-          tools: toolRows,
-          inboxes: inboxRows,
-          workflows: workflowRows,
-          members: memberRows.map((member) => ({ ...member, name: member.name ?? member.email })),
-        }}
-      />
+      <div className="space-y-6">
+        <WhatsAppPolicyManager
+          canManage={canManage}
+          role={session.role}
+          initialData={initialWhatsAppData}
+          options={{
+            agents: agentRows.map(({ id, name }) => ({ id, name })),
+            providers: providerRows.map(({ id, name, models }) => ({ id, name, models })),
+            tools: toolRows,
+            members: members.map(({ id, name, email }) => ({ id, name, email })),
+          }}
+        />
+        <ChannelManager
+          canManage={canManage}
+          canHandoff={can(session.role, "channels:handoff")}
+          options={{
+            agents: agentRows,
+            providers: providerRows,
+            tools: toolRows,
+            inboxes: inboxRows,
+            workflows: workflowRows,
+            members,
+          }}
+        />
+      </div>
     </DashboardShell>
   );
 }

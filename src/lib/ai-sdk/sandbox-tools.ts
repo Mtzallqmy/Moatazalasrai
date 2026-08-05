@@ -24,10 +24,30 @@ export type SandboxToolContext = {
   role: string;
   conversationId: string;
   agentId: string;
+  runId: string;
   requestId: string;
+  state?: {
+    toolExecuted: boolean;
+    toolResultSaved: boolean;
+    sideEffectOccurred: boolean;
+  };
 };
 
 const workspaceIdSchema = z.string().uuid();
+
+function operationKey(context: SandboxToolContext, toolCallId: string, operation: string) {
+  return `${operation}:${context.runId}:${toolCallId}`;
+}
+
+async function executeTracked<T>(context: SandboxToolContext, sideEffectful: boolean, operation: () => Promise<T>) {
+  if (context.state) {
+    context.state.toolExecuted = true;
+    context.state.sideEffectOccurred ||= sideEffectful;
+  }
+  const result = await operation();
+  if (context.state) context.state.toolResultSaved = true;
+  return result;
+}
 
 export function createSandboxTools(context: SandboxToolContext): ToolSet {
   const actor = { organizationId: context.organizationId, userId: context.userId, role: context.role };
@@ -35,55 +55,71 @@ export function createSandboxTools(context: SandboxToolContext): ToolSet {
     "sandbox.create": tool({
       description: "أنشئ أو أعد مساحة Sandbox معزولة للمحادثة الحالية. لا تُنشئها إلا عند الحاجة إلى ملفات أو تنفيذ كود.",
       inputSchema: z.object({ template: z.string().trim().min(1).max(100).default("moataz-code") }).strict(),
-      execute: async ({ template }) => createSandboxWorkspace({
+      execute: async ({ template }, options) => executeTracked(context, true, () => createSandboxWorkspace({
         actor,
-        requestId: context.requestId,
+        requestId: operationKey(context, options.toolCallId, "sandbox-create"),
         body: { conversationId: context.conversationId, agentId: context.agentId, template, permissions: [] },
-      }),
+      })),
     }),
     "sandbox.exec": tool({
       description: "شغّل أمرًا داخل Sandbox المعزول فقط. قد يتوقف التنفيذ لطلب موافقة بشرية.",
       inputSchema: sandboxExecutionCreateSchema.pick({ workspaceId: true, command: true, workingDirectory: true, timeoutMs: true }),
-      execute: async (input) => createSandboxExecution({
+      execute: async (input, options) => executeTracked(context, true, () => createSandboxExecution({
         actor,
-        requestId: context.requestId,
+        requestId: operationKey(context, options.toolCallId, "sandbox-exec-request"),
         body: {
           ...input,
           conversationId: context.conversationId,
           agentId: context.agentId,
-          idempotencyKey: crypto.randomUUID(),
+          idempotencyKey: operationKey(context, options.toolCallId, "sandbox-exec"),
         },
-      }),
+      })),
     }),
     "sandbox.readFile": tool({
       description: "اقرأ ملفًا داخل مساحة العمل. لا تستخدم مسارات مطلقة أو .. للخروج من المساحة.",
       inputSchema: sandboxFileReadSchema,
-      execute: async (input) => readSandboxFile({ actor, ...input }),
+      execute: async (input) => executeTracked(context, false, () => readSandboxFile({ actor, ...input })),
     }),
     "sandbox.writeFile": tool({
       description: "اكتب ملفًا داخل مساحة العمل. تمر العملية عبر سياسات Sandbox ولا تعرض أسرارًا.",
       inputSchema: sandboxFileWriteSchema,
-      execute: async (input) => writeSandboxFile({ actor, ...input, requestId: context.requestId }),
+      execute: async (input, options) => executeTracked(context, true, () => writeSandboxFile({
+        actor,
+        ...input,
+        requestId: operationKey(context, options.toolCallId, "sandbox-write"),
+      })),
     }),
     "sandbox.listFiles": tool({
       description: "اعرض شجرة ملفات مساحة العمل ضمن عمق محدود.",
       inputSchema: sandboxFileListSchema,
-      execute: async (input) => listSandboxFiles({ actor, ...input }),
+      execute: async (input) => executeTracked(context, false, () => listSandboxFiles({ actor, ...input })),
     }),
     "sandbox.deleteFile": tool({
       description: "احذف ملفًا أو مجلدًا داخل مساحة العمل. الحذف الواسع ممنوع وقد يتطلب موافقة.",
       inputSchema: sandboxFileDeleteSchema,
-      execute: async (input) => deleteSandboxFile({ actor, ...input, requestId: context.requestId }),
+      execute: async (input, options) => executeTracked(context, true, () => deleteSandboxFile({
+        actor,
+        ...input,
+        requestId: operationKey(context, options.toolCallId, "sandbox-delete"),
+      })),
     }),
     "sandbox.stopExecution": tool({
       description: "أوقف عملية Sandbox جارية للمحادثة الحالية.",
       inputSchema: z.object({ executionId: z.string().uuid() }).strict(),
-      execute: async ({ executionId }) => cancelSandboxExecution({ actor, executionId, requestId: context.requestId }),
+      execute: async ({ executionId }, options) => executeTracked(context, true, () => cancelSandboxExecution({
+        actor,
+        executionId,
+        requestId: operationKey(context, options.toolCallId, "sandbox-stop"),
+      })),
     }),
     "sandbox.reset": tool({
       description: "أعد ضبط مساحة Sandbox بعد موافقة المستخدم؛ يحذف ذلك الملفات والحالة الحالية.",
       inputSchema: z.object({ workspaceId: workspaceIdSchema }).strict(),
-      execute: async ({ workspaceId }) => resetSandboxWorkspace({ actor, workspaceId, requestId: context.requestId }),
+      execute: async ({ workspaceId }, options) => executeTracked(context, true, () => resetSandboxWorkspace({
+        actor,
+        workspaceId,
+        requestId: operationKey(context, options.toolCallId, "sandbox-reset"),
+      })),
     }),
   } satisfies ToolSet;
 }
