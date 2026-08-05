@@ -13,6 +13,11 @@ import { auditLogs, organizationMembers, users, whatsappConnections } from "@/db
 import { channelAdapterContext } from "@/lib/channels/connections";
 import { channelAdapter } from "@/lib/channels/registry";
 import { sendWhatsAppTemplate } from "@/lib/integrations/whatsapp/template-client";
+import {
+  NotificationProviderError,
+  sendEmailNotification,
+  sendPushNotification,
+} from "@/lib/notifications/providers";
 import { renderNotificationTemplate } from "@/lib/notifications/render";
 
 export type NotificationRecipient = {
@@ -20,6 +25,7 @@ export type NotificationRecipient = {
   userId?: string;
   email?: string;
   phone?: string;
+  pushToken?: string;
 };
 
 function record(value: unknown): Record<string, unknown> {
@@ -58,20 +64,33 @@ async function recipientsForRule(input: {
       const userId = typeof item.userId === "string" ? item.userId : undefined;
       const email = typeof item.email === "string" ? item.email : undefined;
       const phone = typeof item.phone === "string" ? item.phone : undefined;
-      const key = userId ? `user:${userId}` : phone ? `phone:${phone}` : email ? `email:${email}` : "";
-      return key ? [{ key, userId, email, phone }] : [];
+      const pushToken = typeof item.pushToken === "string" ? item.pushToken : undefined;
+      const key = userId
+        ? `user:${userId}`
+        : phone
+          ? `phone:${phone}`
+          : email
+            ? `email:${email}`
+            : pushToken
+              ? `push:${pushToken}`
+              : "";
+      return key ? [{ key, userId, email, phone, pushToken }] : [];
     });
   }
 
   const userId = typeof input.payload.userId === "string" ? input.payload.userId : undefined;
+  const pushToken = typeof input.payload.pushToken === "string" ? input.payload.pushToken : undefined;
   if (userId) {
     const [user] = await db().select({ id: users.id, email: users.email })
       .from(users).where(eq(users.id, userId)).limit(1);
-    if (user) return [{ key: `user:${user.id}`, userId: user.id, email: user.email }];
+    if (user) return [{ key: `user:${user.id}`, userId: user.id, email: user.email, pushToken }];
   }
 
   const phone = typeof input.payload.whatsappWaId === "string" ? input.payload.whatsappWaId : undefined;
-  return phone ? [{ key: `phone:${phone}`, phone }] : [];
+  if (phone) return [{ key: `phone:${phone}`, phone, pushToken }];
+  if (pushToken) return [{ key: `push:${pushToken}`, pushToken }];
+  const email = typeof input.payload.email === "string" ? input.payload.email : undefined;
+  return email ? [{ key: `email:${email}`, email }] : [];
 }
 
 async function phoneFor(recipient: NotificationRecipient) {
@@ -116,14 +135,16 @@ async function sendWhatsApp(input: {
   audienceConfig: Record<string, unknown>;
 }) {
   const phone = await phoneFor(input.recipient);
-  if (!phone) throw new Error("WHATSAPP_RECIPIENT_NOT_LINKED");
+  if (!phone) throw new NotificationProviderError("WHATSAPP_RECIPIENT_NOT_LINKED", false);
   const requestedConnectionId = typeof input.audienceConfig.connectionId === "string"
     ? input.audienceConfig.connectionId
     : undefined;
   const connection = await whatsappConnection(input.organizationId, requestedConnectionId);
-  if (!connection) throw new Error("WHATSAPP_CHANNEL_UNAVAILABLE");
+  if (!connection) throw new NotificationProviderError("WHATSAPP_CHANNEL_UNAVAILABLE", false);
   const context = await channelAdapterContext(connection);
-  if (context.credentials.kind !== "whatsapp") throw new Error("WHATSAPP_CREDENTIALS_REQUIRED");
+  if (context.credentials.kind !== "whatsapp") {
+    throw new NotificationProviderError("WHATSAPP_CREDENTIALS_REQUIRED", false);
+  }
 
   if (input.templateName) {
     const result = await sendWhatsAppTemplate({
@@ -155,6 +176,16 @@ async function sendWhatsApp(input: {
   return result.externalMessageId;
 }
 
+function retryable(error: unknown) {
+  if (error instanceof NotificationProviderError) return error.retryable;
+  return Boolean(error && typeof error === "object" && "retryable" in error && (error as { retryable?: unknown }).retryable === true);
+}
+
+function errorCode(error: unknown) {
+  if (error instanceof NotificationProviderError) return error.code;
+  return error instanceof Error ? error.message.slice(0, 160) : "NOTIFICATION_DELIVERY_FAILED";
+}
+
 export async function dispatchNotificationsForEvent(input: {
   organizationId: string;
   eventId: string;
@@ -172,6 +203,7 @@ export async function dispatchNotificationsForEvent(input: {
       eq(notificationRules.organizationId, input.organizationId),
       eq(notificationRules.eventKey, event.eventKey),
       eq(notificationRules.enabled, true),
+      isNull(notificationRules.deletedAt),
       eq(notificationTemplates.enabled, true),
       isNull(notificationTemplates.deletedAt),
     ))
@@ -225,7 +257,7 @@ export async function dispatchNotificationsForEvent(input: {
         let providerMessageId: string | null = null;
         const channel = row.rule.channel as NotificationChannel;
         if (channel === "internal") {
-          if (!recipient.userId) throw new Error("INTERNAL_NOTIFICATION_USER_REQUIRED");
+          if (!recipient.userId) throw new NotificationProviderError("INTERNAL_NOTIFICATION_USER_REQUIRED", false);
           const [created] = await db().insert(internalNotifications).values({
             organizationId: input.organizationId,
             userId: recipient.userId,
@@ -246,8 +278,17 @@ export async function dispatchNotificationsForEvent(input: {
             locale: row.template.locale,
             audienceConfig: row.rule.audienceConfig,
           });
-        } else {
-          throw new Error(`${channel.toUpperCase()}_PROVIDER_NOT_CONFIGURED`);
+        } else if (channel === "email") {
+          if (!recipient.email) throw new NotificationProviderError("EMAIL_RECIPIENT_REQUIRED", false);
+          providerMessageId = (await sendEmailNotification({ to: recipient.email, subject, body })).messageId;
+        } else if (channel === "push") {
+          if (!recipient.pushToken) throw new NotificationProviderError("PUSH_TOKEN_REQUIRED", false);
+          providerMessageId = (await sendPushNotification({
+            token: recipient.pushToken,
+            title: subject,
+            body,
+            data: { eventId: event.id, eventKey: event.eventKey, resourceType: event.resourceType, resourceId: event.resourceId },
+          })).messageId;
         }
 
         await db().update(notificationDeliveries).set({
@@ -257,15 +298,12 @@ export async function dispatchNotificationsForEvent(input: {
           updatedAt: new Date(),
         }).where(eq(notificationDeliveries.id, delivery.id));
       } catch (error) {
-        const errorCode = error instanceof Error
-          ? error.message.slice(0, 160)
-          : "NOTIFICATION_DELIVERY_FAILED";
         await db().update(notificationDeliveries).set({
           status: "failed",
-          lastErrorCode: errorCode,
+          lastErrorCode: errorCode(error),
           updatedAt: new Date(),
         }).where(eq(notificationDeliveries.id, delivery.id));
-        if (row.rule.channel === "whatsapp" && delivery.attempts + 1 < delivery.maxAttempts) throw error;
+        if (retryable(error) && delivery.attempts + 1 < delivery.maxAttempts) throw error;
       }
     }
   }
