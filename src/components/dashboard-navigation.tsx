@@ -21,10 +21,12 @@ import {
   Moon,
   Network,
   PlayCircle,
+  Radio,
   Search,
   Settings,
   ShieldAlert,
   ShieldCheck,
+  SlidersHorizontal,
   Sun,
   Users,
   Workflow,
@@ -66,27 +68,34 @@ const navigationGroups: NavigationGroup[] = [
     ],
   },
   {
-    label: "المحتوى والمعرفة",
+    label: "القنوات والتواصل",
     items: [
-      { label: "الملفات", href: "/dashboard/files", icon: FileText, permission: "files:read", mobile: true },
-      { label: "قواعد المعرفة", href: "/dashboard/knowledge", icon: FileSearch, permission: "files:read", keywords: ["RAG", "documents"] },
+      { label: "القنوات وصناديق المحادثات", href: "/dashboard/channels", icon: Radio, permission: "channels:read", mobile: true, keywords: ["WhatsApp", "Telegram", "Webhook"] },
+      { label: "التكاملات", href: "/dashboard/integrations", icon: Boxes, permission: "integrations:read" },
       { label: "المستودعات", href: "/dashboard/repositories", icon: FolderGit2, permission: "integrations:read", keywords: ["GitHub", "code"] },
     ],
   },
   {
-    label: "التشغيل والتكامل",
+    label: "المحتوى والمعرفة",
+    items: [
+      { label: "الملفات", href: "/dashboard/files", icon: FileText, permission: "files:read", mobile: true },
+      { label: "قواعد المعرفة", href: "/dashboard/knowledge", icon: FileSearch, permission: "files:read", keywords: ["RAG", "documents"] },
+    ],
+  },
+  {
+    label: "التشغيل والبنية التحتية",
     items: [
       { label: "موافقات الأدوات", href: "/dashboard/approvals", icon: ShieldAlert, permission: "runs:read" },
       { label: "المزودون والنماذج", href: "/dashboard/providers", icon: Database, permission: "providers:read", keywords: ["models", "AI"] },
       { label: "بوابة MCP", href: "/dashboard/mcp", icon: Braces, permission: "providers:manage" },
-      { label: "التكاملات", href: "/dashboard/integrations", icon: Boxes, permission: "integrations:read" },
       { label: "مهام المتصفح", href: "/dashboard/browser-tasks", icon: Archive, permission: "browser_tasks:read" },
       { label: "بيئة التنفيذ", href: "/dashboard/sandbox", icon: Network, permission: "sandbox:read" },
     ],
   },
   {
-    label: "الإدارة",
+    label: "الإدارة والحوكمة",
     items: [
+      { label: "مركز تحكم المنصة", href: "/dashboard/control-plane", icon: SlidersHorizontal, permission: "platform:read", keywords: ["modules", "features", "notifications", "trash"] },
       { label: "الأعضاء والصلاحيات", href: "/dashboard/members", icon: Users, permission: "members:read" },
       { label: "سجل التدقيق", href: "/dashboard/audit", icon: ShieldCheck, permission: "audit:read" },
       { label: "صحة المنصة", href: "/dashboard/diagnostics", icon: Activity, permission: "audit:read" },
@@ -203,6 +212,7 @@ export function DashboardNavigation({ session, activePath }: { session: Dashboar
 
   useEffect(() => {
     if (!open) return;
+    const menuButton = menuButtonRef.current;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") setOpen(false);
       if (event.key === "Tab" && closeButtonRef.current && !document.querySelector(".drawer-panel:focus-within")) {
@@ -216,7 +226,7 @@ export function DashboardNavigation({ session, activePath }: { session: Dashboar
     return () => {
       document.body.style.overflow = "";
       window.removeEventListener("keydown", onKey);
-      menuButtonRef.current?.focus();
+      menuButton?.focus();
     };
   }, [open]);
 
