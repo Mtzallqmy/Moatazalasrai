@@ -29,7 +29,13 @@ type LinkStatus = {
 };
 type Member = { id: string; name: string; email: string };
 type Api<T> = { success?: boolean; data?: T; error?: { message?: string } };
-type LinkCode = { value: string; deepLink: string; expiresAt: string };
+type LinkCode = {
+  value: string;
+  deepLink: string;
+  appDeepLink: string;
+  botUsername: string;
+  expiresAt: string;
+};
 
 export function CentralTelegramManager(props: {
   initialStatus: LinkStatus;
@@ -49,6 +55,10 @@ export function CentralTelegramManager(props: {
     const payload = await response.json() as Api<LinkStatus>;
     if (!response.ok || !payload.success || !payload.data) throw new Error(payload.error?.message ?? "تعذر تحميل حالة الربط.");
     setStatus(payload.data);
+    if (payload.data.linked) {
+      setCode(null);
+      setMessage("تم ربط حساب Telegram بنجاح.");
+    }
     if (selectedUserId === props.currentUserId) setAdminStatus(payload.data);
   }, [props.currentUserId, selectedUserId]);
 
@@ -57,9 +67,11 @@ export function CentralTelegramManager(props: {
       if (document.visibilityState === "visible") void refreshOwn().catch(() => undefined);
     };
     window.addEventListener("pageshow", synchronize);
+    window.addEventListener("focus", synchronize);
     document.addEventListener("visibilitychange", synchronize);
     return () => {
       window.removeEventListener("pageshow", synchronize);
+      window.removeEventListener("focus", synchronize);
       document.removeEventListener("visibilitychange", synchronize);
     };
   }, [refreshOwn]);
@@ -73,22 +85,42 @@ export function CentralTelegramManager(props: {
         return;
       }
       void refreshOwn().catch(() => undefined);
-    }, 4_000);
+    }, 3_000);
     return () => window.clearInterval(timer);
   }, [code, refreshOwn, status.linked]);
+
+  function openBot(nextCode: LinkCode) {
+    const fallbackTimer = window.setTimeout(() => {
+      if (document.visibilityState === "visible") window.location.href = nextCode.appDeepLink;
+    }, 1_400);
+    window.addEventListener("pagehide", () => window.clearTimeout(fallbackTimer), { once: true });
+    window.location.href = nextCode.deepLink;
+  }
 
   async function createCodeAndOpenBot() {
     setBusy(true);
     setMessage("");
     try {
       const response = await fetch("/api/telegram/link-code", { method: "POST" });
-      const payload = await response.json() as Api<{ code: string; deepLink: string; expiresAt: string }>;
+      const payload = await response.json() as Api<{
+        code: string;
+        deepLink: string;
+        appDeepLink: string;
+        botUsername: string;
+        expiresAt: string;
+      }>;
       if (!response.ok || !payload.success || !payload.data) throw new Error(payload.error?.message ?? "تعذر إنشاء رمز الربط.");
-      const nextCode = { value: payload.data.code, deepLink: payload.data.deepLink, expiresAt: payload.data.expiresAt };
+      const nextCode: LinkCode = {
+        value: payload.data.code,
+        deepLink: payload.data.deepLink,
+        appDeepLink: payload.data.appDeepLink,
+        botUsername: payload.data.botUsername,
+        expiresAt: payload.data.expiresAt,
+      };
       setCode(nextCode);
-      setMessage("تم إنشاء الرمز. يجري فتح بوت Telegram لإكمال الربط.");
+      setMessage("تم إنشاء الرمز. إذا لم يفتح التطبيق، استخدم زر فتح Telegram أو انسخ الرمز.");
       setBusy(false);
-      window.location.assign(nextCode.deepLink);
+      openBot(nextCode);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "تعذر إنشاء رمز الربط.");
       setBusy(false);
@@ -99,7 +131,7 @@ export function CentralTelegramManager(props: {
     if (!code) return;
     try {
       await navigator.clipboard.writeText(code.value);
-      setMessage("تم نسخ رمز الربط.");
+      setMessage("تم نسخ رمز الربط. أرسله إلى البوت إذا لم يعمل الرابط التلقائي.");
     } catch {
       setMessage(`انسخ رمز الربط يدويًا: ${code.value}`);
     }
@@ -186,15 +218,16 @@ export function CentralTelegramManager(props: {
           <p className="telegram-account-panel__label">حالة الحساب</p>
           <p className="telegram-account-panel__value">{status.linked ? `مرتبط — ${displayName}` : "غير مرتبط"}</p>
           {status.linked && status.link ? (
-            <p className="telegram-code-panel__expiry">
-              آخر نشاط: {new Date(status.link.lastSeenAt).toLocaleString("ar-SA")}
-            </p>
+            <div className="telegram-code-panel__expiry">
+              <p>تاريخ الربط: {new Date(status.link.linkedAt).toLocaleString("ar-SA")}</p>
+              <p>آخر نشاط: {new Date(status.link.lastSeenAt).toLocaleString("ar-SA")}</p>
+            </div>
           ) : null}
         </div>
         {status.linked ? <CheckCircle2 size={24} color="var(--success)" aria-label="الحساب مرتبط" /> : <Link2 size={24} color="var(--text-secondary)" aria-label="الحساب غير مرتبط" />}
       </div>
 
-      {code ? (
+      {code && !status.linked ? (
         <div className="telegram-code-panel">
           <div className="telegram-code-panel__row">
             <div>
@@ -210,12 +243,19 @@ export function CentralTelegramManager(props: {
       ) : null}
 
       <div className="telegram-actions">
-        <button className="primary-button" disabled={busy || !status.botUsername} onClick={() => void createCodeAndOpenBot()}>
-          <Send size={17} /> {busy ? "جارٍ التجهيز…" : "إنشاء رمز وفتح البوت"}
-        </button>
+        {!status.linked ? (
+          <button className="primary-button" disabled={busy || !status.botUsername} onClick={() => void createCodeAndOpenBot()}>
+            <Send size={17} /> {busy ? "جارٍ التجهيز…" : "إنشاء رمز وفتح البوت"}
+          </button>
+        ) : null}
         {botLink ? (
           <a className="secondary-button" href={botLink}>
             <ExternalLink size={17} /> فتح البوت مباشرة
+          </a>
+        ) : null}
+        {code && !status.linked ? (
+          <a className="secondary-button" href={code.appDeepLink}>
+            <Send size={17} /> فتح تطبيق Telegram
           </a>
         ) : null}
         {status.linked ? <button className="danger-button" disabled={busy} onClick={() => void unlink()}>فصل الحساب</button> : null}
