@@ -3,8 +3,11 @@ import { Activity, Bot, Braces, FileText, MessageSquare, PlayCircle, Plus, Workf
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { DashboardShell } from "@/components/dashboard-shell";
+import { OwnerOperationsOverview } from "@/components/owner-operations-overview";
 import { db } from "@/db";
 import { agentTeams, agents, conversations, mcpServers, providerCredentials, runs } from "@/db/schema";
+import { loadCustomPermissions } from "@/lib/auth/custom-permissions";
+import { can } from "@/lib/auth/permissions";
 import { currentSession } from "@/lib/auth/session";
 import { conversationAccessFilter } from "@/lib/chat/access";
 
@@ -24,6 +27,10 @@ export default async function DashboardPage() {
   if (!session.organizationId || !session.role) redirect("/select-organization");
   const organizationId = session.organizationId;
   const isMember = session.role === "member";
+  const customPermissions = can(session.role, "analytics:read")
+    ? []
+    : await loadCustomPermissions(organizationId, session.userId);
+  const canViewAnalytics = can(session.role, "analytics:read") || customPermissions.includes("analytics:read");
 
   const [agentCount, providerCount, runCount, teamCount, mcpCount, recentRuns] = await Promise.all([
     db().select({ value: count() }).from(agents).where(and(eq(agents.organizationId, organizationId), eq(agents.status, "published"))),
@@ -158,6 +165,10 @@ export default async function DashboardPage() {
                   <Braces size={19} aria-hidden="true" />
                   <span><b>ربط MCP</b><span>اكتشاف وتشغيل أدوات بعيدة</span></span>
                 </Link>
+                {canViewAnalytics ? <Link className="quick-action" href="/dashboard/content">
+                  <FileText size={19} aria-hidden="true" />
+                  <span><b>إدارة المحتوى</b><span>صفحات وخدمات وقوائم قابلة للنشر</span></span>
+                </Link> : null}
               </>
             ) : (
               <Link className="quick-action" href="/dashboard/files">
@@ -168,6 +179,8 @@ export default async function DashboardPage() {
           </div>
         </aside>
       </div>
+
+      {canViewAnalytics ? <OwnerOperationsOverview organizationId={organizationId} /> : null}
     </DashboardShell>
   );
 }
