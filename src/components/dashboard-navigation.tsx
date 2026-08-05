@@ -80,6 +80,7 @@ const navigationGroups: NavigationGroup[] = [
   {
     label: "المحتوى والمعرفة",
     items: [
+      { label: "إدارة المحتوى", href: "/dashboard/content", icon: FileText, permission: "content:read", keywords: ["CMS", "pages", "services", "menus"] },
       { label: "الملفات", href: "/dashboard/files", icon: FileText, permission: "files:read", mobile: true },
       { label: "قواعد المعرفة", href: "/dashboard/knowledge", icon: FileSearch, permission: "files:read", keywords: ["RAG", "documents"] },
     ],

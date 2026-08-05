@@ -1,6 +1,8 @@
 import { asc, eq } from "drizzle-orm";
+import { z } from "zod";
 import { db } from "@/db";
 import { auditLogs, organizationMembers, users } from "@/db/schema";
+import { verifyMfaForLogin } from "@/lib/auth/mfa";
 import { verifyPassword } from "@/lib/auth/password";
 import { createSession } from "@/lib/auth/session";
 import { publishDomainEventBestEffort } from "@/lib/events/publish";
@@ -12,11 +14,15 @@ import { verifyTurnstile } from "@/lib/security/turnstile";
 
 export const runtime = "nodejs";
 
+const loginWithMfaSchema = loginSchema.extend({
+  mfaCode: z.string().trim().min(6).max(32).optional(),
+});
+
 export async function POST(request: Request) {
   const requestId = getRequestId(request);
   try {
     assertSameOrigin(request);
-    const body = await parseJson(request, loginSchema, 8 * 1024);
+    const body = await parseJson(request, loginWithMfaSchema, 8 * 1024);
     const clientKey = requestClientKey(request);
     await enforceRateLimit({ scope: "auth.login.ip", key: clientKey, limit: 10, windowMs: 15 * 60_000 });
     await enforceRateLimit({ scope: "auth.login.email", key: body.email, limit: 8, windowMs: 15 * 60_000 });
@@ -26,6 +32,7 @@ export async function POST(request: Request) {
     if (!user?.passwordHash || !(await verifyPassword(body.password, user.passwordHash))) {
       throw new ApiError(401, "INVALID_CREDENTIALS", "بيانات الدخول غير صحيحة.");
     }
+    const mfaVerified = await verifyMfaForLogin({ userId: user.id, code: body.mfaCode });
 
     const memberships = await db()
       .select({ organizationId: organizationMembers.organizationId })
@@ -47,7 +54,7 @@ export async function POST(request: Request) {
       actorId: user.id,
       action: "auth.login",
       resourceType: "session",
-      metadata: { requestId },
+      metadata: { requestId, mfaVerified },
     });
     if (activeOrganizationId) {
       await publishDomainEventBestEffort({

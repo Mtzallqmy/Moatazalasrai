@@ -3,6 +3,7 @@ import { run, type Runner } from "graphile-worker";
 import { db } from "@/db";
 import { closePostgresPool, getPostgresPool } from "@/db/pool";
 import { workerHeartbeats } from "@/db/agent-runtime-schema";
+import { recoverPendingDomainEvents } from "@/lib/events/recover";
 import { hydrateRuntimeControlPlane } from "@/lib/platform/runtime-control";
 import { initializeWhatsAppFromEnvironment } from "@/lib/platform/whatsapp-environment";
 import { startNodeTelemetry } from "@/ai/observability/node-otel";
@@ -20,6 +21,7 @@ let runner: Runner | undefined;
 let stopping = false;
 let heartbeatTimer: NodeJS.Timeout | undefined;
 let runtimeControlTimer: NodeJS.Timeout | undefined;
+let outboxRecoveryTimer: NodeJS.Timeout | undefined;
 let telemetryShutdown: (() => Promise<void>) | undefined;
 
 async function heartbeat(stoppingAt?: Date) {
@@ -55,11 +57,19 @@ async function refreshRuntimeControl() {
   });
 }
 
+async function recoverOutbox() {
+  const result = await recoverPendingDomainEvents();
+  if (result.scanned || result.failed) {
+    console.info(JSON.stringify(safeTelemetry({ event: "worker.notification_outbox.recovered", workerId, ...result })));
+  }
+}
+
 async function shutdown(signal: string) {
   if (stopping) return;
   stopping = true;
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   if (runtimeControlTimer) clearInterval(runtimeControlTimer);
+  if (outboxRecoveryTimer) clearInterval(outboxRecoveryTimer);
   console.info(JSON.stringify(safeTelemetry({ event: "worker.stopping", workerId, signal })));
   await heartbeat(new Date()).catch(() => undefined);
   await runner?.stop();
@@ -76,6 +86,9 @@ async function main() {
   await refreshRuntimeControl();
   telemetryShutdown = await startNodeTelemetry("moataz-worker");
   await heartbeat();
+  await recoverOutbox().catch((error) => {
+    console.error(JSON.stringify(safeTelemetry({ event: "worker.notification_outbox.recovery_failed", workerId, errorCode: error instanceof Error ? error.name : "UNKNOWN" })));
+  });
   heartbeatTimer = setInterval(() => {
     void heartbeat().catch((error) => {
       console.error(JSON.stringify(safeTelemetry({
@@ -88,6 +101,12 @@ async function main() {
   heartbeatTimer.unref();
   runtimeControlTimer = setInterval(() => { void refreshRuntimeControl(); }, 5_000);
   runtimeControlTimer.unref();
+  outboxRecoveryTimer = setInterval(() => {
+    void recoverOutbox().catch((error) => {
+      console.error(JSON.stringify(safeTelemetry({ event: "worker.notification_outbox.recovery_failed", workerId, errorCode: error instanceof Error ? error.name : "UNKNOWN" })));
+    });
+  }, 60_000);
+  outboxRecoveryTimer.unref();
 
   process.once("SIGTERM", () => { void shutdown("SIGTERM"); });
   process.once("SIGINT", () => { void shutdown("SIGINT"); });

@@ -1,4 +1,6 @@
 import { DashboardShell } from "@/components/dashboard-shell";
+import { NotificationTemplateWorkbench } from "@/components/notification-template-workbench";
+import { PlatformAdvancedControls } from "@/components/platform-advanced-controls";
 import { PlatformControlCenter } from "@/components/platform-control-center";
 import { requireSession } from "@/lib/auth/authorization";
 import { loadCustomPermissions } from "@/lib/auth/custom-permissions";
@@ -19,6 +21,8 @@ export default async function ControlPlanePage() {
       description="إدارة الوحدات والميزات والأدوار المخصصة والإعدادات والإشعارات وسلة المحذوفات من مكان واحد."
     >
       <PlatformControlCenter canManage={canManage} />
+      <PlatformAdvancedControls canManage={canManage} />
+      <NotificationTemplateWorkbench canManage={canManage} />
     </DashboardShell>
   );
 }
