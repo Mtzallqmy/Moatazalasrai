@@ -1,7 +1,7 @@
 // Carries tenant or explicit system database scope through one asynchronous request or worker task.
 import { AsyncLocalStorage } from "node:async_hooks";
 
-type DatabaseContext =
+export type DatabaseContext =
   | { mode: "tenant"; organizationId: string; userId?: string }
   | { mode: "user"; userId: string; organizationId?: string }
   | { mode: "system"; reason: string };
@@ -18,19 +18,17 @@ export function currentDatabaseContext() {
 }
 
 export function enterUserDatabaseContext(userId: string, organizationId?: string | null) {
-  storage.enterWith({
-    mode: organizationId ? "tenant" : "user",
-    userId,
-    ...(organizationId ? { organizationId } : {}),
-  });
+  if (organizationId) {
+    storage.enterWith({ mode: "tenant", userId, organizationId });
+    return;
+  }
+  storage.enterWith({ mode: "user", userId });
 }
 
 export function enterTenantDatabaseContext(organizationId: string, userId?: string | null) {
-  storage.enterWith({
-    mode: "tenant",
-    organizationId,
-    ...(userId ? { userId } : {}),
-  });
+  storage.enterWith(userId
+    ? { mode: "tenant", organizationId, userId }
+    : { mode: "tenant", organizationId });
 }
 
 export function runWithTenantDatabaseContext<T>(
@@ -38,11 +36,9 @@ export function runWithTenantDatabaseContext<T>(
   userId: string | null | undefined,
   action: () => T,
 ) {
-  return storage.run({
-    mode: "tenant",
-    organizationId,
-    ...(userId ? { userId } : {}),
-  }, action);
+  return storage.run(userId
+    ? { mode: "tenant", organizationId, userId }
+    : { mode: "tenant", organizationId }, action);
 }
 
 export function runWithUserDatabaseContext<T>(userId: string, action: () => T) {
