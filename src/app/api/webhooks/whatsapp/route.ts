@@ -1,11 +1,18 @@
-// WhatsApp webhook verifies Meta signatures, preserves account-link commands, and delegates channel traffic.
+// WhatsApp webhook verifies Meta signatures, preserves account-link commands, and delegates central channel traffic.
 import { after } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { whatsappWebhookEvents } from "@/db/schema";
-import { channelConnectionForWebhook } from "@/lib/channels/connections";
-import { whatsappChannelAdapter } from "@/lib/channels/whatsapp-adapter";
 import { routeIncomingChannelMessage } from "@/lib/channels/router";
+import {
+  channelPolicyForWhatsApp,
+  connectionForWhatsAppPolicy,
+  ensureOrganizationWhatsAppProjection,
+  resolveEffectiveWhatsAppPolicy,
+  resolveWhatsAppSender,
+  withWhatsAppChannelPolicy,
+} from "@/lib/channels/whatsapp-platform";
+import { whatsappChannelAdapter } from "@/lib/channels/whatsapp-adapter";
 import { isFeatureEnabled } from "@/lib/control-plane/features";
 import { apiFailure, apiSuccess, getRequestId, handleApiError } from "@/lib/http/api";
 import { requireWhatsAppConfig } from "@/lib/integrations/whatsapp/config";
@@ -104,11 +111,13 @@ export async function POST(request: Request) {
 
     const legacyTasks: Array<{ eventId: string; message: WhatsAppIncomingMessage }> = [];
     const channelTasks: Array<{
-      connection: NonNullable<Awaited<ReturnType<typeof channelConnectionForWebhook>>>;
+      connection: Awaited<ReturnType<typeof ensureOrganizationWhatsAppProjection>>;
       incoming: (typeof normalized)[number];
+      routingPolicy: ReturnType<typeof channelPolicyForWhatsApp>;
     }> = [];
     let duplicates = 0;
-    let unconfigured = 0;
+    let unresolvedSenders = 0;
+    let disabledPolicies = 0;
     let featureDisabled = 0;
 
     for (const item of extracted) {
@@ -134,14 +143,21 @@ export async function POST(request: Request) {
     const legacyIds = new Set(legacyTasks.map((task) => task.message.id));
     for (const incoming of normalized) {
       if (legacyIds.has(incoming.eventId)) continue;
-      const connection = await channelConnectionForWebhook({
-        kind: "whatsapp",
-        externalAccountId: incoming.externalAccountId || config.phoneNumberId,
-      });
-      if (!connection) {
-        unconfigured += 1;
+      const sender = await resolveWhatsAppSender(incoming.senderExternalId);
+      if (!sender) {
+        unresolvedSenders += 1;
         continue;
       }
+      const policy = await resolveEffectiveWhatsAppPolicy({
+        organizationId: sender.organizationId,
+        userId: sender.userId,
+      });
+      if (policy.status === "disabled" || !policy.autoReplyEnabled) {
+        disabledPolicies += 1;
+        continue;
+      }
+      const baseConnection = await ensureOrganizationWhatsAppProjection(sender.organizationId);
+      const connection = connectionForWhatsAppPolicy(baseConnection, policy);
       const enabled = await isFeatureEnabled(
         connection.organizationId,
         "whatsapp_integration",
@@ -151,14 +167,25 @@ export async function POST(request: Request) {
         featureDisabled += 1;
         continue;
       }
-      channelTasks.push({ connection, incoming });
+      channelTasks.push({
+        connection,
+        incoming,
+        routingPolicy: channelPolicyForWhatsApp(connection.id, policy),
+      });
     }
 
     if (legacyTasks.length > 0 || channelTasks.length > 0) {
       after(async () => {
         await Promise.allSettled([
           ...legacyTasks.map((task) => processLegacyEvent(task.eventId, task.message)),
-          ...channelTasks.map((task) => routeIncomingChannelMessage(task)),
+          ...channelTasks.map((task) => withWhatsAppChannelPolicy({
+            organizationId: task.connection.organizationId,
+            connectionId: task.connection.id,
+            routingPolicy: task.routingPolicy,
+          }, () => routeIncomingChannelMessage({
+            connection: task.connection,
+            incoming: task.incoming,
+          }))),
         ]);
       });
     }
@@ -168,7 +195,8 @@ export async function POST(request: Request) {
       legacyCommands: legacyTasks.length,
       channelMessages: channelTasks.length,
       duplicates,
-      unconfigured,
+      unresolvedSenders,
+      disabledPolicies,
       featureDisabled,
     }, requestId);
   } catch (error) {
