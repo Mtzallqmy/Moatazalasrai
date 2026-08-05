@@ -10,6 +10,12 @@ FROM base AS dependencies
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
+# Production-only dependencies are copied because migration and worker scripts run outside Next standalone tracing.
+FROM base AS production-dependencies
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund \
+  && npm cache clean --force
+
 FROM base AS development
 ENV NODE_ENV=development
 COPY --from=dependencies /app/node_modules ./node_modules
@@ -38,9 +44,13 @@ RUN addgroup --system --gid 1001 nodejs \
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=production-dependencies --chown=nextjs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
 COPY --from=builder --chown=nextjs:nodejs /app/drizzle ./drizzle
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/migrate.mjs /app/scripts/migrate-worker.mjs /app/scripts/sql-utils.mjs /app/scripts/start-production.mjs /app/scripts/validate-runtime-env.mjs ./scripts/
+
+# Fail the image build if Railway pre-deploy migrations cannot resolve their production drivers.
+RUN node --input-type=module -e "await import('graphile-worker'); await import('pg')"
 
 USER nextjs
 EXPOSE 3000
