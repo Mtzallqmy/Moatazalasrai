@@ -70,70 +70,70 @@ whatsapp_connections | organization_id
 | table | RLS enabled | RLS forced |
 |---|---:|---:|
 | _platform_migrations | false | false |
-| agent_mcp_tools | false | false |
-| agent_memories | false | false |
-| agent_run_checkpoints | false | false |
-| agent_run_steps | false | false |
-| agent_site_connections | false | false |
-| agent_team_members | false | false |
-| agent_team_run_steps | false | false |
-| agent_team_runs | false | false |
-| agent_teams | false | false |
-| agent_versions | false | false |
-| agents | false | false |
-| attachments | false | false |
-| audit_logs | false | false |
-| background_jobs | false | false |
-| browser_login_sessions | false | false |
-| browser_task_steps | false | false |
-| browser_tasks | false | false |
-| conversation_drafts | false | false |
-| conversation_folders | false | false |
-| conversation_members | false | false |
-| conversation_sandbox_workspaces | false | false |
-| conversations | false | false |
-| integrations | false | false |
-| knowledge_bases | false | false |
-| knowledge_chunks | false | false |
-| knowledge_documents | false | false |
-| mcp_content_reads | false | false |
-| mcp_prompts | false | false |
-| mcp_resource_templates | false | false |
-| mcp_resources | false | false |
-| mcp_servers | false | false |
-| mcp_tool_calls | false | false |
-| mcp_tools | false | false |
-| messages | false | false |
-| mobile_sessions | false | false |
-| model_catalog | false | false |
-| organization_members | false | false |
-| organizations | false | false |
-| platform_api_keys | false | false |
+| agent_mcp_tools | true | true |
+| agent_memories | true | true |
+| agent_run_checkpoints | true | true |
+| agent_run_steps | true | true |
+| agent_site_connections | true | true |
+| agent_team_members | true | true |
+| agent_team_run_steps | true | true |
+| agent_team_runs | true | true |
+| agent_teams | true | true |
+| agent_versions | true | true |
+| agents | true | true |
+| attachments | true | true |
+| audit_logs | true | true |
+| background_jobs | true | true |
+| browser_login_sessions | true | true |
+| browser_task_steps | true | true |
+| browser_tasks | true | true |
+| conversation_drafts | true | true |
+| conversation_folders | true | true |
+| conversation_members | true | true |
+| conversation_sandbox_workspaces | true | true |
+| conversations | true | true |
+| integrations | true | true |
+| knowledge_bases | true | true |
+| knowledge_chunks | true | true |
+| knowledge_documents | true | true |
+| mcp_content_reads | true | true |
+| mcp_prompts | true | true |
+| mcp_resource_templates | true | true |
+| mcp_resources | true | true |
+| mcp_servers | true | true |
+| mcp_tool_calls | true | true |
+| mcp_tools | true | true |
+| messages | true | true |
+| mobile_sessions | true | true |
+| model_catalog | true | true |
+| organization_members | true | true |
+| organizations | true | true |
+| platform_api_keys | true | true |
 | platform_runtime_settings | false | false |
-| provider_credential_health_events | false | false |
-| provider_credentials | false | false |
-| provider_validation_sessions | false | false |
+| provider_credential_health_events | true | true |
+| provider_credentials | true | true |
+| provider_validation_sessions | true | true |
 | rate_limits | false | false |
-| run_events | false | false |
-| runs | false | false |
-| sandbox_artifacts | false | false |
-| sandbox_events | false | false |
-| sandbox_executions | false | false |
-| sandbox_files | false | false |
-| sandbox_permissions | false | false |
-| sandbox_workspaces | false | false |
-| sessions | false | false |
-| site_connection_permissions | false | false |
-| site_connections | false | false |
-| site_oauth_states | false | false |
-| telegram_chats | false | false |
-| telegram_updates | false | false |
-| tool_approvals | false | false |
+| run_events | true | true |
+| runs | true | true |
+| sandbox_artifacts | true | true |
+| sandbox_events | true | true |
+| sandbox_executions | true | true |
+| sandbox_files | true | true |
+| sandbox_permissions | true | true |
+| sandbox_workspaces | true | true |
+| sessions | true | true |
+| site_connection_permissions | true | true |
+| site_connections | true | true |
+| site_oauth_states | true | true |
+| telegram_chats | true | true |
+| telegram_updates | true | true |
+| tool_approvals | true | true |
 | turnstile_verifications | false | false |
-| user_preferences | false | false |
+| user_preferences | true | true |
 | users | false | false |
-| whatsapp_connections | false | false |
-| whatsapp_link_tokens | false | false |
+| whatsapp_connections | true | true |
+| whatsapp_link_tokens | true | true |
 | whatsapp_webhook_events | false | false |
 | worker_heartbeats | false | false |
 
@@ -226,6 +226,7 @@ agent_memories | agent_memories_scope_idx | CREATE INDEX agent_memories_scope_id
 agent_run_checkpoints | agent_run_checkpoints_expiry_idx | CREATE INDEX agent_run_checkpoints_expiry_idx ON public.agent_run_checkpoints USING btree (expires_at)
 agent_run_checkpoints | agent_run_checkpoints_pkey | CREATE UNIQUE INDEX agent_run_checkpoints_pkey ON public.agent_run_checkpoints USING btree (id)
 agent_run_checkpoints | agent_run_checkpoints_run_version_unique_idx | CREATE UNIQUE INDEX agent_run_checkpoints_run_version_unique_idx ON public.agent_run_checkpoints USING btree (run_id, version)
+agent_run_checkpoints | rls_org_scope_agent_run_checkpoints_idx | CREATE INDEX rls_org_scope_agent_run_checkpoints_idx ON public.agent_run_checkpoints USING btree (organization_id)
 agent_run_steps | agent_run_steps_org_run_idx | CREATE INDEX agent_run_steps_org_run_idx ON public.agent_run_steps USING btree (organization_id, run_id, created_at)
 agent_run_steps | agent_run_steps_pkey | CREATE UNIQUE INDEX agent_run_steps_pkey ON public.agent_run_steps USING btree (id)
 agent_run_steps | agent_run_steps_run_number_unique_idx | CREATE UNIQUE INDEX agent_run_steps_run_number_unique_idx ON public.agent_run_steps USING btree (run_id, step_number)
@@ -358,6 +359,7 @@ mobile_sessions | mobile_sessions_pkey | CREATE UNIQUE INDEX mobile_sessions_pke
 mobile_sessions | mobile_sessions_refresh_expiry_idx | CREATE INDEX mobile_sessions_refresh_expiry_idx ON public.mobile_sessions USING btree (refresh_expires_at)
 mobile_sessions | mobile_sessions_refresh_token_hash_key | CREATE UNIQUE INDEX mobile_sessions_refresh_token_hash_key ON public.mobile_sessions USING btree (refresh_token_hash)
 mobile_sessions | mobile_sessions_user_device_idx | CREATE UNIQUE INDEX mobile_sessions_user_device_idx ON public.mobile_sessions USING btree (user_id, device_id)
+mobile_sessions | rls_org_scope_mobile_sessions_idx | CREATE INDEX rls_org_scope_mobile_sessions_idx ON public.mobile_sessions USING btree (organization_id)
 model_catalog | model_catalog_org_available_idx | CREATE INDEX model_catalog_org_available_idx ON public.model_catalog USING btree (organization_id, available, free_tier_eligible)
 model_catalog | model_catalog_pkey | CREATE UNIQUE INDEX model_catalog_pkey ON public.model_catalog USING btree (id)
 model_catalog | model_catalog_provider_model_unique_idx | CREATE UNIQUE INDEX model_catalog_provider_model_unique_idx ON public.model_catalog USING btree (provider_credential_id, model)
@@ -462,6 +464,7 @@ turnstile_verifications | turnstile_verifications_pkey | CREATE UNIQUE INDEX tur
 user_preferences | user_preferences_pkey | CREATE UNIQUE INDEX user_preferences_pkey ON public.user_preferences USING btree (user_id)
 users | users_email_key | CREATE UNIQUE INDEX users_email_key ON public.users USING btree (email)
 users | users_pkey | CREATE UNIQUE INDEX users_pkey ON public.users USING btree (id)
+whatsapp_connections | rls_org_scope_whatsapp_connections_idx | CREATE INDEX rls_org_scope_whatsapp_connections_idx ON public.whatsapp_connections USING btree (organization_id)
 whatsapp_connections | whatsapp_connections_pkey | CREATE UNIQUE INDEX whatsapp_connections_pkey ON public.whatsapp_connections USING btree (id)
 whatsapp_connections | whatsapp_connections_status_idx | CREATE INDEX whatsapp_connections_status_idx ON public.whatsapp_connections USING btree (connection_status, updated_at)
 whatsapp_connections | whatsapp_connections_user_unique_idx | CREATE UNIQUE INDEX whatsapp_connections_user_unique_idx ON public.whatsapp_connections USING btree (user_id)
