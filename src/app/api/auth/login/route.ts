@@ -3,10 +3,11 @@ import { db } from "@/db";
 import { auditLogs, organizationMembers, users } from "@/db/schema";
 import { verifyPassword } from "@/lib/auth/password";
 import { createSession } from "@/lib/auth/session";
+import { publishDomainEventBestEffort } from "@/lib/events/publish";
 import { apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson, ApiError } from "@/lib/http/api";
 import { loginSchema } from "@/lib/http/contracts";
-import { enforceRateLimit, requestClientKey } from "@/lib/security/rate-limit";
 import { anonymizeIp, clientIp } from "@/lib/security/client-ip";
+import { enforceRateLimit, requestClientKey } from "@/lib/security/rate-limit";
 import { verifyTurnstile } from "@/lib/security/turnstile";
 
 export const runtime = "nodejs";
@@ -48,6 +49,17 @@ export async function POST(request: Request) {
       resourceType: "session",
       metadata: { requestId },
     });
+    if (activeOrganizationId) {
+      await publishDomainEventBestEffort({
+        organizationId: activeOrganizationId,
+        eventKey: "user.logged_in",
+        actorType: "user",
+        actorId: user.id,
+        resourceType: "session",
+        idempotencyKey: `user.logged_in:${requestId}`,
+        payload: { userId: user.id, name: user.name, email: user.email },
+      });
+    }
 
     return apiSuccess({
       user: { id: user.id, name: user.name, email: user.email },
