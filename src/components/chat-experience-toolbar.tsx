@@ -15,6 +15,7 @@ type Preferences = {
 };
 
 const STORAGE_KEY = "moataz:chat-experience:v1";
+const SYNC_EVENT = "moataz:chat-experience:sync";
 const defaults: Preferences = { preset: "platform", fontScale: "md", density: "comfortable" };
 
 const presets: Array<{ id: ChatPreset; label: string; description: string }> = [
@@ -49,15 +50,23 @@ export function ChatExperienceToolbar() {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
-    const stored = readPreferences();
-    setPreferences(stored);
-    applyPreferences(stored);
+    const synchronize = () => {
+      const stored = readPreferences();
+      setPreferences(stored);
+      applyPreferences(stored);
+    };
+    window.addEventListener(SYNC_EVENT, synchronize);
+    const frame = window.requestAnimationFrame(() => window.dispatchEvent(new Event(SYNC_EVENT)));
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener(SYNC_EVENT, synchronize);
+    };
   }, []);
 
   function update(next: Preferences) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
     setPreferences(next);
     applyPreferences(next);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   }
 
   return (
