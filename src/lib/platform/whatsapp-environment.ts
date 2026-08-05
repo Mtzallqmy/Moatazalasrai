@@ -446,8 +446,19 @@ function applyEnvironment(config: WhatsAppEnvironmentConfig, enabled: boolean) {
 }
 
 function reportInspection(inspection: WhatsAppEnvironmentInspection): Omit<WhatsAppEnvironmentInspection, "config"> {
-  const { config: _config, ...safeInspection } = inspection;
-  return safeInspection;
+  return {
+    authoritative: inspection.authoritative,
+    complete: inspection.complete,
+    valid: inspection.valid,
+    runtimeEnvironment: inspection.runtimeEnvironment,
+    railwayEnvironment: inspection.railwayEnvironment,
+    loadedCount: inspection.loadedCount,
+    requiredCount: inspection.requiredCount,
+    missing: inspection.missing,
+    invalid: inspection.invalid,
+    warnings: inspection.warnings,
+    variables: inspection.variables,
+  };
 }
 
 function safeError(error: unknown) {
