@@ -6,9 +6,11 @@ import { organizations } from "@/db/schema";
 import { requireSession } from "@/lib/auth/authorization";
 import { loadCustomPermissions } from "@/lib/auth/custom-permissions";
 import { can, type Permission } from "@/lib/auth/permissions";
+import { requireModuleActive } from "@/lib/control-plane/modules";
 
 export default async function ContentPage() {
   const session = await requireSession("content:read");
+  await requireModuleActive(session.organizationId, "content_management");
   const customPermissions = await loadCustomPermissions(session.organizationId, session.userId);
   const allowed = (permission: Permission) => can(session.role, permission) || customPermissions.includes(permission);
   const [organization] = await db().select({ slug: organizations.slug })
