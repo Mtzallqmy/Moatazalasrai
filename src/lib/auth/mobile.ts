@@ -3,6 +3,11 @@ import { and, eq, gt, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { mobileSessions, organizationMembers, organizations, users } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
+import {
+  enterTenantDatabaseContext,
+  enterUserDatabaseContext,
+  runWithSystemDatabaseContext,
+} from "@/lib/security/database-context";
 import { hashApiKey } from "@/lib/security/encryption";
 
 const ACCESS_MINUTES = 15;
@@ -23,6 +28,7 @@ export async function issueMobileSession(input: {
   deviceName?: string;
   rememberSession?: boolean;
 }) {
+  enterTenantDatabaseContext(input.organizationId, input.userId);
   const accessToken = token("mat");
   const refreshToken = token("mrt");
   const accessExpiresAt = expiresIn(ACCESS_MINUTES * 60_000);
@@ -63,13 +69,18 @@ export async function issueMobileSession(input: {
 }
 
 export async function rotateMobileSession(refreshToken: string) {
-  const [current] = await db().select().from(mobileSessions).where(and(
-    eq(mobileSessions.refreshTokenHash, hashApiKey(refreshToken)),
-    isNull(mobileSessions.revokedAt),
-    gt(mobileSessions.refreshExpiresAt, new Date()),
-  )).limit(1);
+  const [current] = await runWithSystemDatabaseContext("mobile-refresh-token-lookup", () => db()
+    .select()
+    .from(mobileSessions)
+    .where(and(
+      eq(mobileSessions.refreshTokenHash, hashApiKey(refreshToken)),
+      isNull(mobileSessions.revokedAt),
+      gt(mobileSessions.refreshExpiresAt, new Date()),
+    ))
+    .limit(1));
   if (!current) throw new ApiError(401, "REFRESH_TOKEN_INVALID", "انتهت جلسة التطبيق أو أُبطلت.");
 
+  enterTenantDatabaseContext(current.organizationId, current.userId);
   const accessToken = token("mat");
   const nextRefreshToken = token("mrt");
   const accessExpiresAt = expiresIn(ACCESS_MINUTES * 60_000);
@@ -100,11 +111,14 @@ export async function rotateMobileSession(refreshToken: string) {
 }
 
 export async function revokeMobileSession(refreshToken: string) {
-  await db().update(mobileSessions).set({ revokedAt: new Date(), updatedAt: new Date() })
-    .where(eq(mobileSessions.refreshTokenHash, hashApiKey(refreshToken)));
+  await runWithSystemDatabaseContext("mobile-refresh-token-revoke", () => db()
+    .update(mobileSessions)
+    .set({ revokedAt: new Date(), updatedAt: new Date() })
+    .where(eq(mobileSessions.refreshTokenHash, hashApiKey(refreshToken))));
 }
 
 export async function mobileOrganizations(userId: string) {
+  enterUserDatabaseContext(userId);
   return db().select({
     id: organizations.id,
     name: organizations.name,
@@ -116,6 +130,7 @@ export async function mobileOrganizations(userId: string) {
 }
 
 export async function mobileMe(userId: string, organizationId: string) {
+  enterTenantDatabaseContext(organizationId, userId);
   const [identity] = await db().select({
     id: users.id,
     email: users.email,
