@@ -14,6 +14,7 @@ export default defineConfig({
     "./src/db/sandbox-schema.ts",
     "./src/db/orchestration-schema.ts",
     "./src/db/tool-registry-schema.ts",
+    "./src/db/whatsapp-platform-schema.ts",
   ],
   out: "./drizzle",
   dialect: "postgresql",
