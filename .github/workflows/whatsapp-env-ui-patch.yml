@@ -1,0 +1,61 @@
+# One-shot branch patcher; removed after making environment-managed WhatsApp read-only.
+name: WhatsApp Environment UI Patch
+
+on:
+  push:
+    branches: [feat/whatsapp-env-bootstrap]
+    paths:
+      - .github/workflows/whatsapp-env-ui-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: feat/whatsapp-env-bootstrap
+          fetch-depth: 0
+
+      - name: Hide manual fields when Railway is authoritative
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = 'src/components/production-control-center.tsx';
+          const source = fs.readFileSync(path, 'utf8');
+          const startMarker = '      <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">';
+          const endMarker = '      <div className="mt-5 flex flex-wrap gap-2"><Button disabled={busy !== null} onClick={() => void save("whatsapp")}><Save size={16} /> حفظ واختبار وتطبيق</Button><Button variant="secondary" disabled={busy !== null || !snapshot.whatsapp.configured} onClick={() => void test("whatsapp")}><ShieldCheck size={16} /> اختبار الحالي</Button></div>';
+          const start = source.indexOf(startMarker);
+          const end = source.indexOf(endMarker, start);
+          if (start < 0 || end < 0) throw new Error('WhatsApp control block markers not found.');
+          const original = source.slice(start, end + endMarker.length);
+          const replacement = `      {snapshot.whatsapp.source === "environment" ? <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-950">
+        <div className="flex items-center gap-2"><ShieldCheck size={18} /><strong>تتم إدارة WhatsApp من Environment Variables في Railway.</strong></div>
+        <p className="mt-2 leading-7">لا تُطلب الأسرار ولا يمكن استبدالها من هذه الصفحة. استخدم صفحة الإعدادات لعرض التشخيص الآمن، وإعادة اختبار Meta، وإرسال رسالة اختبار.</p>
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          <p>App ID: <bdi dir="ltr">{snapshot.whatsapp.appId ?? "—"}</bdi></p>
+          <p>Phone Number ID: <bdi dir="ltr">{snapshot.whatsapp.phoneNumberId ?? "—"}</bdi></p>
+          <p>WABA ID: <bdi dir="ltr">{snapshot.whatsapp.businessAccountId ?? "—"}</bdi></p>
+          <p>Graph API: <bdi dir="ltr">{snapshot.whatsapp.graphApiVersion}</bdi></p>
+        </div>
+        {webhookUrl ? <p className="mt-3 break-all">Webhook URL: <code dir="ltr">{webhookUrl}</code></p> : null}
+        {health.whatsapp ? <p className="mt-3"><CheckCircle2 className="me-2 inline" size={16} />{health.whatsapp.details} — {health.whatsapp.latencyMs}ms</p> : null}
+        <div className="mt-4"><Button variant="secondary" disabled={busy !== null || !snapshot.whatsapp.configured} onClick={() => void test("whatsapp")}><ShieldCheck size={16} /> اختبار إعدادات Railway الحالية</Button></div>
+      </div> : <>
+${original}
+      </>}`;
+          fs.writeFileSync(path, source.slice(0, start) + replacement + source.slice(end + endMarker.length));
+          NODE
+
+      - name: Verify and push
+        run: |
+          git diff --check
+          git grep -n 'تتم إدارة WhatsApp من Environment Variables' src/components/production-control-center.tsx
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/components/production-control-center.tsx
+          git commit -m "fix(whatsapp): keep Railway-managed settings read-only"
+          git push origin HEAD:feat/whatsapp-env-bootstrap
