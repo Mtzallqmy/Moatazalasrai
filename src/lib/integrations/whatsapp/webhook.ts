@@ -1,9 +1,15 @@
+// WhatsApp Cloud API webhook parser shared by account linking and channel routing.
 export type WhatsAppIncomingMessage = {
   id: string;
   from: string;
   type: string;
   timestamp?: string;
   text?: { body?: string };
+  context?: { id?: string; from?: string };
+  image?: { id?: string; mime_type?: string; sha256?: string; caption?: string };
+  document?: { id?: string; mime_type?: string; sha256?: string; filename?: string; caption?: string };
+  audio?: { id?: string; mime_type?: string; sha256?: string; voice?: boolean };
+  video?: { id?: string; mime_type?: string; sha256?: string; caption?: string };
   interactive?: {
     type?: string;
     button_reply?: { id?: string; title?: string };
@@ -14,12 +20,27 @@ export type WhatsAppIncomingMessage = {
 export type ExtractedWhatsAppMessage = {
   message: WhatsAppIncomingMessage;
   phoneNumberId?: string;
+  displayPhoneNumber?: string;
+  senderDisplayName?: string;
 };
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
+}
+
+function contactNames(value: Record<string, unknown>) {
+  const output = new Map<string, string>();
+  if (!Array.isArray(value.contacts)) return output;
+  for (const rawContact of value.contacts) {
+    const contact = record(rawContact);
+    const profile = record(contact?.profile);
+    const waId = typeof contact?.wa_id === "string" ? contact.wa_id : null;
+    const name = typeof profile?.name === "string" ? profile.name.trim() : "";
+    if (waId && name) output.set(waId, name);
+  }
+  return output;
 }
 
 export function extractWhatsAppMessages(payload: unknown): ExtractedWhatsAppMessage[] {
@@ -35,10 +56,19 @@ export function extractWhatsAppMessages(payload: unknown): ExtractedWhatsAppMess
       if (!value || !Array.isArray(value.messages)) continue;
       const metadata = record(value.metadata);
       const phoneNumberId = typeof metadata?.phone_number_id === "string" ? metadata.phone_number_id : undefined;
+      const displayPhoneNumber = typeof metadata?.display_phone_number === "string"
+        ? metadata.display_phone_number
+        : undefined;
+      const names = contactNames(value);
       for (const messageValue of value.messages) {
         const message = record(messageValue);
         if (!message || typeof message.id !== "string" || typeof message.from !== "string" || typeof message.type !== "string") continue;
-        output.push({ message: message as WhatsAppIncomingMessage, ...(phoneNumberId ? { phoneNumberId } : {}) });
+        output.push({
+          message: message as WhatsAppIncomingMessage,
+          ...(phoneNumberId ? { phoneNumberId } : {}),
+          ...(displayPhoneNumber ? { displayPhoneNumber } : {}),
+          ...(names.get(message.from) ? { senderDisplayName: names.get(message.from) } : {}),
+        });
       }
     }
   }
