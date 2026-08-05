@@ -1,8 +1,11 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import { getPostgresPool } from "@/db/pool";
-import * as schema from "./schema";
+import * as coreSchema from "./schema";
+import * as channelSchema from "./channel-schema";
 
-let database: ReturnType<typeof drizzle<typeof schema>> | null = null;
+const schema = { ...coreSchema, ...channelSchema };
+type DatabaseSchema = typeof schema;
+let database: ReturnType<typeof drizzle<DatabaseSchema>> | null = null;
 
 export function db() {
   database ??= drizzle(getPostgresPool(), { schema });
@@ -60,6 +63,19 @@ const requiredTables = [
   "sandbox_files",
   "sandbox_artifacts",
   "platform_runtime_settings",
+  "channel_inboxes",
+  "channel_inbox_members",
+  "channel_workflows",
+  "channel_connections",
+  "channel_agent_bindings",
+  "channel_provider_bindings",
+  "channel_tool_bindings",
+  "channel_permissions",
+  "channel_routing_rules",
+  "channel_contacts",
+  "channel_conversation_links",
+  "channel_events",
+  "channel_handoffs",
 ] as const;
 
 export async function checkDatabase(): Promise<{
@@ -121,7 +137,20 @@ export async function checkDatabase(): Promise<{
       to_regclass('public.sandbox_events')::text AS sandbox_events,
       to_regclass('public.sandbox_files')::text AS sandbox_files,
       to_regclass('public.sandbox_artifacts')::text AS sandbox_artifacts,
-      to_regclass('public.platform_runtime_settings')::text AS platform_runtime_settings
+      to_regclass('public.platform_runtime_settings')::text AS platform_runtime_settings,
+      to_regclass('public.channel_inboxes')::text AS channel_inboxes,
+      to_regclass('public.channel_inbox_members')::text AS channel_inbox_members,
+      to_regclass('public.channel_workflows')::text AS channel_workflows,
+      to_regclass('public.channel_connections')::text AS channel_connections,
+      to_regclass('public.channel_agent_bindings')::text AS channel_agent_bindings,
+      to_regclass('public.channel_provider_bindings')::text AS channel_provider_bindings,
+      to_regclass('public.channel_tool_bindings')::text AS channel_tool_bindings,
+      to_regclass('public.channel_permissions')::text AS channel_permissions,
+      to_regclass('public.channel_routing_rules')::text AS channel_routing_rules,
+      to_regclass('public.channel_contacts')::text AS channel_contacts,
+      to_regclass('public.channel_conversation_links')::text AS channel_conversation_links,
+      to_regclass('public.channel_events')::text AS channel_events,
+      to_regclass('public.channel_handoffs')::text AS channel_handoffs
   `);
   const state = tableResult.rows[0];
   const missingTables = requiredTables.filter((table) => !state?.[table]);
