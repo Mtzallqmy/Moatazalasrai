@@ -5,13 +5,32 @@ import { db } from "@/db";
 import { organizationMembers, organizations, sessions, users } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
 
-export const SESSION_COOKIE = "moataz_session";
+const LEGACY_SESSION_COOKIE = "moataz_session";
+export const SESSION_COOKIE = process.env.NODE_ENV === "production"
+  ? "__Host-moataz_session"
+  : LEGACY_SESSION_COOKIE;
 const SESSION_DAYS = 30;
 const SESSION_IDLE_DAYS = 7;
 const LAST_SEEN_WRITE_INTERVAL_MS = 15 * 60 * 1000;
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex");
+}
+
+function cookieOptions(expires: Date) {
+  return {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax" as const,
+    path: "/",
+    expires,
+  };
+}
+
+async function clearSessionCookies() {
+  const store = await cookies();
+  store.delete(SESSION_COOKIE);
+  if (SESSION_COOKIE !== LEGACY_SESSION_COOKIE) store.delete(LEGACY_SESSION_COOKIE);
 }
 
 export async function createSession(input: {
@@ -42,27 +61,26 @@ export async function createSession(input: {
   await db().insert(sessions).values(values);
 
   const store = await cookies();
-  store.set(SESSION_COOKIE, token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    expires: expiresAt,
-  });
+  store.set(SESSION_COOKIE, token, cookieOptions(expiresAt));
+  if (SESSION_COOKIE !== LEGACY_SESSION_COOKIE) store.delete(LEGACY_SESSION_COOKIE);
 }
 
 export async function revokeCurrentSession() {
   const store = await cookies();
-  const token = store.get(SESSION_COOKIE)?.value;
+  const token = store.get(SESSION_COOKIE)?.value
+    ?? (SESSION_COOKIE !== LEGACY_SESSION_COOKIE ? store.get(LEGACY_SESSION_COOKIE)?.value : undefined);
   if (token) {
     await db().update(sessions).set({ revokedAt: new Date() }).where(eq(sessions.tokenHash, hashToken(token)));
   }
-  store.delete(SESSION_COOKIE);
+  await clearSessionCookies();
 }
 
 export async function revokeAllSessions(userId: string) {
-  await db().update(sessions).set({ revokedAt: new Date() }).where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)));
-  (await cookies()).delete(SESSION_COOKIE);
+  await db().update(sessions).set({ revokedAt: new Date() }).where(and(
+    eq(sessions.userId, userId),
+    isNull(sessions.revokedAt),
+  ));
+  await clearSessionCookies();
 }
 
 export async function setActiveOrganization(userId: string, sessionId: string, organizationId: string) {
@@ -82,17 +100,18 @@ export async function setActiveOrganization(userId: string, sessionId: string, o
     .where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId), isNull(sessions.revokedAt)))
     .returning({ expiresAt: sessions.expiresAt });
   if (!rotated) throw new ApiError(401, "SESSION_INVALID", "انتهت الجلسة أو أُبطلت.");
-  (await cookies()).set(SESSION_COOKIE, nextToken, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    expires: rotated.expiresAt,
-  });
+  const store = await cookies();
+  store.set(SESSION_COOKIE, nextToken, cookieOptions(rotated.expiresAt));
+  if (SESSION_COOKIE !== LEGACY_SESSION_COOKIE) store.delete(LEGACY_SESSION_COOKIE);
 }
 
 export async function currentSession() {
-  const token = (await cookies()).get(SESSION_COOKIE)?.value;
+  const store = await cookies();
+  const primaryToken = store.get(SESSION_COOKIE)?.value;
+  const legacyToken = SESSION_COOKIE !== LEGACY_SESSION_COOKIE
+    ? store.get(LEGACY_SESSION_COOKIE)?.value
+    : undefined;
+  const token = primaryToken ?? legacyToken;
   if (!token) return null;
 
   const [base] = await db()
@@ -100,6 +119,7 @@ export async function currentSession() {
       sessionId: sessions.id,
       activeOrganizationId: sessions.activeOrganizationId,
       lastSeenAt: sessions.lastSeenAt,
+      expiresAt: sessions.expiresAt,
       userId: users.id,
       email: users.email,
       name: users.name,
@@ -115,6 +135,10 @@ export async function currentSession() {
     .limit(1);
 
   if (!base) return null;
+  if (!primaryToken && legacyToken) {
+    store.set(SESSION_COOKIE, legacyToken, cookieOptions(base.expiresAt));
+    store.delete(LEGACY_SESSION_COOKIE);
+  }
 
   let activeOrganizationId = base.activeOrganizationId;
   if (!activeOrganizationId) {
