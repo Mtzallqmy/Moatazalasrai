@@ -17,6 +17,21 @@ pool.on("connect", (client) => {
 
 try {
   await runMigrations({ pgPool: pool });
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'moataz_app_runtime') THEN
+        GRANT USAGE ON SCHEMA graphile_worker TO moataz_app_runtime;
+        GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA graphile_worker TO moataz_app_runtime;
+        GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA graphile_worker TO moataz_app_runtime;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA graphile_worker
+          GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO moataz_app_runtime;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA graphile_worker
+          GRANT USAGE, SELECT ON SEQUENCES TO moataz_app_runtime;
+      END IF;
+    END
+    $$;
+  `);
   console.log(JSON.stringify({ level: "info", event: "graphile.migrations.completed" }));
 } finally {
   await pool.end();

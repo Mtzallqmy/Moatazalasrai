@@ -42,6 +42,13 @@ async function applyMigration(name, digest, statements) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const runtimeRole = await client.query(
+      "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'moataz_app_runtime') AS available",
+    );
+    if (runtimeRole.rows[0]?.available) {
+      await client.query("SET LOCAL ROLE moataz_app_runtime");
+      await client.query("SELECT set_config('app.rls_bypass', 'on', true)");
+    }
     for (const statement of statements) {
       await client.query(statement);
     }
