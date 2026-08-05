@@ -2,8 +2,9 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { getPostgresPool } from "@/db/pool";
 import * as coreSchema from "./schema";
 import * as channelSchema from "./channel-schema";
+import * as controlPlaneSchema from "./control-plane-schema";
 
-const schema = { ...coreSchema, ...channelSchema };
+const schema = { ...coreSchema, ...channelSchema, ...controlPlaneSchema };
 type DatabaseSchema = typeof schema;
 let database: ReturnType<typeof drizzle<DatabaseSchema>> | null = null;
 
@@ -76,6 +77,18 @@ const requiredTables = [
   "channel_conversation_links",
   "channel_events",
   "channel_handoffs",
+  "platform_modules",
+  "feature_flags",
+  "custom_roles",
+  "custom_role_permissions",
+  "member_custom_roles",
+  "platform_settings",
+  "deleted_items",
+  "domain_events",
+  "notification_templates",
+  "notification_rules",
+  "notification_deliveries",
+  "internal_notifications",
 ] as const;
 
 export async function checkDatabase(): Promise<{
@@ -150,7 +163,19 @@ export async function checkDatabase(): Promise<{
       to_regclass('public.channel_contacts')::text AS channel_contacts,
       to_regclass('public.channel_conversation_links')::text AS channel_conversation_links,
       to_regclass('public.channel_events')::text AS channel_events,
-      to_regclass('public.channel_handoffs')::text AS channel_handoffs
+      to_regclass('public.channel_handoffs')::text AS channel_handoffs,
+      to_regclass('public.platform_modules')::text AS platform_modules,
+      to_regclass('public.feature_flags')::text AS feature_flags,
+      to_regclass('public.custom_roles')::text AS custom_roles,
+      to_regclass('public.custom_role_permissions')::text AS custom_role_permissions,
+      to_regclass('public.member_custom_roles')::text AS member_custom_roles,
+      to_regclass('public.platform_settings')::text AS platform_settings,
+      to_regclass('public.deleted_items')::text AS deleted_items,
+      to_regclass('public.domain_events')::text AS domain_events,
+      to_regclass('public.notification_templates')::text AS notification_templates,
+      to_regclass('public.notification_rules')::text AS notification_rules,
+      to_regclass('public.notification_deliveries')::text AS notification_deliveries,
+      to_regclass('public.internal_notifications')::text AS internal_notifications
   `);
   const state = tableResult.rows[0];
   const missingTables = requiredTables.filter((table) => !state?.[table]);
