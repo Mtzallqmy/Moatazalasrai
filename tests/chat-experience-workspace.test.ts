@@ -23,7 +23,7 @@ describe("chat experience workspace", () => {
 
   it("provides mobile layouts, readable message scales, density controls, and distinct presets", async () => {
     const css = await readFile("src/app/dashboard/chat/chat-experience.css", "utf8");
-    expect(css).toContain("@media (max-width: 760px)");
+    expect(css).toContain("@media (max-width: 640px)");
     expect(css).toContain('[data-chat-font-scale="xl"]');
     expect(css).toContain('[data-chat-density="compact"]');
     expect(css).toContain('[data-chat-preset="whatsapp"]');
