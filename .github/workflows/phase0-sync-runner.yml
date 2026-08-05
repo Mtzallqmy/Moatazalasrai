@@ -1,4 +1,5 @@
 # Temporary one-shot synchronizer for PR 53; removed after the branch is updated.
+# Trigger revision: 2.
 name: Phase 0 Main Synchronizer
 
 on:
