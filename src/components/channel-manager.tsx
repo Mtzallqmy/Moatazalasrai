@@ -4,24 +4,44 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 type Named = { id: string; name: string };
 type Connection = {
-  id: string; kind: "telegram" | "whatsapp"; name: string; displayAddress: string | null;
-  status: string; enabled: boolean; webhookStatus: string; lastErrorCode: string | null;
-  defaultAgentId: string | null; defaultProviderCredentialId: string | null; defaultModel: string | null;
-  inboxId: string | null; workflowId: string | null; settings: Record<string, unknown>;
+  id: string;
+  kind: "telegram" | "whatsapp";
+  name: string;
+  displayAddress: string | null;
+  status: string;
+  enabled: boolean;
+  webhookStatus: string;
+  lastErrorCode: string | null;
+  defaultAgentId: string | null;
+  defaultProviderCredentialId: string | null;
+  defaultModel: string | null;
+  inboxId: string | null;
+  workflowId: string | null;
+  settings: Record<string, unknown>;
 };
 type Props = {
-  canManage: boolean; canHandoff: boolean;
+  canManage: boolean;
+  canHandoff: boolean;
   options: {
     agents: Array<Named & { status: string }>;
     providers: Array<Named & { provider: string; models: unknown; enabled: boolean }>;
     tools: Array<Named & { title: string | null; risk: string }>;
-    inboxes: Named[]; workflows: Named[]; members: Array<Named & { email: string; role: string }>;
+    inboxes: Named[];
+    workflows: Named[];
+    members: Array<Named & { email: string; role: string }>;
   };
 };
 
 function unwrap(value: unknown) {
   const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
   return (record.data && typeof record.data === "object" ? record.data : record) as Record<string, unknown>;
+}
+
+async function fetchConnections(): Promise<Connection[]> {
+  const response = await fetch("/api/dashboard/channels", { cache: "no-store" });
+  const json = await response.json();
+  if (!response.ok) throw new Error(json?.error?.message || "تعذر تحميل القنوات.");
+  return (unwrap(json).connections || []) as Connection[];
 }
 
 export function ChannelManager({ canManage, canHandoff, options }: Props) {
@@ -31,25 +51,47 @@ export function ChannelManager({ canManage, canHandoff, options }: Props) {
   const [busy, setBusy] = useState(false);
   const selected = useMemo(() => rows.find((row) => row.id === selectedId) ?? null, [rows, selectedId]);
 
-  const load = useCallback(async () => {
-    const response = await fetch("/api/dashboard/channels", { cache: "no-store" });
-    const json = await response.json();
-    if (!response.ok) throw new Error(json?.error?.message || "تعذر تحميل القنوات.");
-    const connections = (unwrap(json).connections || []) as Connection[];
+  const applyConnections = useCallback((connections: Connection[]) => {
     setRows(connections);
     setSelectedId((current) => connections.some((row) => row.id === current) ? current : connections[0]?.id || "");
   }, []);
-  useEffect(() => { void load().catch((error: Error) => setNotice(error.message)); }, [load]);
+
+  const load = useCallback(async () => {
+    applyConnections(await fetchConnections());
+  }, [applyConnections]);
+
+  useEffect(() => {
+    let active = true;
+    void fetchConnections()
+      .then((connections) => {
+        if (active) applyConnections(connections);
+      })
+      .catch((error: Error) => {
+        if (active) setNotice(error.message);
+      });
+    return () => {
+      active = false;
+    };
+  }, [applyConnections]);
 
   async function request(path: string, method: string, body: unknown, success: string) {
-    setBusy(true); setNotice("");
+    setBusy(true);
+    setNotice("");
     try {
-      const response = await fetch(path, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const response = await fetch(path, {
+        method,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
       const json = await response.json();
       if (!response.ok) throw new Error(json?.error?.message || "فشلت العملية.");
-      setNotice(success); await load();
-    } catch (error) { setNotice(error instanceof Error ? error.message : "فشلت العملية."); }
-    finally { setBusy(false); }
+      setNotice(success);
+      await load();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "فشلت العملية.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return <div className="grid gap-6 xl:grid-cols-[330px_1fr]">
@@ -60,7 +102,11 @@ export function ChannelManager({ canManage, canHandoff, options }: Props) {
         <p className="text-xs text-slate-500">{row.displayAddress || row.status} · webhook: {row.webhookStatus}</p>
         {row.lastErrorCode ? <p className="text-xs text-red-600">{row.lastErrorCode}</p> : null}
       </button>)}</div>
-      {canManage ? <form className="mt-5 space-y-2 border-t pt-4 dark:border-slate-800" action={async (data) => request("/api/dashboard/channels", "POST", { name: data.get("name"), phoneNumberId: data.get("phoneNumberId") || undefined, displayAddress: data.get("displayAddress") || undefined }, "تمت إضافة WhatsApp.")}>
+      {canManage ? <form className="mt-5 space-y-2 border-t pt-4 dark:border-slate-800" action={async (data) => request("/api/dashboard/channels", "POST", {
+        name: data.get("name"),
+        phoneNumberId: data.get("phoneNumberId") || undefined,
+        displayAddress: data.get("displayAddress") || undefined,
+      }, "تمت إضافة WhatsApp.")}>
         <h3 className="text-sm font-semibold">إضافة WhatsApp</h3>
         <input name="name" required placeholder="اسم الاتصال" className="w-full rounded-lg border px-3 py-2 dark:bg-slate-900" />
         <input name="phoneNumberId" placeholder="Phone Number ID" className="w-full rounded-lg border px-3 py-2 dark:bg-slate-900" />
@@ -70,10 +116,22 @@ export function ChannelManager({ canManage, canHandoff, options }: Props) {
     </aside>
     <main className="rounded-2xl border bg-white p-5 dark:border-slate-800 dark:bg-slate-950">
       {!selected ? <p>اختر قناة.</p> : <form key={selected.id} className="space-y-5" action={async (data) => request("/api/dashboard/channels", "PATCH", {
-        id: selected.id, name: data.get("name"), enabled: data.get("enabled") === "on",
-        defaultAgentId: data.get("agentId") || null, defaultProviderCredentialId: data.get("providerId") || null,
-        defaultModel: data.get("model") || null, inboxId: data.get("inboxId") || null, workflowId: data.get("workflowId") || null,
-        settings: { welcomeMessage: data.get("welcomeMessage"), autoReplyEnabled: data.get("autoReplyEnabled") === "on", language: data.get("language") || "ar", memoryEnabled: data.get("memoryEnabled") === "on", historyEnabled: data.get("historyEnabled") === "on", handoffMode: data.get("handoffMode") || "ai_then_human" }
+        id: selected.id,
+        name: data.get("name"),
+        enabled: data.get("enabled") === "on",
+        defaultAgentId: data.get("agentId") || null,
+        defaultProviderCredentialId: data.get("providerId") || null,
+        defaultModel: data.get("model") || null,
+        inboxId: data.get("inboxId") || null,
+        workflowId: data.get("workflowId") || null,
+        settings: {
+          welcomeMessage: data.get("welcomeMessage"),
+          autoReplyEnabled: data.get("autoReplyEnabled") === "on",
+          language: data.get("language") || "ar",
+          memoryEnabled: data.get("memoryEnabled") === "on",
+          historyEnabled: data.get("historyEnabled") === "on",
+          handoffMode: data.get("handoffMode") || "ai_then_human",
+        },
       }, "تم حفظ إعدادات القناة.")}>
         <div className="flex justify-between"><div><h2 className="text-lg font-semibold">{selected.name}</h2><p className="text-sm text-slate-500">{selected.kind} · {selected.status}</p></div><label><input name="enabled" type="checkbox" defaultChecked={selected.enabled} /> مفعّل</label></div>
         <div className="grid gap-4 md:grid-cols-2">
