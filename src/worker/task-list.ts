@@ -4,6 +4,7 @@ import { agentTeamRunTask } from "@/worker/tasks/agent-team-run";
 import { browserTaskExecuteTask } from "@/worker/tasks/browser-task-execute";
 import { browserTaskResumeTask } from "@/worker/tasks/browser-task-resume";
 import { documentParseTask } from "@/worker/tasks/document-parse";
+import { notificationDispatchTask } from "@/worker/tasks/notification-dispatch";
 import { sandboxCleanupTask } from "@/worker/tasks/sandbox-cleanup";
 import { sandboxCreateTask } from "@/worker/tasks/sandbox-create";
 import { sandboxExecuteTask } from "@/worker/tasks/sandbox-execute";
@@ -16,6 +17,7 @@ export const taskList = {
   "browser-task-execute": browserTaskExecuteTask,
   "browser-task-resume": browserTaskResumeTask,
   "document-parse": documentParseTask,
+  "notification-dispatch": notificationDispatchTask,
   "sandbox-create": sandboxCreateTask,
   "sandbox-execute": sandboxExecuteTask,
   "sandbox-resume": sandboxResumeTask,
