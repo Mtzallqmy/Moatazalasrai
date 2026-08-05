@@ -1,9 +1,38 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { validateOptionalRuntimeEnvironment } from "./validate-runtime-env.mjs";
 
 validateOptionalRuntimeEnvironment();
+
+function enabled(name) {
+  return process.env[name]?.trim().toLowerCase() === "true";
+}
+
+function bootstrapTelegramWebhook() {
+  const mode = process.env.TELEGRAM_UPDATE_MODE?.trim().toLowerCase() || "webhook";
+  if (!enabled("TELEGRAM_INTEGRATION_ENABLED") || mode === "polling") return;
+
+  console.info(JSON.stringify({ level: "info", event: "telegram.webhook.bootstrap.started" }));
+  const result = spawnSync(process.execPath, ["scripts/setup-telegram-webhook.mjs"], {
+    env: process.env,
+    stdio: "inherit",
+    timeout: 70_000,
+  });
+  if (result.error || result.status !== 0) {
+    console.error(JSON.stringify({
+      level: "fatal",
+      event: "telegram.webhook.bootstrap.failed",
+      errorName: result.error?.name ?? null,
+      exitCode: result.status,
+      signal: result.signal,
+    }));
+    process.exit(1);
+  }
+  console.info(JSON.stringify({ level: "info", event: "telegram.webhook.bootstrap.completed" }));
+}
+
+bootstrapTelegramWebhook();
 
 const host = process.env.APP_HOST?.trim() || process.env.HOSTNAME?.trim() || "0.0.0.0";
 const port = process.env.PORT?.trim() || "3000";
