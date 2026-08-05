@@ -1,7 +1,10 @@
+import { and, asc, eq, isNull } from "drizzle-orm";
 import Link from "next/link";
 import { OrganizationSwitcher } from "@/components/organization-switcher";
 import { DashboardNavigation, type DashboardSession } from "@/components/dashboard-navigation";
 import { SiteFooter } from "@/components/site-footer";
+import { db } from "@/db";
+import { platformModules } from "@/db/control-plane-schema";
 import { loadCustomPermissions } from "@/lib/auth/custom-permissions";
 
 export async function DashboardShell({ session, activePath, title, description, actions, children }: {
@@ -12,10 +15,17 @@ export async function DashboardShell({ session, activePath, title, description, 
   actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
-  const permissions = session.organizationId && session.userId
-    ? await loadCustomPermissions(session.organizationId, session.userId)
-    : [];
-  const navigationSession = { ...session, permissions };
+  const [permissions, modules] = session.organizationId && session.userId
+    ? await Promise.all([
+      loadCustomPermissions(session.organizationId, session.userId),
+      db().select({ key: platformModules.key }).from(platformModules).where(and(
+        eq(platformModules.organizationId, session.organizationId),
+        eq(platformModules.status, "active"),
+        isNull(platformModules.deletedAt),
+      )).orderBy(asc(platformModules.position)),
+    ])
+    : [[], []];
+  const navigationSession = { ...session, permissions, modules: modules.map((module) => module.key) };
 
   return (
     <main className="dashboard-root">
