@@ -27,6 +27,8 @@ export default async function ChannelsPage() {
       name: providerCredentials.name,
       provider: providerCredentials.provider,
       models: providerCredentials.discoveredModels,
+      allowedModels: providerCredentials.allowedModels,
+      defaultModel: providerCredentials.defaultModel,
       enabled: providerCredentials.enabled,
     }).from(providerCredentials).where(and(
       eq(providerCredentials.organizationId, session.organizationId),
@@ -79,7 +81,17 @@ export default async function ChannelsPage() {
           initialData={initialWhatsAppData}
           options={{
             agents: agentRows.map(({ id, name }) => ({ id, name })),
-            providers: providerRows.map(({ id, name, models }) => ({ id, name, models })),
+            providers: providerRows.map(({ id, name, provider, models, allowedModels, defaultModel }) => ({
+              id,
+              name,
+              provider,
+              defaultModel,
+              models: Array.from(new Set([
+                ...(defaultModel ? [defaultModel] : []),
+                ...allowedModels,
+                ...models,
+              ].filter(Boolean))),
+            })),
             tools: toolRows,
             members: members.map(({ id, name, email }) => ({ id, name, email })),
           }}
