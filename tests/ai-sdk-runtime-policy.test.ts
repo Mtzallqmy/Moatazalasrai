@@ -137,6 +137,7 @@ describe("runtime limits and observability safety", () => {
       "browser-task-execute",
       "browser-task-resume",
       "document-parse",
+      "notification-dispatch",
       "sandbox-artifact-cleanup",
       "sandbox-cleanup",
       "sandbox-create",
