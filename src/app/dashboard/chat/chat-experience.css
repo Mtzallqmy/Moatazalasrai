@@ -1,0 +1,199 @@
+.chat-workspace-toolbar {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) auto auto;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 1.4rem;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  box-shadow: var(--shadow);
+}
+
+.chat-workspace-toolbar__identity,
+.chat-workspace-toolbar__actions,
+.chat-workspace-shortcuts,
+.chat-workspace-shortcuts a,
+.chat-toolbar-button,
+.chat-experience-panel__heading,
+.chat-experience-section > p,
+.chat-experience-controls label > span {
+  display: flex;
+  align-items: center;
+}
+
+.chat-workspace-toolbar__identity { gap: 0.7rem; min-width: 0; }
+.chat-workspace-toolbar__identity p { font-size: 0.82rem; font-weight: 900; }
+.chat-workspace-toolbar__identity span:last-child { display: block; margin-top: 0.15rem; color: var(--text-secondary); font-size: 0.66rem; }
+.chat-workspace-toolbar__icon {
+  display: grid;
+  width: 2.55rem;
+  height: 2.55rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 0.95rem;
+  color: white;
+  background: linear-gradient(135deg, var(--primary), var(--accent));
+}
+.chat-workspace-shortcuts { gap: 0.4rem; flex-wrap: wrap; }
+.chat-workspace-shortcuts a,
+.chat-toolbar-button {
+  gap: 0.38rem;
+  min-height: 2.35rem;
+  border: 1px solid var(--border);
+  border-radius: 0.85rem;
+  padding: 0.45rem 0.72rem;
+  color: var(--text-secondary);
+  background: var(--surface-soft);
+  font-size: 0.7rem;
+  font-weight: 800;
+  transition: 150ms ease;
+}
+.chat-workspace-shortcuts a:hover,
+.chat-toolbar-button:hover { border-color: var(--primary); color: var(--primary); transform: translateY(-1px); }
+
+.chat-experience-panel {
+  position: absolute;
+  z-index: 50;
+  inset-block-start: calc(100% + 0.55rem);
+  inset-inline-end: 0;
+  width: min(46rem, 100%);
+  border: 1px solid var(--border);
+  border-radius: 1.35rem;
+  padding: 1rem;
+  background: color-mix(in srgb, var(--surface) 97%, transparent);
+  box-shadow: var(--shadow-raised);
+  backdrop-filter: blur(18px);
+}
+.chat-experience-panel__heading { justify-content: space-between; gap: 1rem; }
+.chat-experience-panel__heading strong,
+.chat-experience-panel__heading span { display: block; }
+.chat-experience-panel__heading strong { font-size: 0.86rem; }
+.chat-experience-panel__heading span { margin-top: 0.15rem; color: var(--text-secondary); font-size: 0.66rem; }
+.chat-experience-panel__heading button { width: 2rem; height: 2rem; border-radius: 0.7rem; background: var(--surface-soft); }
+.chat-experience-section { margin-top: 1rem; }
+.chat-experience-section > p,
+.chat-experience-controls label > span { gap: 0.35rem; color: var(--text-secondary); font-size: 0.67rem; font-weight: 900; }
+.chat-preset-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.55rem; margin-top: 0.5rem; }
+.chat-preset-grid button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 0.65rem;
+  text-align: start;
+  background: var(--surface-soft);
+}
+.chat-preset-grid button.is-selected { border-color: var(--primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 12%, transparent); }
+.chat-preset-grid b,
+.chat-preset-grid small { display: block; }
+.chat-preset-grid b { font-size: 0.7rem; }
+.chat-preset-grid small { margin-top: 0.15rem; color: var(--text-secondary); font-size: 0.56rem; line-height: 1.45; }
+.chat-preset-swatch { display: flex; width: 2.2rem; height: 2.2rem; flex-direction: column; justify-content: center; gap: 0.23rem; border-radius: 0.7rem; padding: 0.3rem; background: #edf5f4; }
+.chat-preset-swatch i { display: block; width: 74%; height: 0.42rem; border-radius: 999px; background: white; }
+.chat-preset-swatch i:last-child { width: 67%; margin-inline-start: auto; background: #d9f2ee; }
+.chat-preset-swatch--whatsapp { background: #efeae2; }
+.chat-preset-swatch--whatsapp i:last-child { background: #d9fdd3; }
+.chat-preset-swatch--chatgpt { background: #f7f7f8; }
+.chat-preset-swatch--chatgpt i:last-child { background: #e8f2ee; }
+.chat-preset-swatch--telegram { background: #dceaf5; }
+.chat-preset-swatch--telegram i:last-child { background: #c9efff; }
+.chat-experience-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.7rem; margin-top: 1rem; }
+.chat-experience-controls label { display: grid; gap: 0.4rem; }
+.chat-experience-controls select { min-height: 2.5rem; border: 1px solid var(--border); border-radius: 0.8rem; padding-inline: 0.75rem; background: var(--surface-soft); font-size: 0.72rem; }
+
+[data-chat-font-scale="sm"] .chat-message,
+[data-chat-font-scale="sm"] .chat-composer textarea { font-size: 0.78rem; }
+[data-chat-font-scale="md"] .chat-message,
+[data-chat-font-scale="md"] .chat-composer textarea { font-size: 0.9rem; }
+[data-chat-font-scale="lg"] .chat-message,
+[data-chat-font-scale="lg"] .chat-composer textarea { font-size: 1rem; }
+[data-chat-font-scale="xl"] .chat-message,
+[data-chat-font-scale="xl"] .chat-composer textarea { font-size: 1.1rem; }
+
+[data-chat-density="compact"] .chat-stage { gap: 0.55rem; padding: 0.8rem; }
+[data-chat-density="compact"] .chat-message { padding: 0.65rem 0.8rem; line-height: 1.7; }
+[data-chat-density="comfortable"] .chat-stage { gap: 1rem; }
+[data-chat-density="spacious"] .chat-stage { gap: 1.4rem; padding: 1.6rem; }
+[data-chat-density="spacious"] .chat-message { padding: 1rem 1.15rem; line-height: 2; }
+
+[data-chat-preset="platform"] .chat-stage {
+  --chat-stage: #f2f7f6;
+  --chat-user: #d9f2ee;
+  --chat-assistant: #ffffff;
+  --chat-border: color-mix(in srgb, #0f8f86 15%, #d6e2e0);
+}
+[data-chat-preset="whatsapp"] .chat-stage {
+  --chat-stage: #efeae2;
+  --chat-user: #d9fdd3;
+  --chat-assistant: #ffffff;
+  --chat-border: #d8d1c8;
+}
+[data-chat-preset="chatgpt"] .chat-stage {
+  --chat-stage: #f7f7f8;
+  --chat-user: #eaf4ef;
+  --chat-assistant: #ffffff;
+  --chat-border: #e4e4e7;
+  background-image: none !important;
+}
+[data-chat-preset="chatgpt"] .chat-message {
+  width: min(100%, 52rem);
+  max-width: min(100%, 52rem);
+  margin-inline: auto !important;
+  border-radius: 1rem;
+  box-shadow: none;
+}
+[data-chat-preset="chatgpt"] .chat-message-user { background: #eef6f2; }
+[data-chat-preset="telegram"] .chat-stage {
+  --chat-stage: #dceaf5;
+  --chat-user: #c9efff;
+  --chat-assistant: #ffffff;
+  --chat-border: #c4d7e5;
+}
+
+.chat-message { overflow-wrap: anywhere; }
+.chat-message .prose,
+.chat-message p { line-height: inherit; }
+.chat-message pre { max-width: 100%; overflow-x: auto; border-radius: 0.9rem; }
+.chat-composer textarea { min-height: 5rem; line-height: 1.8; }
+
+@media (max-width: 1024px) {
+  .chat-workspace-toolbar { grid-template-columns: 1fr auto; }
+  .chat-workspace-shortcuts { grid-column: 1 / -1; order: 3; }
+}
+
+@media (max-width: 640px) {
+  .chat-workspace-toolbar { grid-template-columns: 1fr; padding: 0.7rem; border-radius: 1.1rem; }
+  .chat-workspace-toolbar__actions { width: 100%; }
+  .chat-toolbar-button { width: 100%; justify-content: center; }
+  .chat-workspace-shortcuts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
+  .chat-workspace-shortcuts a { justify-content: center; }
+  .chat-experience-panel { position: fixed; inset: auto 0 0; width: 100%; max-height: 82vh; overflow-y: auto; border-radius: 1.3rem 1.3rem 0 0; padding-bottom: max(1rem, env(safe-area-inset-bottom)); }
+  .chat-preset-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .chat-experience-controls { grid-template-columns: 1fr; }
+  .chat-message { max-width: 94%; }
+  [data-chat-preset="chatgpt"] .chat-message { max-width: 100%; }
+}
+
+[data-theme="dark"][data-chat-preset="chatgpt"] .chat-stage {
+  --chat-stage: #161817;
+  --chat-user: #24332d;
+  --chat-assistant: #1d211f;
+  --chat-border: #303733;
+}
+[data-theme="dark"][data-chat-preset="whatsapp"] .chat-stage {
+  --chat-stage: #0b141a;
+  --chat-user: #005c4b;
+  --chat-assistant: #202c33;
+  --chat-border: #2a3942;
+}
+[data-theme="dark"][data-chat-preset="telegram"] .chat-stage {
+  --chat-stage: #17212b;
+  --chat-user: #2b5278;
+  --chat-assistant: #182533;
+  --chat-border: #2a3a49;
+}
