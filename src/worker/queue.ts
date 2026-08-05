@@ -6,6 +6,7 @@ import type {
   BrowserResumePayload,
   BrowserTaskPayload,
   DocumentParsePayload,
+  NotificationDispatchPayload,
   SandboxCleanupPayload,
   SandboxExecutionPayload,
   SandboxResumePayload,
@@ -67,6 +68,15 @@ export function enqueueAgentRunResume(payload: AgentRunResumePayload) {
   return addJob("agent-run-resume", payload, {
     queueName: "agent-approvals",
     jobKey: `agent-run-resume:${payload.approvalId}`,
+  });
+}
+
+export function enqueueNotificationDispatch(payload: NotificationDispatchPayload) {
+  return addJob("notification-dispatch", payload, {
+    queueName: `notifications:${payload.organizationId}`,
+    maxAttempts: 5,
+    jobKey: `notification-dispatch:${payload.eventId}`,
+    jobKeyMode: "unsafe_dedupe",
   });
 }
 
