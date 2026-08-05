@@ -11,15 +11,16 @@ describe("integration agent binding", () => {
     expect(integrationUpdateSchema.parse({ id: integrationId, agentId: null }).agentId).toBeNull();
   });
 
-  it("keeps tenant validation and audit logging in the backend", async () => {
+  it("rejects new tenant Telegram tokens while preserving audited GitHub mutations", async () => {
     const route = await readFile("src/app/api/dashboard/integrations/route.ts", "utf8");
-    expect(route).toContain("TELEGRAM_USER_TOKENS_DISABLED");
-    expect(route).toContain('body.kind === "github"');
+    expect(route).toContain("TELEGRAM_CENTRAL_BOT_ONLY");
+    expect(route).toContain("assertTelegramUserTokensAllowed(body.kind)");
     expect(route).toContain("db().transaction");
+    expect(route).toContain('action: "integration.created"');
   });
 
   it("routes the central Telegram bot through a linked real user and the shared channel platform", async () => {
-    const component = await readFile("src/components/telegram-link-card.tsx", "utf8");
+    const component = await readFile("src/components/central-telegram-manager.tsx", "utf8");
     const webhook = await readFile("src/app/api/webhooks/telegram/route.ts", "utf8");
     const router = await readFile("src/lib/channels/router.ts", "utf8");
     expect(component).toContain("إنشاء رمز ربط");
