@@ -11,6 +11,7 @@ import {
 } from "@/lib/http/contracts";
 import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { configureTelegramWebhook } from "@/lib/integrations/telegram";
+import { telegramPlatformConfig } from "@/lib/integrations/telegram-platform";
 import { decryptSecret, encryptSecret, hashApiKey, maskSecret } from "@/lib/security/encryption";
 import { integrationAdapter } from "@/server/integrations/registry";
 
@@ -38,9 +39,20 @@ function publicConfig(kind: "telegram" | "github", config: Record<string, unknow
       botName: config.botName,
       agentId,
       webhookActive: config.webhookActive === true,
+      deprecated: true,
     };
   }
   return { login: config.login, accountName: config.accountName, agentId };
+}
+
+function assertTelegramUserTokensAllowed(kind: "telegram" | "github") {
+  if (kind === "telegram" && !telegramPlatformConfig().allowUserBotTokens) {
+    throw new ApiError(
+      409,
+      "TELEGRAM_CENTRAL_BOT_ONLY",
+      "Telegram يعمل عبر بوت المنصة المركزي. استخدم بطاقة ربط تيليجرام بدل إدخال Bot Token.",
+    );
+  }
 }
 
 async function validateAgent(organizationId: string, agentId?: string | null) {
@@ -77,6 +89,7 @@ export async function POST(request: Request) {
     assertSameOrigin(request);
     const session = await requireSession("integrations:manage");
     const body = await parseJson(request, integrationCreateSchema, 12 * 1024);
+    assertTelegramUserTokensAllowed(body.kind);
     await validateAgent(session.organizationId, body.agentId);
     const verifiedConfig = await verifyIntegration(body.kind, body.token);
     const webhookSecret = body.kind === "telegram" ? randomBytes(32).toString("base64url") : null;
@@ -139,6 +152,13 @@ export async function PATCH(request: Request) {
       eq(integrations.organizationId, session.organizationId),
     )).limit(1);
     if (!current) throw new ApiError(404, "INTEGRATION_NOT_FOUND", "التكامل غير موجود.");
+    if (current.kind === "telegram" && !telegramPlatformConfig().allowUserBotTokens) {
+      throw new ApiError(
+        409,
+        "TELEGRAM_LEGACY_INTEGRATION_READ_ONLY",
+        "تكاملات Telegram القديمة للقراءة التاريخية فقط. استخدم البوت المركزي لإدارة الربط.",
+      );
+    }
     await validateAgent(session.organizationId, body.agentId);
     const token = body.token ?? decryptSecret(current.encryptedToken, `integration:${session.organizationId}`);
     const verifiedConfig = body.token ? await verifyIntegration(current.kind, token) : {};
@@ -212,6 +232,13 @@ export async function DELETE(request: Request) {
     assertSameOrigin(request);
     const session = await requireSession("integrations:manage");
     const body = await parseJson(request, integrationDeleteSchema, 4 * 1024);
+    const [current] = await db().select({ kind: integrations.kind }).from(integrations).where(and(
+      eq(integrations.id, body.id),
+      eq(integrations.organizationId, session.organizationId),
+    )).limit(1);
+    if (current?.kind === "telegram" && !telegramPlatformConfig().allowUserBotTokens) {
+      throw new ApiError(409, "TELEGRAM_LEGACY_INTEGRATION_READ_ONLY", "لا تُحذف سجلات Telegram القديمة من الواجهة أثناء الانتقال للبوت المركزي.");
+    }
     const deleted = await db().transaction(async (tx) => {
       const [row] = await tx.delete(integrations).where(and(
         eq(integrations.id, body.id),
