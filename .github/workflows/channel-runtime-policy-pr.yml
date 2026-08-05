@@ -6,6 +6,8 @@ on:
     branches: [main]
     paths:
       - .github/workflows/channel-runtime-policy-pr.yml
+  pull_request_target:
+    types: [ready_for_review]
 
 permissions:
   contents: write
@@ -16,6 +18,7 @@ concurrency:
 
 jobs:
   remediate:
+    if: github.event_name != 'pull_request_target' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'feat/channel-platform-whatsapp')
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -26,7 +29,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version-file: .nvmrc
           cache: npm
