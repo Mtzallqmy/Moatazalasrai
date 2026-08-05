@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { getPostgresPool } from "@/db/pool";
@@ -28,6 +29,12 @@ type LockedMfaRow = {
 
 function recoveryHashes(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function constantTimeHashEquals(left: string, right: string) {
+  const leftBuffer = Buffer.from(left, "hex");
+  const rightBuffer = Buffer.from(right, "hex");
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
 }
 
 async function requireCurrentPassword(userId: string, password: string) {
@@ -170,7 +177,7 @@ export async function verifyMfaForLogin(input: { userId: string; code?: string |
 
     const hashes = recoveryHashes(credential.recovery_code_hashes);
     const recoveryHash = hashRecoveryCode(code);
-    const recoveryIndex = hashes.findIndex((hash) => hash === recoveryHash);
+    const recoveryIndex = hashes.findIndex((hash) => constantTimeHashEquals(hash, recoveryHash));
     let step: number | null = null;
     let nextHashes = hashes;
     let valid = recoveryIndex >= 0;
