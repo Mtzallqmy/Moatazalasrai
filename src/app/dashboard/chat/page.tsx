@@ -1,6 +1,7 @@
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { ChatConsole } from "@/components/chat-console";
+import { ChatExperienceToolbar } from "@/components/chat-experience-toolbar";
 import { DashboardShell } from "@/components/dashboard-shell";
 import { db } from "@/db";
 import { agents, conversationMembers, conversations, knowledgeBases, userPreferences } from "@/db/schema";
@@ -9,6 +10,7 @@ import { aiFeatureEnabled } from "@/ai/config";
 import { defaultChatAppearance, normalizeChatAppearance } from "@/lib/chat/appearance";
 import { canManageConversation, canWriteConversation, conversationAccessFilter } from "@/lib/chat/access";
 import { isPuterEnabled } from "@/lib/puter/feature";
+import "./chat-experience.css";
 
 export default async function ChatPage({ searchParams }: { searchParams: Promise<{ conversationId?: string; agentId?: string }> }) {
   const session = await currentSession();
@@ -56,14 +58,37 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
       : Promise.resolve([]),
   ]);
   const params = await searchParams;
-  return <DashboardShell session={session} activePath="/dashboard/chat" title="الدردشة" description="محادثات محفوظة وتشغيل فعلي للنموذج عبر الوكيل المنشور."><ChatConsole agents={publishedAgents} initialConversations={rows.map((row) => ({
-    ...row,
-    canWrite: canWriteConversation(session.role, row.createdByUserId, session.userId, row.memberRole),
-    canManage: canManageConversation(session.role, row.createdByUserId, session.userId, row.memberRole),
-    pinnedAt: row.pinnedAt?.toISOString() ?? null,
-    archivedAt: row.archivedAt?.toISOString() ?? null,
-    lastMessageAt: row.lastMessageAt?.toISOString() ?? null,
-    createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
-  }))} initialConversationId={params.conversationId} initialAgentId={params.agentId} currentUser={{ id: session.userId, name: session.name ?? session.email, email: session.email }} initialAppearance={normalizeChatAppearance(storedAppearance ?? defaultChatAppearance)} puterEnabled={isPuterEnabled()} knowledgeBases={bases} ragEnabled={ragEnabled} memoryEnabled={memoryEnabled} /></DashboardShell>;
+  return (
+    <DashboardShell
+      session={session}
+      activePath="/dashboard/chat"
+      title="الدردشة"
+      description="مركز موحد للمحادثات والوكلاء والقنوات والتكاملات والملفات، مع مظهر قابل للتخصيص."
+    >
+      <div className="chat-workspace-shell">
+        <ChatExperienceToolbar />
+        <ChatConsole
+          agents={publishedAgents}
+          initialConversations={rows.map((row) => ({
+            ...row,
+            canWrite: canWriteConversation(session.role, row.createdByUserId, session.userId, row.memberRole),
+            canManage: canManageConversation(session.role, row.createdByUserId, session.userId, row.memberRole),
+            pinnedAt: row.pinnedAt?.toISOString() ?? null,
+            archivedAt: row.archivedAt?.toISOString() ?? null,
+            lastMessageAt: row.lastMessageAt?.toISOString() ?? null,
+            createdAt: row.createdAt.toISOString(),
+            updatedAt: row.updatedAt.toISOString(),
+          }))}
+          initialConversationId={params.conversationId}
+          initialAgentId={params.agentId}
+          currentUser={{ id: session.userId, name: session.name ?? session.email, email: session.email }}
+          initialAppearance={normalizeChatAppearance(storedAppearance ?? defaultChatAppearance)}
+          puterEnabled={isPuterEnabled()}
+          knowledgeBases={bases}
+          ragEnabled={ragEnabled}
+          memoryEnabled={memoryEnabled}
+        />
+      </div>
+    </DashboardShell>
+  );
 }
