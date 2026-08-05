@@ -9,6 +9,7 @@ import { DashboardShell } from "@/components/dashboard-shell";
 import { WhatsAppPolicyManager } from "@/components/whatsapp-policy-manager";
 import { currentSession } from "@/lib/auth/session";
 import { can } from "@/lib/auth/permissions";
+import { getWhatsAppPolicyAdministration } from "@/lib/channels/whatsapp-policy-admin";
 
 export default async function ChannelsPage() {
   const session = await currentSession();
@@ -16,7 +17,7 @@ export default async function ChannelsPage() {
   if (!session.organizationId || !session.organizationName || !session.role) redirect("/select-organization");
   if (!can(session.role, "channels:read")) redirect("/dashboard");
 
-  const [agentRows, providerRows, toolRows, inboxRows, workflowRows, memberRows] = await Promise.all([
+  const [agentRows, providerRows, toolRows, inboxRows, workflowRows, memberRows, whatsappAdministration] = await Promise.all([
     db().select({ id: agents.id, name: agents.name, status: agents.status }).from(agents).where(and(
       eq(agents.organizationId, session.organizationId),
       eq(agents.status, "published"),
@@ -48,10 +49,21 @@ export default async function ChannelsPage() {
       .innerJoin(users, eq(users.id, organizationMembers.userId))
       .where(eq(organizationMembers.organizationId, session.organizationId))
       .orderBy(asc(users.name)),
+    getWhatsAppPolicyAdministration({ organizationId: session.organizationId }),
   ]);
 
   const members = memberRows.map((member) => ({ ...member, name: member.name ?? member.email }));
   const canManage = can(session.role, "channels:manage");
+  const initialWhatsAppData = {
+    endpoint: whatsappAdministration.endpoint ? {
+      displayPhoneNumber: whatsappAdministration.endpoint.displayPhoneNumber,
+      phoneNumberId: whatsappAdministration.endpoint.phoneNumberId,
+      businessAccountId: whatsappAdministration.endpoint.businessAccountId,
+      credentialSource: whatsappAdministration.endpoint.credentialSource,
+      status: whatsappAdministration.endpoint.status,
+    } : null,
+    effective: whatsappAdministration.effective,
+  };
 
   return (
     <DashboardShell
@@ -64,6 +76,7 @@ export default async function ChannelsPage() {
         <WhatsAppPolicyManager
           canManage={canManage}
           role={session.role}
+          initialData={initialWhatsAppData}
           options={{
             agents: agentRows.map(({ id, name }) => ({ id, name })),
             providers: providerRows.map(({ id, name, models }) => ({ id, name, models })),
