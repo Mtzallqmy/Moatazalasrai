@@ -12,10 +12,23 @@ function delay(ms) {
 
 const token = required("TELEGRAM_BOT_TOKEN");
 const secret = required("TELEGRAM_WEBHOOK_SECRET");
-const publicUrl = process.env.TELEGRAM_WEBHOOK_URL?.trim()
-  || `${(process.env.PUBLIC_APP_URL || process.env.APP_URL || "").replace(/\/$/, "")}/api/webhooks/telegram`;
+const configuredUrl = process.env.TELEGRAM_WEBHOOK_URL?.trim();
+const appUrl = (process.env.PUBLIC_APP_URL || process.env.APP_URL || "").trim().replace(/\/$/, "");
+const publicUrl = configuredUrl || `${appUrl}/api/webhooks/telegram`;
 if (!publicUrl.startsWith("https://")) throw new Error("Telegram webhook URL must use HTTPS.");
 if (secret.length < 16) throw new Error("TELEGRAM_WEBHOOK_SECRET must contain at least 16 characters.");
+
+const commands = [
+  { command: "start", description: "بدء البوت وعرض الحالة" },
+  { command: "help", description: "عرض جميع الأوامر" },
+  { command: "status", description: "حالة الربط والميزات" },
+  { command: "agents", description: "عرض الوكلاء المتاحين" },
+  { command: "new", description: "بدء محادثة جديدة" },
+  { command: "files", description: "تعليمات إرسال الملفات" },
+  { command: "unlink", description: "فصل حساب Telegram" },
+  { command: "cancel", description: "إلغاء العملية الحالية" },
+];
+const allowedUpdates = ["message", "edited_message", "callback_query"];
 
 async function call(method, body = {}) {
   let lastError;
@@ -47,21 +60,25 @@ async function call(method, body = {}) {
 const bot = await call("getMe");
 if (!bot?.username) throw new Error("Telegram bot username is missing.");
 
-// Always set the webhook on startup. getWebhookInfo does not expose the configured
-// secret token, so comparing only the URL can leave a rotated secret out of sync.
 await call("setWebhook", {
   url: publicUrl,
   secret_token: secret,
-  allowed_updates: ["message", "callback_query"],
+  allowed_updates: allowedUpdates,
   drop_pending_updates: false,
   max_connections: 40,
 });
 
+await call("setMyCommands", {
+  commands,
+  scope: { type: "all_private_chats" },
+  language_code: "ar",
+});
+
 const verified = await call("getWebhookInfo");
 if (verified?.url !== publicUrl) throw new Error("Telegram webhook verification failed: URL mismatch.");
-const allowedUpdates = Array.isArray(verified?.allowed_updates) ? verified.allowed_updates : [];
-for (const update of ["message", "callback_query"]) {
-  if (!allowedUpdates.includes(update)) throw new Error(`Telegram webhook is missing allowed update: ${update}.`);
+const registeredUpdates = Array.isArray(verified?.allowed_updates) ? verified.allowed_updates : [];
+for (const update of allowedUpdates) {
+  if (!registeredUpdates.includes(update)) throw new Error(`Telegram webhook is missing allowed update: ${update}.`);
 }
 if (verified?.last_error_message) {
   console.warn(JSON.stringify({
@@ -78,4 +95,7 @@ console.log(JSON.stringify({
   botUsername: bot.username,
   url: publicUrl,
   pendingUpdates: verified.pending_update_count ?? 0,
+  lastErrorMessage: verified.last_error_message ? String(verified.last_error_message).slice(0, 240) : null,
+  allowedUpdates: registeredUpdates,
+  commandCount: commands.length,
 }));
