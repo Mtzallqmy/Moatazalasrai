@@ -21,33 +21,48 @@ function attachClientErrorHandler(client: PoolClient) {
   client.on("error", reportPoolError);
 }
 
+async function resetClient(client: PoolClient) {
+  await client.query(
+    `SELECT
+      set_config('app.rls_bypass', '', false),
+      set_config('app.current_organization_id', '', false),
+      set_config('app.current_user_id', '', false)`,
+  );
+  await client.query("RESET ROLE");
+}
+
 async function configureClient(client: PoolClient) {
   const context = currentDatabaseContext();
   const testFallback = !context && process.env.NODE_ENV === "test";
-  await client.query(`SET ROLE ${RUNTIME_ROLE}`);
-  await client.query(
-    `SELECT
-      set_config('app.rls_bypass', $1, false),
-      set_config('app.current_organization_id', $2, false),
-      set_config('app.current_user_id', $3, false)`,
-    [
-      context?.mode === "system" || testFallback ? "on" : "off",
-      context && "organizationId" in context ? context.organizationId : "",
-      context && "userId" in context ? context.userId ?? "" : "",
-    ],
-  );
-
   const originalRelease = client.release.bind(client);
+  try {
+    await client.query(`SET ROLE ${RUNTIME_ROLE}`);
+    await client.query(
+      `SELECT
+        set_config('app.rls_bypass', $1, false),
+        set_config('app.current_organization_id', $2, false),
+        set_config('app.current_user_id', $3, false)`,
+      [
+        context?.mode === "system" || testFallback ? "on" : "off",
+        context && "organizationId" in context ? context.organizationId : "",
+        context && "userId" in context ? context.userId ?? "" : "",
+      ],
+    );
+  } catch (error) {
+    await resetClient(client).catch(() => undefined);
+    originalRelease(error instanceof Error ? error : true);
+    throw error;
+  }
+
   client.release = (error?: Error | boolean) => {
     client.release = originalRelease;
-    void client.query(
-      `SELECT
-        set_config('app.rls_bypass', '', false),
-        set_config('app.current_organization_id', '', false),
-        set_config('app.current_user_id', '', false)`,
-    ).catch(reportPoolError).finally(() => {
-      void client.query("RESET ROLE").catch(reportPoolError).finally(() => originalRelease(error));
-    });
+    void resetClient(client).then(
+      () => originalRelease(error),
+      (resetError: Error) => {
+        reportPoolError(resetError);
+        originalRelease(resetError);
+      },
+    );
   };
   return client;
 }
