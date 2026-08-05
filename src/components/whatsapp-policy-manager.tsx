@@ -67,8 +67,6 @@ export function WhatsAppPolicyManager(props: {
   );
 
   const load = useCallback(async () => {
-    setLoading(true);
-    setMessage("");
     try {
       const suffix = scope === "user" && userId ? `?userId=${encodeURIComponent(userId)}` : "";
       const response = await fetch(`/api/dashboard/channels/whatsapp-policy${suffix}`, { cache: "no-store" });
@@ -85,6 +83,18 @@ export function WhatsAppPolicyManager(props: {
   }, [scope, userId]);
 
   useEffect(() => { void load(); }, [load]);
+
+  function changeScope(nextScope: typeof scope) {
+    setLoading(true);
+    setMessage("");
+    setScope(nextScope);
+  }
+
+  function changeUser(nextUserId: string) {
+    setLoading(true);
+    setMessage("");
+    setUserId(nextUserId);
+  }
 
   async function save() {
     if (!form || !props.canManage) return;
@@ -145,7 +155,7 @@ export function WhatsAppPolicyManager(props: {
       <div className="grid gap-4 md:grid-cols-3">
         <label className="space-y-1 text-sm">
           <span>مستوى السياسة</span>
-          <select className="input" value={scope} onChange={(event) => setScope(event.target.value as typeof scope)} disabled={!props.canManage}>
+          <select className="input" value={scope} onChange={(event) => changeScope(event.target.value as typeof scope)} disabled={!props.canManage}>
             <option value="organization">المؤسسة</option>
             <option value="user">مستخدم محدد</option>
             {props.role === "owner" ? <option value="platform">افتراضيات المنصة</option> : null}
@@ -154,7 +164,7 @@ export function WhatsAppPolicyManager(props: {
         {scope === "user" ? (
           <label className="space-y-1 text-sm">
             <span>المستخدم</span>
-            <select className="input" value={userId} onChange={(event) => setUserId(event.target.value)} disabled={!props.canManage}>
+            <select className="input" value={userId} onChange={(event) => changeUser(event.target.value)} disabled={!props.canManage}>
               <option value="">اختر مستخدمًا</option>
               {props.options.members.map((member) => <option key={member.id} value={member.id}>{member.name} — {member.email}</option>)}
             </select>
