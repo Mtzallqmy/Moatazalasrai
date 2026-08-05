@@ -62,6 +62,7 @@ export function CentralTelegramManager(props: {
       const nextCode = { value: payload.data.code, deepLink: payload.data.deepLink, expiresAt: payload.data.expiresAt };
       setCode(nextCode);
       setMessage("تم إنشاء الرمز. يجري فتح بوت Telegram لإكمال الربط.");
+      setBusy(false);
       window.location.assign(nextCode.deepLink);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "تعذر إنشاء رمز الربط.");
