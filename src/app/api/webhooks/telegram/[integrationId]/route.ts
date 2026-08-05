@@ -1,4 +1,5 @@
-// Telegram webhook preserves secret validation and GitHub commands, then delegates channel traffic.
+// Deprecated compatibility route for historical per-organization Telegram integrations.
+// The production central bot uses POST /api/webhooks/telegram and never reads organization bot tokens.
 import { after } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
@@ -9,6 +10,7 @@ import { telegramChannelAdapter } from "@/lib/channels/telegram-adapter";
 import { apiSuccess, getRequestId } from "@/lib/http/api";
 import { listGitHubRepositories, readGitHubFile } from "@/lib/integrations/github";
 import { sendTelegramMessage } from "@/lib/integrations/telegram";
+import { telegramPlatformConfig } from "@/lib/integrations/telegram-platform";
 import { decryptSecret, secureHashEquals } from "@/lib/security/encryption";
 
 export const runtime = "nodejs";
@@ -71,16 +73,10 @@ async function processUpdate(input: {
       return;
     }
     if (text === "/github repos" || text.startsWith("/github read ")) {
-      await sendTelegramMessage({
-        token,
-        chatId,
-        text: await githubCommand(input.integration.organizationId, text),
-      });
+      await sendTelegramMessage({ token, chatId, text: await githubCommand(input.integration.organizationId, text) });
     } else {
       const connection = await ensureTelegramChannelConnection({ integration: input.integration });
-      const incoming = telegramChannelAdapter.normalizeIncoming(input.update, {
-        externalAccountId: connection.externalAccountId,
-      });
+      const incoming = telegramChannelAdapter.normalizeIncoming(input.update, { externalAccountId: connection.externalAccountId });
       await Promise.all(incoming.map((message) => routeIncomingChannelMessage({ connection, incoming: message })));
     }
     await db().update(telegramUpdates).set({ status: "completed", completedAt: new Date() })
@@ -91,11 +87,7 @@ async function processUpdate(input: {
       .where(eq(telegramUpdates.id, input.updateRowId));
     const chatId = telegramChatId(input.update);
     if (chatId) {
-      await sendTelegramMessage({
-        token,
-        chatId,
-        text: `تعذر إكمال الطلب (${errorCode}). راجع حالة القناة والوكيل والمزود.`,
-      }).catch(() => undefined);
+      await sendTelegramMessage({ token, chatId, text: `تعذر إكمال الطلب (${errorCode}). راجع حالة القناة والوكيل والمزود.` }).catch(() => undefined);
     }
     console.error(JSON.stringify({
       level: "error",
@@ -107,11 +99,12 @@ async function processUpdate(input: {
   }
 }
 
-export async function POST(
-  request: Request,
-  context: { params: Promise<{ integrationId: string }> },
-) {
+export async function POST(request: Request, context: { params: Promise<{ integrationId: string }> }) {
   const requestId = getRequestId(request);
+  const central = telegramPlatformConfig();
+  if (central.enabled && !central.allowUserBotTokens) {
+    return new Response(null, { status: 410, headers: { "cache-control": "no-store" } });
+  }
   const { integrationId } = await context.params;
   const [integration] = await db().select().from(integrations).where(and(
     eq(integrations.id, integrationId),
@@ -120,33 +113,19 @@ export async function POST(
     eq(integrations.status, "verified"),
   )).limit(1);
   if (!integration) return apiSuccess({ accepted: true }, requestId);
-  const expectedHash = typeof integration.config.webhookSecretHash === "string"
-    ? integration.config.webhookSecretHash
-    : "";
+  const expectedHash = typeof integration.config.webhookSecretHash === "string" ? integration.config.webhookSecretHash : "";
   const suppliedSecret = request.headers.get("x-telegram-bot-api-secret-token") ?? "";
-  if (!expectedHash || !suppliedSecret || !secureHashEquals(expectedHash, suppliedSecret)) {
-    return new Response(null, { status: 401 });
-  }
+  if (!expectedHash || !suppliedSecret || !secureHashEquals(expectedHash, suppliedSecret)) return new Response(null, { status: 401 });
   const contentLength = Number(request.headers.get("content-length") ?? 0);
-  if (Number.isFinite(contentLength) && contentLength > MAX_TELEGRAM_WEBHOOK_BYTES) {
-    return new Response(null, { status: 413 });
-  }
+  if (Number.isFinite(contentLength) && contentLength > MAX_TELEGRAM_WEBHOOK_BYTES) return new Response(null, { status: 413 });
   const raw = await request.text();
-  if (new TextEncoder().encode(raw).byteLength > MAX_TELEGRAM_WEBHOOK_BYTES) {
-    return new Response(null, { status: 413 });
-  }
-  const update = (() => {
-    try { return JSON.parse(raw) as TelegramUpdate; } catch { return null; }
-  })();
-  if (!update || !Number.isSafeInteger(update.update_id)) {
-    return apiSuccess({ accepted: false }, requestId);
-  }
+  if (new TextEncoder().encode(raw).byteLength > MAX_TELEGRAM_WEBHOOK_BYTES) return new Response(null, { status: 413 });
+  const update = (() => { try { return JSON.parse(raw) as TelegramUpdate; } catch { return null; } })();
+  if (!update || !Number.isSafeInteger(update.update_id)) return apiSuccess({ accepted: false }, requestId);
   let updateRow;
   try {
-    [updateRow] = await db().insert(telegramUpdates).values({
-      integrationId: integration.id,
-      updateId: String(update.update_id),
-    }).returning({ id: telegramUpdates.id });
+    [updateRow] = await db().insert(telegramUpdates).values({ integrationId: integration.id, updateId: String(update.update_id) })
+      .returning({ id: telegramUpdates.id });
   } catch (error) {
     const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
     if (code === "23505") return apiSuccess({ accepted: true, duplicate: true }, requestId);

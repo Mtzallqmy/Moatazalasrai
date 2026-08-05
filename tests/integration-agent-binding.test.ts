@@ -6,27 +6,28 @@ const integrationId = "00000000-0000-4000-8000-000000000001";
 const agentId = "00000000-0000-4000-8000-000000000002";
 
 describe("integration agent binding", () => {
-  it("accepts reassignment and explicit unbinding", () => {
+  it("keeps the legacy schema compatible for historical Telegram records", () => {
     expect(integrationUpdateSchema.parse({ id: integrationId, agentId }).agentId).toBe(agentId);
     expect(integrationUpdateSchema.parse({ id: integrationId, agentId: null }).agentId).toBeNull();
   });
 
-  it("keeps tenant validation and audit logging in the backend", async () => {
+  it("rejects new tenant Telegram tokens while preserving audited GitHub mutations", async () => {
     const route = await readFile("src/app/api/dashboard/integrations/route.ts", "utf8");
-    expect(route).toContain("eq(agents.organizationId, organizationId)");
-    expect(route).toContain('eq(agents.status, "published")');
-    expect(route).toContain('"integration.agent_changed"');
-    expect(route).toContain("previousAgentId");
+    expect(route).toContain("TELEGRAM_CENTRAL_BOT_ONLY");
+    expect(route).toContain("assertTelegramUserTokensAllowed(body.kind)");
     expect(route).toContain("db().transaction");
+    expect(route).toContain('action: "integration.created"');
   });
 
-  it("offers a real Telegram agent selector and routes through the shared channel platform", async () => {
-    const component = await readFile("src/components/integrations-manager.tsx", "utf8");
-    const webhook = await readFile("src/app/api/webhooks/telegram/[integrationId]/route.ts", "utf8");
+  it("routes the central Telegram bot through a linked real user and the shared channel platform", async () => {
+    const component = await readFile("src/components/central-telegram-manager.tsx", "utf8");
+    const webhook = await readFile("src/app/api/webhooks/telegram/route.ts", "utf8");
     const router = await readFile("src/lib/channels/router.ts", "utf8");
-    expect(component).toContain("الوكيل المرتبط بهذا البوت");
-    expect(component).toContain("agentId: event.target.value || null");
-    expect(webhook).toContain("ensureTelegramChannelConnection");
+    expect(component).toContain("إنشاء رمز ربط");
+    expect(component).toContain("فتح البوت");
+    expect(webhook).toContain("resolveTelegramAccount");
+    expect(webhook).toContain("telegramFeatureAllowed");
+    expect(webhook).toContain("ensureCentralTelegramChannelConnection");
     expect(webhook).toContain("routeIncomingChannelMessage");
     expect(router).toContain("channelConversationLinks");
     expect(router).toContain("conversationId: conversation.id");
