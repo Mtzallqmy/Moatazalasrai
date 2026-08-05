@@ -6,6 +6,7 @@ import { whatsappWebhookEvents } from "@/db/schema";
 import { channelConnectionForWebhook } from "@/lib/channels/connections";
 import { whatsappChannelAdapter } from "@/lib/channels/whatsapp-adapter";
 import { routeIncomingChannelMessage } from "@/lib/channels/router";
+import { isFeatureEnabled } from "@/lib/control-plane/features";
 import { apiFailure, apiSuccess, getRequestId, handleApiError } from "@/lib/http/api";
 import { requireWhatsAppConfig } from "@/lib/integrations/whatsapp/config";
 import { parseWhatsAppCommand, processWhatsAppMessage } from "@/lib/integrations/whatsapp/commands";
@@ -108,6 +109,7 @@ export async function POST(request: Request) {
     }> = [];
     let duplicates = 0;
     let unconfigured = 0;
+    let featureDisabled = 0;
 
     for (const item of extracted) {
       const parsed = parseWhatsAppCommand(item.message);
@@ -136,8 +138,20 @@ export async function POST(request: Request) {
         kind: "whatsapp",
         externalAccountId: incoming.externalAccountId || config.phoneNumberId,
       });
-      if (connection) channelTasks.push({ connection, incoming });
-      else unconfigured += 1;
+      if (!connection) {
+        unconfigured += 1;
+        continue;
+      }
+      const enabled = await isFeatureEnabled(
+        connection.organizationId,
+        "whatsapp_integration",
+        incoming.senderExternalId,
+      );
+      if (!enabled) {
+        featureDisabled += 1;
+        continue;
+      }
+      channelTasks.push({ connection, incoming });
     }
 
     if (legacyTasks.length > 0 || channelTasks.length > 0) {
@@ -154,6 +168,7 @@ export async function POST(request: Request) {
       channelMessages: channelTasks.length,
       duplicates,
       unconfigured,
+      featureDisabled,
     }, requestId);
   } catch (error) {
     return handleApiError(error, requestId, "/api/webhooks/whatsapp");
