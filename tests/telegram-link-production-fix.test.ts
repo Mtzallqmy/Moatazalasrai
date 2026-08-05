@@ -11,12 +11,15 @@ describe("Telegram production linking", () => {
     expect(component).not.toContain('target="_blank"');
   });
 
-  it("reapplies and verifies the Telegram webhook on every production start", async () => {
+  it("reapplies and verifies the Telegram webhook without taking down the web service", async () => {
     const startup = await readFile("scripts/start-production.mjs", "utf8");
     const setup = await readFile("scripts/setup-telegram-webhook.mjs", "utf8");
     expect(startup).toContain("bootstrapTelegramWebhook");
     expect(startup).toContain("scripts/setup-telegram-webhook.mjs");
     expect(startup).toContain("telegram.webhook.bootstrap.failed");
+    expect(startup).toContain("telegram.webhook.bootstrap.retry_scheduled");
+    expect(startup).toContain("scheduleTelegramBootstrap(1_000)");
+    expect(startup).not.toContain("process.exit(1);\n  }\n  console.info(JSON.stringify({ level: \"info\", event: \"telegram.webhook.bootstrap.completed\"");
     expect(setup).toContain('call("setWebhook"');
     expect(setup).toContain('call("getWebhookInfo"');
     expect(setup).toContain("last_error_message");

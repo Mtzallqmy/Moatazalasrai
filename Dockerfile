@@ -47,10 +47,20 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=production-dependencies --chown=nextjs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
 COPY --from=builder --chown=nextjs:nodejs /app/drizzle ./drizzle
-COPY --from=builder --chown=nextjs:nodejs /app/scripts/migrate.mjs /app/scripts/migrate-worker.mjs /app/scripts/sql-utils.mjs /app/scripts/start-production.mjs /app/scripts/validate-runtime-env.mjs ./scripts/
+COPY --from=builder --chown=nextjs:nodejs \
+  /app/scripts/migrate.mjs \
+  /app/scripts/migrate-worker.mjs \
+  /app/scripts/sql-utils.mjs \
+  /app/scripts/start-production.mjs \
+  /app/scripts/setup-telegram-webhook.mjs \
+  /app/scripts/validate-runtime-env.mjs \
+  ./scripts/
 
-# Fail the image build if Railway pre-deploy migrations cannot resolve their production drivers.
-RUN node --input-type=module -e "await import('graphile-worker'); await import('pg')"
+# Fail the image build if Railway startup or pre-deploy migration assets are incomplete.
+RUN test -f /app/scripts/start-production.mjs \
+  && test -f /app/scripts/setup-telegram-webhook.mjs \
+  && test -f /app/scripts/validate-runtime-env.mjs \
+  && node --input-type=module -e "await import('graphile-worker'); await import('pg')"
 
 USER nextjs
 EXPOSE 3000
