@@ -4,8 +4,15 @@ import * as coreSchema from "./schema";
 import * as channelSchema from "./channel-schema";
 import * as controlPlaneSchema from "./control-plane-schema";
 import * as adminSchema from "./admin-schema";
+import * as whatsappPlatformSchema from "./whatsapp-platform-schema";
 
-const schema = { ...coreSchema, ...channelSchema, ...controlPlaneSchema, ...adminSchema };
+const schema = {
+  ...coreSchema,
+  ...channelSchema,
+  ...controlPlaneSchema,
+  ...adminSchema,
+  ...whatsappPlatformSchema,
+};
 type DatabaseSchema = typeof schema;
 let database: ReturnType<typeof drizzle<DatabaseSchema>> | null = null;
 
@@ -37,6 +44,7 @@ const requiredTables = [
   "whatsapp_connections",
   "whatsapp_link_tokens",
   "whatsapp_webhook_events",
+  "whatsapp_user_sessions",
   "attachments",
   "agent_memories",
   "knowledge_bases",
@@ -131,6 +139,7 @@ export async function checkDatabase(): Promise<{
       to_regclass('public.whatsapp_connections')::text AS whatsapp_connections,
       to_regclass('public.whatsapp_link_tokens')::text AS whatsapp_link_tokens,
       to_regclass('public.whatsapp_webhook_events')::text AS whatsapp_webhook_events,
+      to_regclass('public.whatsapp_user_sessions')::text AS whatsapp_user_sessions,
       to_regclass('public.attachments')::text AS attachments,
       to_regclass('public.agent_memories')::text AS agent_memories,
       to_regclass('public.knowledge_bases')::text AS knowledge_bases,
