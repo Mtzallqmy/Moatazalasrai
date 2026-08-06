@@ -27,7 +27,7 @@ export async function getOrCreateWhatsAppSession(input: {
   userId: string;
   organizationId: string;
   waId: string;
-}) {
+}): Promise<WhatsAppSession> {
   const [session] = await db().insert(whatsappUserSessions).values({
     userId: input.userId,
     organizationId: input.organizationId,
@@ -47,7 +47,7 @@ export async function getOrCreateWhatsAppSession(input: {
   return resetExpiredWhatsAppSession(session);
 }
 
-async function resetExpiredWhatsAppSession(session: WhatsAppSession) {
+async function resetExpiredWhatsAppSession(session: WhatsAppSession): Promise<WhatsAppSession> {
   const [reset] = await db().update(whatsappUserSessions).set({
     activeFlow: null,
     currentStep: null,
@@ -59,7 +59,8 @@ async function resetExpiredWhatsAppSession(session: WhatsAppSession) {
     eq(whatsappUserSessions.id, session.id),
     eq(whatsappUserSessions.version, session.version),
   )).returning();
-  return reset ?? getOrCreateWhatsAppSession({
+  if (reset) return reset;
+  return getOrCreateWhatsAppSession({
     userId: session.userId,
     organizationId: session.organizationId,
     waId: session.whatsappWaId,
@@ -75,7 +76,7 @@ export async function updateWhatsAppSession(input: {
   selectedConversationId?: string | null;
   state?: Record<string, unknown>;
   extend?: boolean;
-}) {
+}): Promise<WhatsAppSession> {
   const [updated] = await db().update(whatsappUserSessions).set({
     ...(input.activeFlow === undefined ? {} : { activeFlow: input.activeFlow }),
     ...(input.currentStep === undefined ? {} : { currentStep: input.currentStep }),
@@ -137,7 +138,7 @@ export function finishWhatsAppFlow(input: {
   });
 }
 
-export function cancelWhatsAppFlow(session: WhatsAppSession) {
+export function cancelWhatsAppFlow(session: WhatsAppSession): Promise<WhatsAppSession> {
   if (!session.activeFlow) return Promise.resolve(session);
   return finishWhatsAppFlow({ session });
 }
