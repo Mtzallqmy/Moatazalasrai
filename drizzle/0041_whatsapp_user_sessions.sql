@@ -26,3 +26,19 @@ CREATE INDEX IF NOT EXISTS "whatsapp_user_sessions_active_flow_idx"
 CREATE INDEX IF NOT EXISTS "whatsapp_user_sessions_conversation_idx"
   ON "whatsapp_user_sessions" ("organization_id", "selected_conversation_id")
   WHERE "selected_conversation_id" IS NOT NULL;
+
+-- Safe operational defaults for the real menu. Sensitive and financial operations remain blocked.
+ALTER TABLE "platform_whatsapp_defaults"
+  ALTER COLUMN "default_permissions" SET DEFAULT
+  '["ai.chat","agent.use","account.read","conversation.open","files.use","handoff.request"]'::jsonb;
+
+UPDATE "platform_whatsapp_defaults"
+SET "default_permissions" = (
+  SELECT jsonb_agg(value ORDER BY value)
+  FROM (
+    SELECT DISTINCT jsonb_array_elements_text(
+      COALESCE("platform_whatsapp_defaults"."default_permissions", '[]'::jsonb)
+      || '["ai.chat","agent.use","account.read","conversation.open","files.use","handoff.request"]'::jsonb
+    ) AS value
+  ) AS permissions
+), "updated_at" = now();
