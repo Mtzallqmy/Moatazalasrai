@@ -3,7 +3,7 @@ import type { ChannelIncomingMessage } from "@/lib/channels/types";
 import type { ChannelClientKind, ChannelClientSession } from "./session-service";
 
 export type ChannelClientAction = {
-  id: string;
+  id?: string;
   title: string;
   url?: string;
 };
