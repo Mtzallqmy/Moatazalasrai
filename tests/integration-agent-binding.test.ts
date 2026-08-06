@@ -19,20 +19,25 @@ describe("integration agent binding", () => {
     expect(route).toContain('action: "integration.created"');
   });
 
-  it("routes the central Telegram bot through a linked real user and the shared channel platform", async () => {
+  it("queues Telegram quickly and resolves the linked real user in the worker processor", async () => {
     const component = await readFile("src/components/central-telegram-manager.tsx", "utf8");
     const webhook = await readFile("src/app/api/webhooks/telegram/route.ts", "utf8");
+    const processor = await readFile("src/lib/telegram/update-processor.ts", "utf8");
+    const runtime = await readFile("src/lib/channel-client/runtime.ts", "utf8");
     const router = await readFile("src/lib/channels/router.ts", "utf8");
     expect(component).toContain("إنشاء رمز وفتح البوت");
     expect(component).toContain("فتح البوت مباشرة");
     expect(component).toContain("window.location.href = nextCode.deepLink");
     expect(component).toContain("nextCode.appDeepLink");
     expect(component).toContain('window.addEventListener("pageshow", synchronize)');
-    expect(webhook).toContain("resolveTelegramAccount");
-    expect(webhook).toContain("telegramFeatureAllowed");
-    expect(webhook).toContain("ensureCentralTelegramChannelConnection");
-    expect(webhook).toContain("routeIncomingChannelMessage");
-    expect(webhook).toContain("startNewConversation");
+    expect(webhook).toContain("enqueueTelegramCentralUpdate");
+    expect(webhook).not.toContain("routeIncomingChannelMessage");
+    expect(processor).toContain("resolveTelegramAccount");
+    expect(processor).toContain("ensureChannelClientSession");
+    expect(processor).toContain("processChannelClientInput");
+    expect(runtime).toContain("listAccessibleChannelAgents");
+    expect(runtime).toContain("selectChannelAgent");
+    expect(runtime).toContain("routeIncomingChannelMessage");
     expect(router).toContain("channelConversationLinks");
     expect(router).toContain("conversationId: conversation.id");
   });
