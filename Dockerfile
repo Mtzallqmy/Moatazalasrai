@@ -64,6 +64,7 @@ RUN test -f /app/scripts/start-production.mjs \
   && test -f /app/scripts/validate-runtime-env.mjs \
   && test -f /app/drizzle/0039_central_telegram_bot.sql \
   && test -f /app/drizzle/0040_telegram_admin_default_permissions.sql \
+  && test -f /app/drizzle/0041_channel_client_sessions.sql \
   && node --input-type=module -e "await import('graphile-worker'); await import('pg')"
 
 USER nextjs
