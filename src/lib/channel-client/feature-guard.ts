@@ -1,6 +1,5 @@
 import type { ChannelIncomingMessage } from "@/lib/channels/types";
-import type { ChannelClientSession } from "./session-service";
-import type { ChannelClientKind } from "./session-service";
+import type { ChannelClientKind, ChannelClientSession } from "./session-service";
 
 export type ChannelFeatureRequirement = {
   key: string;
@@ -63,6 +62,7 @@ export function requiredChannelFeatures(input: {
     && input.session.activeFlow !== "agent.create"
     && (input.text.trim().length > 0 || input.incoming.attachments.length > 0);
   if (ordinaryMessage || input.session.activeFlow === "chat") add("chat", "الدردشة");
+  if (ordinaryMessage && !input.session.selectedAgentId) add("agents", "الوكلاء");
 
   return [...requirements].map(([key, labelAr]) => ({ key, labelAr }));
 }
