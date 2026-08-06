@@ -12,6 +12,7 @@ import {
 } from "drizzle-orm/pg-core";
 import {
   agents,
+  conversations,
   organizations,
   providerCredentials,
   users,
@@ -111,4 +112,26 @@ export const whatsappUserPolicies = pgTable("whatsapp_user_policies", {
   index("whatsapp_user_policy_user_idx").on(table.userId),
   index("whatsapp_user_policy_force_handoff_idx").on(table.organizationId, table.forceHumanHandoff)
     .where(sql`${table.forceHumanHandoff} = true`),
+]);
+
+export const whatsappUserSessions = pgTable("whatsapp_user_sessions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  whatsappWaId: text("whatsapp_wa_id").notNull(),
+  activeFlow: text("active_flow"),
+  currentStep: text("current_step"),
+  selectedAgentId: uuid("selected_agent_id").references(() => agents.id, { onDelete: "set null" }),
+  selectedTeamId: uuid("selected_team_id"),
+  selectedConversationId: uuid("selected_conversation_id").references(() => conversations.id, { onDelete: "set null" }),
+  state: jsonb("state").$type<Record<string, unknown>>().notNull().default({}),
+  version: integer("version").notNull().default(1),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("whatsapp_user_sessions_identity_unique_idx").on(table.userId, table.organizationId, table.whatsappWaId),
+  index("whatsapp_user_sessions_active_flow_idx").on(table.organizationId, table.activeFlow, table.expiresAt),
+  index("whatsapp_user_sessions_conversation_idx").on(table.organizationId, table.selectedConversationId)
+    .where(sql`${table.selectedConversationId} IS NOT NULL`),
 ]);
