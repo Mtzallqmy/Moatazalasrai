@@ -4,6 +4,7 @@ export default defineConfig({
   schema: [
     "./src/db/schema.ts",
     "./src/db/channel-schema.ts",
+    "./src/db/channel-client-schema.ts",
     "./src/db/control-plane-schema.ts",
     "./src/db/admin-schema.ts",
     "./src/db/mcp-catalog-schema.ts",
