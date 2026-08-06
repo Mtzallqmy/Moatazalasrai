@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
+import { deniedChannelFeature, requiredChannelFeatures } from "@/lib/channel-client/feature-guard";
 import { normalizeChannelClientView, sendChannelClientView } from "@/lib/channel-client/message-renderer";
 
 describe("shared channel client runtime", () => {
@@ -16,6 +17,38 @@ describe("shared channel client runtime", () => {
       text: "رسالة صالحة",
       actions: [[{ id: "x".repeat(65), title: "إجراء" }]],
     })).toThrowError(expect.objectContaining({ code: "CHANNEL_CALLBACK_TOO_LONG" }));
+  });
+
+  it("requires real media and chat features before worker processing", async () => {
+    const requirements = requiredChannelFeatures({
+      channel: "telegram",
+      session: { activeFlow: "chat" } as never,
+      incoming: { attachments: [{ kind: "image" }] } as never,
+      text: "حلل الصورة",
+    });
+    expect(requirements).toEqual(expect.arrayContaining([
+      { key: "telegram.images", labelAr: "الصور" },
+      { key: "telegram.chat", labelAr: "الدردشة" },
+    ]));
+    const denied = await deniedChannelFeature({
+      requirements,
+      featureAllowed: async (key) => key !== "telegram.images",
+    });
+    expect(denied).toEqual({ key: "telegram.images", labelAr: "الصور" });
+  });
+
+  it("requires administrative channel permission throughout agent creation", () => {
+    const requirements = requiredChannelFeatures({
+      channel: "whatsapp",
+      session: { activeFlow: "agent.create" } as never,
+      incoming: { attachments: [] } as never,
+      actionId: "cc.agent.confirm",
+      text: "",
+    });
+    expect(requirements).toContainEqual({
+      key: "whatsapp.admin_commands",
+      labelAr: "إنشاء وإدارة الوكلاء",
+    });
   });
 
   it("contains only capabilities backed by implemented shared handlers", async () => {
