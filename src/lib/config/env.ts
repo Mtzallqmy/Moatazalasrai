@@ -2,6 +2,7 @@ import { telegramPlatformConfig, type TelegramPlatformConfig } from "@/lib/integ
 
 type NodeEnvironment = "development" | "test" | "production";
 type LogLevel = "debug" | "info" | "warn" | "error";
+type ExecutionRunnerKind = "existing" | "gvisor" | "e2b" | "daytona";
 
 type RuntimeEnvironment = {
   nodeEnv: NodeEnvironment;
@@ -49,6 +50,28 @@ type RuntimeEnvironment = {
   sandboxWorkspaceDiskBytes: number;
   sandboxMaxConcurrentPerOrganization: number;
   sandboxArtifactRetentionDays: number;
+  executionKernelEnabled: boolean;
+  executionRunner: ExecutionRunnerKind;
+  executionDefaultTimeoutMs: number;
+  executionDefaultMemoryBytes: number;
+  executionDefaultDiskBytes: number;
+  executionDefaultMaxProcesses: number;
+  executionDefaultMaxOutputBytes: number;
+  executionDefaultMaxArtifactBytes: number;
+  executionDefaultNetworkMode: "deny_all" | "allowlist";
+  executionWorkspaceTtlSeconds: number;
+  executionHeartbeatIntervalSeconds: number;
+  executionLeaseTtlSeconds: number;
+  executionReconcileIntervalSeconds: number;
+  executionE2bEnabled: boolean;
+  e2bApiKey?: string;
+  executionDaytonaEnabled: boolean;
+  daytonaApiKey?: string;
+  executionGvisorEnabled: boolean;
+  executionGvisorRuntime: string;
+  executionCredentialBrokerEnabled: boolean;
+  executionCredentialGrantTtlSeconds: number;
+  executionProxySharedSecret?: string;
 };
 
 let cached: RuntimeEnvironment | null = null;
@@ -92,6 +115,18 @@ function integerEnv(name: string, fallback: number, minimum: number, maximum: nu
     throw new Error(`${name} must be an integer between ${minimum} and ${maximum}.`);
   }
   return value;
+}
+
+function executionRunner(value: string | undefined): ExecutionRunnerKind {
+  const candidate = value?.trim() || "existing";
+  if (candidate === "existing" || candidate === "gvisor" || candidate === "e2b" || candidate === "daytona") return candidate;
+  throw new Error("EXECUTION_RUNNER must be existing, gvisor, e2b, or daytona.");
+}
+
+function executionNetworkMode(value: string | undefined): "deny_all" | "allowlist" {
+  const candidate = value?.trim() || "deny_all";
+  if (candidate === "deny_all" || candidate === "allowlist") return candidate;
+  throw new Error("EXECUTION_DEFAULT_NETWORK_MODE must be deny_all or allowlist.");
 }
 
 function validateEncryptionKey(value: string): string {
@@ -213,6 +248,31 @@ export function env(): RuntimeEnvironment {
   if (browserRunnerSharedSecret && browserRunnerSharedSecret.length < 32) throw new Error("BROWSER_RUNNER_SHARED_SECRET must contain at least 32 characters.");
   if (sandboxRunnerSharedSecret && sandboxRunnerSharedSecret.length < 32) throw new Error("SANDBOX_RUNNER_SHARED_SECRET must contain at least 32 characters.");
 
+  const executionKernelEnabled = booleanEnv("EXECUTION_KERNEL_ENABLED");
+  const selectedExecutionRunner = executionRunner(process.env.EXECUTION_RUNNER);
+  const executionE2bEnabled = booleanEnv("EXECUTION_E2B_ENABLED");
+  const e2bApiKey = optional("E2B_API_KEY");
+  const executionDaytonaEnabled = booleanEnv("EXECUTION_DAYTONA_ENABLED");
+  const daytonaApiKey = optional("DAYTONA_API_KEY");
+  const executionGvisorEnabled = booleanEnv("EXECUTION_GVISOR_ENABLED");
+  const executionGvisorRuntime = optional("EXECUTION_GVISOR_RUNTIME") ?? "runsc";
+  const executionCredentialBrokerEnabled = booleanEnv("EXECUTION_CREDENTIAL_BROKER_ENABLED", true);
+  const executionProxySharedSecret = optional("EXECUTION_PROXY_SHARED_SECRET");
+  if (executionE2bEnabled && !e2bApiKey) throw new Error("E2B_API_KEY is required when EXECUTION_E2B_ENABLED is true.");
+  if (executionDaytonaEnabled && !daytonaApiKey) throw new Error("DAYTONA_API_KEY is required when EXECUTION_DAYTONA_ENABLED is true.");
+  if (executionKernelEnabled && selectedExecutionRunner === "existing" && (!sandboxRunnerUrl || !sandboxRunnerSharedSecret)) {
+    throw new Error("SANDBOX_RUNNER_URL and SANDBOX_RUNNER_SHARED_SECRET are required for EXECUTION_RUNNER=existing.");
+  }
+  if (executionKernelEnabled && selectedExecutionRunner === "e2b" && !executionE2bEnabled) throw new Error("EXECUTION_RUNNER=e2b requires EXECUTION_E2B_ENABLED=true.");
+  if (executionKernelEnabled && selectedExecutionRunner === "daytona" && !executionDaytonaEnabled) throw new Error("EXECUTION_RUNNER=daytona requires EXECUTION_DAYTONA_ENABLED=true.");
+  if (executionKernelEnabled && selectedExecutionRunner === "gvisor" && !executionGvisorEnabled) throw new Error("EXECUTION_RUNNER=gvisor requires EXECUTION_GVISOR_ENABLED=true.");
+  if (executionKernelEnabled && selectedExecutionRunner === "gvisor" && process.env.RAILWAY_ENVIRONMENT) {
+    throw new Error("gVisor/runsc requires a dedicated host and is not supported inside Railway.");
+  }
+  if (executionKernelEnabled && executionCredentialBrokerEnabled && (!executionProxySharedSecret || executionProxySharedSecret.length < 32)) {
+    throw new Error("EXECUTION_PROXY_SHARED_SECRET with at least 32 characters is required when the execution credential broker is enabled.");
+  }
+
   const config: RuntimeEnvironment = {
     nodeEnv,
     databaseUrl: required("DATABASE_URL"),
@@ -240,6 +300,25 @@ export function env(): RuntimeEnvironment {
     sandboxWorkspaceDiskBytes: integerEnv("SANDBOX_WORKSPACE_DISK_BYTES", 536_870_912, 10_485_760, 10_737_418_240),
     sandboxMaxConcurrentPerOrganization: integerEnv("SANDBOX_MAX_CONCURRENT_PER_ORG", 2, 1, 20),
     sandboxArtifactRetentionDays: integerEnv("SANDBOX_ARTIFACT_RETENTION_DAYS", 7, 1, 90),
+    executionKernelEnabled,
+    executionRunner: selectedExecutionRunner,
+    executionDefaultTimeoutMs: integerEnv("EXECUTION_DEFAULT_TIMEOUT_MS", 300_000, 1_000, 1_800_000),
+    executionDefaultMemoryBytes: integerEnv("EXECUTION_DEFAULT_MEMORY_BYTES", 536_870_912, 67_108_864, 8_589_934_592),
+    executionDefaultDiskBytes: integerEnv("EXECUTION_DEFAULT_DISK_BYTES", 1_073_741_824, 16_777_216, 21_474_836_480),
+    executionDefaultMaxProcesses: integerEnv("EXECUTION_DEFAULT_MAX_PROCESSES", 64, 1, 512),
+    executionDefaultMaxOutputBytes: integerEnv("EXECUTION_DEFAULT_MAX_OUTPUT_BYTES", 5_242_880, 1_024, 52_428_800),
+    executionDefaultMaxArtifactBytes: integerEnv("EXECUTION_DEFAULT_MAX_ARTIFACT_BYTES", 104_857_600, 1_024, 2_147_483_648),
+    executionDefaultNetworkMode: executionNetworkMode(process.env.EXECUTION_DEFAULT_NETWORK_MODE),
+    executionWorkspaceTtlSeconds: integerEnv("EXECUTION_WORKSPACE_TTL_SECONDS", 1_800, 60, 86_400),
+    executionHeartbeatIntervalSeconds: integerEnv("EXECUTION_HEARTBEAT_INTERVAL_SECONDS", 15, 5, 300),
+    executionLeaseTtlSeconds: integerEnv("EXECUTION_LEASE_TTL_SECONDS", 60, 30, 300),
+    executionReconcileIntervalSeconds: integerEnv("EXECUTION_RECONCILE_INTERVAL_SECONDS", 60, 30, 900),
+    executionE2bEnabled,
+    executionDaytonaEnabled,
+    executionGvisorEnabled,
+    executionGvisorRuntime,
+    executionCredentialBrokerEnabled,
+    executionCredentialGrantTtlSeconds: integerEnv("EXECUTION_CREDENTIAL_GRANT_TTL_SECONDS", 300, 30, 900),
   };
 
   const bootstrapAdminToken = optional("BOOTSTRAP_ADMIN_TOKEN");
@@ -262,6 +341,9 @@ export function env(): RuntimeEnvironment {
   if (googleOauthClientId) config.googleOauthClientId = googleOauthClientId;
   if (googleOauthClientSecret) config.googleOauthClientSecret = googleOauthClientSecret;
   if (googleOauthRedirectUri) config.googleOauthRedirectUri = googleOauthRedirectUri;
+  if (e2bApiKey) config.e2bApiKey = e2bApiKey;
+  if (daytonaApiKey) config.daytonaApiKey = daytonaApiKey;
+  if (executionProxySharedSecret) config.executionProxySharedSecret = executionProxySharedSecret;
 
   cached = config;
   return config;
