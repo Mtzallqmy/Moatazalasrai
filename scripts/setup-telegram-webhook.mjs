@@ -18,17 +18,18 @@ const publicUrl = configuredUrl || `${appUrl}/api/webhooks/telegram`;
 if (!publicUrl.startsWith("https://")) throw new Error("Telegram webhook URL must use HTTPS.");
 if (secret.length < 16) throw new Error("TELEGRAM_WEBHOOK_SECRET must contain at least 16 characters.");
 
+// Register commands only when there is a complete command router behind them.
 const commands = [
-  { command: "start", description: "بدء البوت وعرض الحالة" },
-  { command: "help", description: "عرض جميع الأوامر" },
-  { command: "status", description: "حالة الربط والميزات" },
-  { command: "agents", description: "عرض الوكلاء المتاحين" },
-  { command: "new", description: "بدء محادثة جديدة" },
-  { command: "files", description: "تعليمات إرسال الملفات" },
-  { command: "unlink", description: "فصل حساب Telegram" },
-  { command: "cancel", description: "إلغاء العملية الحالية" },
+  { command: "start", description: "فتح القائمة والحالة" },
+  { command: "help", description: "عرض الأوامر والقدرات المتاحة" },
+  { command: "status", description: "عرض الحساب والجلسة" },
+  { command: "agents", description: "عرض الوكلاء الحقيقيين" },
+  { command: "new", description: "اختيار وكيل وبدء محادثة" },
+  { command: "files", description: "عرض الملفات وإرسالها للمحادثة" },
+  { command: "unlink", description: "فصل الحساب بعد التأكيد" },
+  { command: "cancel", description: "إلغاء العملية النشطة" },
 ];
-const allowedUpdates = ["message", "edited_message", "callback_query"];
+const allowedUpdates = ["message", "edited_message", "callback_query", "my_chat_member"];
 
 async function call(method, body = {}) {
   let lastError;
@@ -80,6 +81,8 @@ const registeredUpdates = Array.isArray(verified?.allowed_updates) ? verified.al
 for (const update of allowedUpdates) {
   if (!registeredUpdates.includes(update)) throw new Error(`Telegram webhook is missing allowed update: ${update}.`);
 }
+// Telegram may retain an error from an older delivery. After current URL and
+// allowed updates verify successfully, report it without failing this startup.
 if (verified?.last_error_message) {
   console.warn(JSON.stringify({
     level: "warn",
