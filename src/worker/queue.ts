@@ -11,6 +11,7 @@ import type {
   SandboxExecutionPayload,
   SandboxResumePayload,
   SandboxWorkspacePayload,
+  TelegramUpdateProcessPayload,
 } from "@/worker/schemas";
 
 let workerUtilsPromise: Promise<WorkerUtils> | null = null;
@@ -76,6 +77,15 @@ export function enqueueNotificationDispatch(payload: NotificationDispatchPayload
     queueName: `notifications:${payload.organizationId}`,
     maxAttempts: 5,
     jobKey: `notification-dispatch:${payload.eventId}`,
+    jobKeyMode: "unsafe_dedupe",
+  });
+}
+
+export function enqueueTelegramUpdateProcess(payload: TelegramUpdateProcessPayload) {
+  return addJob("telegram-update-process", payload, {
+    queueName: "telegram-central",
+    maxAttempts: 5,
+    jobKey: `telegram-update-process:${payload.updateRowId}`,
     jobKeyMode: "unsafe_dedupe",
   });
 }
