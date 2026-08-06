@@ -10,6 +10,7 @@ export type WhatsAppLinkedIdentity = {
   email: string;
   role: Role;
   permissions: ReadonlySet<Permission>;
+  channelFeatures: ReadonlySet<string>;
 };
 
 export type WhatsAppRuntimeContext = {
