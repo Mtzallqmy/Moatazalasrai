@@ -55,6 +55,18 @@ export default async function ChannelsPage() {
   ]);
 
   const members = memberRows.map((member) => ({ ...member, name: member.name ?? member.email }));
+  const providers = providerRows.map(({ id, name, provider, models, allowedModels, defaultModel, enabled }) => ({
+    id,
+    name,
+    provider,
+    enabled,
+    defaultModel,
+    models: Array.from(new Set([
+      ...(defaultModel ? [defaultModel] : []),
+      ...allowedModels,
+      ...models,
+    ].filter(Boolean))),
+  }));
   const canManage = can(session.role, "channels:manage");
   const initialWhatsAppData = {
     endpoint: whatsappAdministration.endpoint ? {
@@ -81,17 +93,7 @@ export default async function ChannelsPage() {
           initialData={initialWhatsAppData}
           options={{
             agents: agentRows.map(({ id, name }) => ({ id, name })),
-            providers: providerRows.map(({ id, name, provider, models, allowedModels, defaultModel }) => ({
-              id,
-              name,
-              provider,
-              defaultModel,
-              models: Array.from(new Set([
-                ...(defaultModel ? [defaultModel] : []),
-                ...allowedModels,
-                ...models,
-              ].filter(Boolean))),
-            })),
+            providers,
             tools: toolRows,
             members: members.map(({ id, name, email }) => ({ id, name, email })),
           }}
@@ -101,7 +103,7 @@ export default async function ChannelsPage() {
           canHandoff={can(session.role, "channels:handoff")}
           options={{
             agents: agentRows,
-            providers: providerRows,
+            providers,
             tools: toolRows,
             inboxes: inboxRows,
             workflows: workflowRows,
