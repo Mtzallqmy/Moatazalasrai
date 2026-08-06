@@ -1,5 +1,16 @@
-import { boolean, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import { organizations, users } from "./schema";
+import {
+  boolean,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core";
+import { agentTeams, agents, conversations, organizations, users } from "./schema";
 
 export const telegramAccountLinks = pgTable("telegram_account_links", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -54,3 +65,29 @@ export const telegramFeaturePermissions = pgTable("telegram_feature_permissions"
   primaryKey({ columns: [table.userId, table.featureKey], name: "telegram_feature_permissions_user_feature_pk" }),
   index("telegram_feature_permissions_org_user_idx").on(table.organizationId, table.userId),
 ]);
+
+export type TelegramSessionState = Record<string, unknown>;
+
+export const telegramUserSessions = pgTable("telegram_user_sessions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  telegramUserId: text("telegram_user_id").notNull(),
+  telegramChatId: text("telegram_chat_id").notNull(),
+  activeFlow: text("active_flow"),
+  currentStep: text("current_step"),
+  selectedAgentId: uuid("selected_agent_id").references(() => agents.id, { onDelete: "set null" }),
+  selectedTeamId: uuid("selected_team_id").references(() => agentTeams.id, { onDelete: "set null" }),
+  selectedConversationId: uuid("selected_conversation_id").references(() => conversations.id, { onDelete: "set null" }),
+  state: jsonb("state").$type<TelegramSessionState>().notNull().default({}),
+  version: integer("version").notNull().default(1),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("telegram_user_sessions_telegram_chat_unique_idx").on(table.telegramUserId, table.telegramChatId),
+  index("telegram_user_sessions_user_org_idx").on(table.userId, table.organizationId, table.updatedAt),
+  index("telegram_user_sessions_expiry_idx").on(table.expiresAt),
+]);
+
+export type TelegramUserSession = typeof telegramUserSessions.$inferSelect;
