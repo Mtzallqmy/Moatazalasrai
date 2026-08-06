@@ -1,4 +1,4 @@
-// Organization-scoped channel administration API; WhatsApp is synchronized from the platform environment.
+// Organization-scoped channel administration API; managed platform channels are synchronized before reads.
 import { z } from "zod";
 import {
   channelConnectionUpdateSchema,
@@ -6,9 +6,11 @@ import {
   listChannelAdministration,
   updateChannelConnection,
 } from "@/lib/channels/admin";
+import { ensureCentralTelegramChannelConnection } from "@/lib/channels/connections";
 import { ensureOrganizationWhatsAppProjection } from "@/lib/channels/whatsapp-platform";
 import { requireSession } from "@/lib/auth/authorization";
 import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
+import { centralTelegramBot, telegramPlatformConfig } from "@/lib/integrations/telegram-platform";
 import { enforceRateLimit, requestClientKey } from "@/lib/security/rate-limit";
 
 export const runtime = "nodejs";
@@ -16,12 +18,44 @@ export const dynamic = "force-dynamic";
 
 const deleteSchema = z.object({ connectionId: z.string().uuid() }).strict();
 
+async function synchronizeManagedChannels(input: { organizationId: string; userId: string }) {
+  const tasks: Promise<unknown>[] = [
+    ensureOrganizationWhatsAppProjection(input.organizationId),
+  ];
+  const telegram = telegramPlatformConfig();
+  if (telegram.enabled) {
+    tasks.push(centralTelegramBot().then((bot) => ensureCentralTelegramChannelConnection({
+      organizationId: input.organizationId,
+      botId: String(bot.id),
+      botUsername: bot.username,
+      actorUserId: input.userId,
+    })));
+  }
+  const results = await Promise.allSettled(tasks);
+  return results.map((result) => result.status === "fulfilled"
+    ? { ok: true as const }
+    : {
+        ok: false as const,
+        errorCode: result.reason instanceof ApiError
+          ? result.reason.code
+          : result.reason instanceof Error
+            ? result.reason.name
+            : "CHANNEL_PROJECTION_SYNC_FAILED",
+      });
+}
+
 export async function GET(request: Request) {
   const requestId = getRequestId(request);
   try {
     const session = await requireSession("channels:read");
-    await ensureOrganizationWhatsAppProjection(session.organizationId).catch(() => undefined);
-    return apiSuccess(await listChannelAdministration(session.organizationId), requestId);
+    const synchronization = await synchronizeManagedChannels({
+      organizationId: session.organizationId,
+      userId: session.userId,
+    });
+    return apiSuccess({
+      ...await listChannelAdministration(session.organizationId),
+      synchronization,
+    }, requestId);
   } catch (error) {
     return handleApiError(error, requestId, "/api/dashboard/channels");
   }
@@ -38,10 +72,13 @@ export async function POST(request: Request) {
       limit: 20,
       windowMs: 15 * 60_000,
     });
-    const connection = await ensureOrganizationWhatsAppProjection(session.organizationId);
+    const synchronization = await synchronizeManagedChannels({
+      organizationId: session.organizationId,
+      userId: session.userId,
+    });
     return apiSuccess({
-      connection,
-      synchronized: true,
+      synchronization,
+      synchronized: synchronization.some((result) => result.ok),
       credentialSource: "environment",
       manualCreationAllowed: false,
     }, requestId);
