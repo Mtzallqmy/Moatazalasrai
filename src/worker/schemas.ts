@@ -53,6 +53,16 @@ export const notificationDispatchPayloadSchema = z.object({
   eventId: uuid,
 }).strict();
 
+export const telegramUpdatePayloadSchema = z.object({
+  updateRowId: uuid,
+  update: z.record(z.string(), z.unknown()),
+}).strict();
+
+export const whatsappChannelUpdatePayloadSchema = z.object({
+  eventRowId: uuid,
+  message: z.record(z.string(), z.unknown()),
+}).strict();
+
 export type AgentTeamRunPayload = z.infer<typeof agentTeamRunPayloadSchema>;
 export type DocumentParsePayload = z.infer<typeof documentParsePayloadSchema>;
 export type AgentRunResumePayload = z.infer<typeof agentRunResumePayloadSchema>;
@@ -63,12 +73,16 @@ export type SandboxCleanupPayload = z.infer<typeof sandboxCleanupPayloadSchema>;
 export type BrowserTaskPayload = z.infer<typeof browserTaskPayloadSchema>;
 export type BrowserResumePayload = z.infer<typeof browserResumePayloadSchema>;
 export type NotificationDispatchPayload = z.infer<typeof notificationDispatchPayloadSchema>;
+export type TelegramUpdatePayload = z.infer<typeof telegramUpdatePayloadSchema>;
+export type WhatsAppChannelUpdatePayload = z.infer<typeof whatsappChannelUpdatePayloadSchema>;
 
 export const supportedWorkerTasks = [
   "agent-team-run",
   "document-parse",
   "agent-run-resume",
   "notification-dispatch",
+  "telegram-central-update",
+  "whatsapp-channel-update",
   "sandbox-create",
   "sandbox-execute",
   "sandbox-resume",
