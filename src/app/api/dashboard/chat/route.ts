@@ -1,6 +1,7 @@
 import { and, count, desc, eq, ilike, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import { db } from "@/db";
 import { agents, attachments, conversationMembers, conversations, messages, users } from "@/db/schema";
+import { createConversation } from "@/lib/application/conversations";
 import { requireSession } from "@/lib/auth/authorization";
 import { canManageConversation, canWriteConversation, conversationAccessFilter } from "@/lib/chat/access";
 import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
@@ -157,32 +158,10 @@ export async function POST(request: Request) {
     const session = await requireSession("agents:run");
     const body = await parseJson(request, conversationActionSchema, 8 * 1024);
     if (body.action === "create") {
-      const [agent] = await db().select({ id: agents.id, name: agents.name })
-        .from(agents)
-        .where(and(
-          eq(agents.id, body.agentId),
-          eq(agents.organizationId, session.organizationId),
-          eq(agents.status, "published"),
-        ))
-        .limit(1);
-      if (!agent) throw new ApiError(422, "AGENT_UNAVAILABLE", "الوكيل غير منشور أو غير موجود.");
-      const conversation = await db().transaction(async (tx) => {
-        const [created] = await tx.insert(conversations).values({
-          organizationId: session.organizationId,
-          agentId: agent.id,
-          createdByUserId: session.userId,
-          title: null,
-          status: "active",
-        }).returning();
-        if (!created) throw new Error("CONVERSATION_CREATE_FAILED");
-        await tx.insert(conversationMembers).values({
-          organizationId: session.organizationId,
-          conversationId: created.id,
-          userId: session.userId,
-          role: "manager",
-          addedByUserId: session.userId,
-        });
-        return created;
+      const conversation = await createConversation({
+        organizationId: session.organizationId,
+        actorUserId: session.userId,
+        agentId: body.agentId,
       });
       return apiSuccess(conversation, requestId, 201);
     }
