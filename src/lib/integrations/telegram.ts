@@ -1,4 +1,4 @@
-// Telegram Bot API client used by the shared channel adapter and legacy integrations.
+// Telegram Bot API client used by the shared channel adapter and central client runtime.
 import { ApiError } from "@/lib/http/api";
 import { integrationFetch } from "./http";
 
@@ -22,14 +22,14 @@ export type TelegramInlineButton = {
 };
 
 export const CENTRAL_TELEGRAM_COMMANDS = [
-  { command: "start", description: "بدء البوت وعرض الحالة" },
-  { command: "help", description: "عرض جميع الأوامر" },
-  { command: "status", description: "حالة الربط والميزات" },
-  { command: "agents", description: "عرض الوكلاء المتاحين" },
-  { command: "new", description: "بدء محادثة جديدة" },
-  { command: "files", description: "تعليمات إرسال الملفات" },
+  { command: "start", description: "فتح القائمة الرئيسية" },
+  { command: "help", description: "عرض القدرات المتاحة" },
+  { command: "status", description: "حالة الحساب والجلسة" },
+  { command: "agents", description: "الوكلاء المتاحون" },
+  { command: "new", description: "بدء محادثة حقيقية" },
+  { command: "files", description: "الملفات والوسائط" },
   { command: "unlink", description: "فصل حساب Telegram" },
-  { command: "cancel", description: "إلغاء العملية الحالية" },
+  { command: "cancel", description: "إلغاء العملية النشطة" },
 ] as const;
 
 async function telegramCall<T>(
@@ -50,11 +50,46 @@ async function telegramCall<T>(
     throw new ApiError(
       response.status === 401 ? 422 : 502,
       response.status === 401 ? "TELEGRAM_TOKEN_INVALID" : "TELEGRAM_API_ERROR",
-      response.status === 401 ? "توكن Telegram غير صالح." : "رفض Telegram طلب التكامل.",
+      response.status === 401 ? "توكن Telegram غير صالح." : "تعذر تنفيذ طلب Telegram حاليًا.",
       { telegramStatus: payload?.error_code, telegramDescription: payload?.description?.slice(0, 240) },
     );
   }
   return payload.result;
+}
+
+function safeText(value: string) {
+  const text = value.trim();
+  if (!text) throw new ApiError(500, "TELEGRAM_EMPTY_MESSAGE", "رفض إرسال رسالة Telegram فارغة.");
+  return text;
+}
+
+function replyMarkup(input: {
+  buttons?: Array<{ id: string; title: string }>;
+  buttonRows?: TelegramInlineButton[][];
+  replyKeyboard?: string[][];
+  removeKeyboard?: boolean;
+}) {
+  const legacyRows: TelegramInlineButton[][] | undefined = input.buttons
+    ?.slice(0, 12)
+    .map((button) => [{ title: button.title, id: button.id }]);
+  const rows = (input.buttonRows ?? legacyRows)?.slice(0, 12).map((row) => row.slice(0, 4).map((button) => {
+    const title = safeText(button.title).slice(0, 64);
+    if (button.url) return { text: title, url: button.url };
+    const callbackData = safeText(button.id ?? "cc.home");
+    if (Buffer.byteLength(callbackData, "utf8") > 64) {
+      throw new ApiError(500, "TELEGRAM_CALLBACK_TOO_LONG", "معرّف زر Telegram أطول من الحد المسموح.");
+    }
+    return { text: title, callback_data: callbackData };
+  }));
+  if (rows?.length) return { inline_keyboard: rows };
+  if (input.replyKeyboard?.length) {
+    return {
+      keyboard: input.replyKeyboard.slice(0, 8).map((row) => row.slice(0, 4).map((label) => ({ text: safeText(label).slice(0, 64) }))),
+      resize_keyboard: true,
+      is_persistent: true,
+    };
+  }
+  return input.removeKeyboard ? { remove_keyboard: true } : undefined;
 }
 
 export function verifyTelegramToken(token: string) {
@@ -69,7 +104,7 @@ export function configureTelegramWebhook(input: {
   return telegramCall<boolean>(input.token, "setWebhook", {
     url: input.url,
     secret_token: input.secretToken,
-    allowed_updates: ["message", "edited_message", "callback_query"],
+    allowed_updates: ["message", "edited_message", "callback_query", "my_chat_member"],
     drop_pending_updates: false,
   });
 }
@@ -92,31 +127,45 @@ export function sendTelegramMessage(input: {
   replyKeyboard?: string[][];
   removeKeyboard?: boolean;
 }) {
-  const text = input.text.length > 4000 ? `${input.text.slice(0, 3990)}…` : input.text;
-  const legacyRows: TelegramInlineButton[][] | undefined = input.buttons
-    ?.slice(0, 12)
-    .map((button) => [{ title: button.title, id: button.id }]);
-  const rows = (input.buttonRows ?? legacyRows)?.slice(0, 8).map((row) => row.slice(0, 4).map((button) => ({
-    text: button.title.slice(0, 64),
-    ...(button.url ? { url: button.url } : { callback_data: (button.id ?? "telegram.help").slice(0, 64) }),
-  })));
-  const replyMarkup = rows?.length
-    ? { inline_keyboard: rows }
-    : input.replyKeyboard?.length
-      ? {
-          keyboard: input.replyKeyboard.slice(0, 8).map((row) => row.slice(0, 4).map((label) => ({ text: label.slice(0, 64) }))),
-          resize_keyboard: true,
-          is_persistent: true,
-        }
-      : input.removeKeyboard
-        ? { remove_keyboard: true }
-        : undefined;
+  const text = safeText(input.text);
+  if (text.length > 4096) throw new ApiError(500, "TELEGRAM_MESSAGE_TOO_LONG", "رسالة Telegram تتجاوز الحد ويجب تقسيمها.");
+  const markup = replyMarkup(input);
   return telegramCall<{ message_id?: number }>(input.token, "sendMessage", {
     chat_id: input.chatId,
     text,
     disable_web_page_preview: true,
     ...(input.replyToMessageId ? { reply_parameters: { message_id: Number(input.replyToMessageId) } } : {}),
-    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    ...(markup ? { reply_markup: markup } : {}),
+  });
+}
+
+export function editTelegramMessage(input: {
+  token: string;
+  chatId: string;
+  messageId: string;
+  text: string;
+  buttonRows?: TelegramInlineButton[][];
+}) {
+  const text = safeText(input.text);
+  if (text.length > 4096) throw new ApiError(500, "TELEGRAM_MESSAGE_TOO_LONG", "رسالة Telegram تتجاوز الحد ويجب تقسيمها.");
+  const markup = replyMarkup({ buttonRows: input.buttonRows });
+  return telegramCall<{ message_id?: number }>(input.token, "editMessageText", {
+    chat_id: input.chatId,
+    message_id: Number(input.messageId),
+    text,
+    disable_web_page_preview: true,
+    ...(markup ? { reply_markup: markup } : {}),
+  });
+}
+
+export function sendTelegramChatAction(input: {
+  token: string;
+  chatId: string;
+  action?: "typing" | "upload_document" | "upload_photo" | "record_voice" | "upload_video";
+}) {
+  return telegramCall<boolean>(input.token, "sendChatAction", {
+    chat_id: input.chatId,
+    action: input.action ?? "typing",
   });
 }
 
