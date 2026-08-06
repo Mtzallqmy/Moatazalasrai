@@ -7,6 +7,14 @@ const runnerErrorSchema = z.object({
   error: z.object({ code: z.string().optional(), message: z.string().optional() }).optional(),
 }).passthrough();
 
+const healthResponseSchema = z.object({
+  ok: z.boolean(),
+  activeExecutions: z.number().int().nonnegative(),
+  protocolVersion: z.number().int().positive().optional(),
+  argvExecution: z.boolean().optional(),
+  networkIsolation: z.boolean().optional(),
+}).passthrough();
+
 const workspaceResponseSchema = z.object({
   workspaceId: z.string().min(1).max(300),
   status: z.enum(["ready", "provisioning"]),
@@ -31,6 +39,7 @@ const executionSnapshotSchema = z.object({
   startedAt: z.string().datetime(),
   completedAt: z.string().datetime().nullable(),
   exitCode: z.number().int().nullable(),
+  signal: z.string().max(100).nullable().optional(),
   outputTruncated: z.boolean(),
   stdoutBytes: z.number().int().nonnegative(),
   stderrBytes: z.number().int().nonnegative(),
@@ -56,8 +65,8 @@ const readFileResponseSchema = z.object({
 
 function runnerConfig() {
   const config = env();
-  if (!config.sandboxEnabled || !config.sandboxRunnerUrl || !config.sandboxRunnerSharedSecret) {
-    throw new ApiError(404, "FEATURE_DISABLED", "ميزة Sandbox غير مفعلة.");
+  if (!config.sandboxRunnerUrl || !config.sandboxRunnerSharedSecret) {
+    throw new ApiError(404, "SANDBOX_RUNNER_NOT_CONFIGURED", "خدمة التنفيذ المعزولة غير مهيأة.");
   }
   return { baseUrl: config.sandboxRunnerUrl, secret: config.sandboxRunnerSharedSecret };
 }
@@ -74,6 +83,8 @@ async function runnerRequest<T>(input: {
   body?: unknown;
   schema: z.ZodType<T>;
   signal?: AbortSignal;
+  authenticated?: boolean;
+  timeoutMs?: number;
 }): Promise<T> {
   const { baseUrl, secret } = runnerConfig();
   const method = input.method ?? "POST";
@@ -82,18 +93,22 @@ async function runnerRequest<T>(input: {
   const nonce = randomUUID();
   const url = new URL(input.pathname, `${baseUrl}/`);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30_000);
+  const timeout = setTimeout(() => controller.abort(), input.timeoutMs ?? 30_000);
   const abort = () => controller.abort();
   input.signal?.addEventListener("abort", abort, { once: true });
   try {
+    const authenticated = input.authenticated !== false;
     const response = await fetch(url, {
       method,
       headers: {
         accept: "application/json",
         ...(body ? { "content-type": "application/json" } : {}),
-        "x-moataz-timestamp": timestamp,
-        "x-moataz-nonce": nonce,
-        "x-moataz-signature": signature(secret, timestamp, nonce, method, url.pathname, body),
+        ...(authenticated ? {
+          "x-moataz-timestamp": timestamp,
+          "x-moataz-nonce": nonce,
+          "x-moataz-signature": signature(secret, timestamp, nonce, method, url.pathname, body),
+          "x-moataz-service": "platform-execution-kernel",
+        } : {}),
       },
       ...(body ? { body } : {}),
       redirect: "error",
@@ -108,20 +123,30 @@ async function runnerRequest<T>(input: {
       throw new ApiError(
         response.status >= 500 ? 502 : response.status,
         error.success ? error.data.error?.code ?? "SANDBOX_RUNNER_ERROR" : "SANDBOX_RUNNER_INVALID_RESPONSE",
-        error.success ? error.data.error?.message ?? "رفضت خدمة Sandbox الطلب." : "أعادت خدمة Sandbox استجابة غير صالحة.",
+        error.success ? error.data.error?.message ?? "رفضت خدمة التنفيذ الطلب." : "أعادت خدمة التنفيذ استجابة غير صالحة.",
       );
     }
     return input.schema.parse(payload);
   } catch (error) {
     if (error instanceof ApiError) throw error;
     if (error instanceof Error && error.name === "AbortError") {
-      throw new ApiError(504, "SANDBOX_RUNNER_TIMEOUT", "انتهت مهلة الاتصال بخدمة Sandbox.");
+      throw new ApiError(504, "SANDBOX_RUNNER_TIMEOUT", "انتهت مهلة الاتصال بخدمة التنفيذ المعزولة.");
     }
-    throw new ApiError(502, "SANDBOX_RUNNER_UNAVAILABLE", "تعذر الاتصال بخدمة Sandbox المعزولة.");
+    throw new ApiError(502, "SANDBOX_RUNNER_UNAVAILABLE", "تعذر الاتصال بخدمة التنفيذ المعزولة.");
   } finally {
     clearTimeout(timeout);
     input.signal?.removeEventListener("abort", abort);
   }
+}
+
+export function getRunnerHealth() {
+  return runnerRequest({
+    method: "GET",
+    pathname: "/health",
+    schema: healthResponseSchema,
+    authenticated: false,
+    timeoutMs: 10_000,
+  });
 }
 
 export function createRunnerWorkspace(input: {
@@ -151,7 +176,7 @@ export function deleteRunnerWorkspace(input: { tenantId: string; externalWorkspa
   });
 }
 
-export function startRunnerExecution(input: {
+type LegacyExecutionRequest = {
   tenantId: string;
   workspaceId: string;
   executionId: string;
@@ -159,7 +184,21 @@ export function startRunnerExecution(input: {
   workingDirectory: string;
   timeoutMs: number;
   maxOutputBytes: number;
-}) {
+};
+
+type ArgvExecutionRequest = {
+  tenantId: string;
+  workspaceId: string;
+  executionId: string;
+  argv: string[];
+  workingDirectory: string;
+  timeoutMs: number;
+  maxOutputBytes: number;
+  environment?: Record<string, string>;
+  stdin?: string;
+};
+
+export function startRunnerExecution(input: LegacyExecutionRequest | ArgvExecutionRequest) {
   return runnerRequest({
     pathname: `/v1/workspaces/${encodeURIComponent(input.workspaceId)}/executions`,
     body: input,
@@ -208,6 +247,7 @@ export function readRunnerFile(input: { tenantId: string; externalWorkspaceId: s
     method: "GET",
     pathname: `/v1/workspaces/${encodeURIComponent(input.externalWorkspaceId)}/file?${query.toString()}`,
     schema: readFileResponseSchema,
+    timeoutMs: 60_000,
   });
 }
 
@@ -223,6 +263,7 @@ export function writeRunnerFile(input: {
     pathname: `/v1/workspaces/${encodeURIComponent(input.externalWorkspaceId)}/file`,
     body: input,
     schema: fileEntrySchema,
+    timeoutMs: 60_000,
   });
 }
 
