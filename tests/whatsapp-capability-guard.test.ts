@@ -30,6 +30,7 @@ vi.mock("@/lib/integrations/whatsapp/config", () => ({
 vi.mock("@/lib/integrations/whatsapp/linking", () => ({
   connectedWhatsAppUser: mocks.connectedUser,
   consumeWhatsAppConnectToken: vi.fn(),
+  parseConnectToken: vi.fn(() => null),
   touchWhatsAppInteraction: mocks.touchInteraction,
 }));
 vi.mock("@/lib/whatsapp/capability-registry", () => ({
