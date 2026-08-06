@@ -153,7 +153,7 @@ async function handleAction(context: WhatsAppRuntimeContext, actionId: string) {
   if (conversationView) return showWhatsAppConversation(context, conversationView[1]);
 
   if (actionId === "wa.files") return showWhatsAppFileInstructions(context);
-  if (actionId === "wa.account") return showWhatsAppAccount(context);
+  if (actionId === "wa.account" || actionId === "wa.status") return showWhatsAppAccount(context);
   if (actionId === "wa.disconnect") return requestWhatsAppDisconnect(context);
   if (actionId === "wa.disconnect.confirm") return confirmWhatsAppDisconnect(context);
 
