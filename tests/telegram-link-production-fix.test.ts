@@ -13,22 +13,26 @@ describe("Telegram production linking", () => {
     expect(component).not.toContain('target="_blank"');
   });
 
-  it("verifies schema and registers webhook commands before the web process starts", async () => {
+  it("verifies shared client schemas and registers implemented commands before the web process starts", async () => {
     const startup = await readFile("scripts/start-production.mjs", "utf8");
     const setup = await readFile("scripts/setup-telegram-webhook.mjs", "utf8");
     const schema = await readFile("scripts/check-telegram-schema.mjs", "utf8");
-    expect(startup).toContain("telegram.schema.verification");
+    expect(startup).toContain("channel.client.schema.verification");
     expect(startup).toContain("telegram.webhook.bootstrap");
     expect(startup).toContain("process.exit(1)");
-    expect(startup.indexOf("telegram.webhook.bootstrap")).toBeLessThan(startup.indexOf("const next = spawn"));
+    expect(startup.indexOf("channel.client.schema.verification")).toBeLessThan(startup.indexOf("const next = spawn"));
     expect(schema).toContain("0039_central_telegram_bot.sql");
-    expect(schema).toContain("telegram_account_links");
+    expect(schema).toContain("0041_channel_client_sessions.sql");
+    expect(schema).toContain("telegram_user_sessions");
+    expect(schema).toContain("whatsapp_user_sessions");
     expect(setup).toContain('call("setWebhook"');
     expect(setup).toContain('call("setMyCommands"');
     expect(setup).toContain('call("getWebhookInfo"');
     expect(setup).toContain("pending_update_count");
     expect(setup).toContain("last_error_message");
-    expect(setup).toContain('["message", "edited_message", "callback_query"]');
+    for (const update of ["message", "edited_message", "callback_query", "my_chat_member"]) {
+      expect(setup).toContain(`"${update}"`);
+    }
   });
 
   it("validates all central bot secrets before the web process starts", async () => {
