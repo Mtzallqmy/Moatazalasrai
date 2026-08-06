@@ -5,9 +5,8 @@ import {
   agents,
   auditLogs,
   providerCredentials,
-  type memberRole,
 } from "@/db/schema";
-import { assertUserPermission, userOrganizationRole } from "@/lib/auth/user-authorization";
+import { assertUserPermission } from "@/lib/auth/user-authorization";
 import { ApiError } from "@/lib/http/api";
 import { agentCreateSchema } from "@/lib/http/contracts";
 
@@ -187,6 +186,7 @@ export async function createAgentApplication(input: {
   userId: string;
   data: unknown;
   requestId?: string;
+  source?: "dashboard" | "telegram" | "whatsapp" | "api";
 }) {
   await assertUserPermission({ ...input, permission: "agents:manage" });
   const body = agentCreateSchema.parse(input.data);
@@ -233,7 +233,7 @@ export async function createAgentApplication(input: {
       resourceType: "agent",
       resourceId: agent.id,
       metadata: {
-        source: "channel_client",
+        source: input.source ?? "api",
         version: 1,
         model: body.model,
         requestId: input.requestId ?? null,
@@ -241,8 +241,4 @@ export async function createAgentApplication(input: {
     });
     return { agent, version };
   });
-}
-
-export async function currentChannelUserRole(input: { organizationId: string; userId: string }) {
-  return userOrganizationRole(input.userId, input.organizationId) as Promise<(typeof memberRole.enumValues)[number]>;
 }
