@@ -1,25 +1,10 @@
 import { and, count, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { agentVersions, agents, auditLogs, providerCredentials } from "@/db/schema";
+import { agentVersions, agents, auditLogs } from "@/db/schema";
+import { createAgent, requireVerifiedProviderModel } from "@/lib/application/agents";
 import { requireSession } from "@/lib/auth/authorization";
 import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { agentCreateSchema, agentUpdateSchema, paginationSchema, uuidSchema } from "@/lib/http/contracts";
-
-async function verifiedCredential(organizationId: string, id: string, model: string) {
-  const [credential] = await db().select({
-    id: providerCredentials.id,
-    models: providerCredentials.discoveredModels,
-  }).from(providerCredentials).where(and(
-    eq(providerCredentials.id, id),
-    eq(providerCredentials.organizationId, organizationId),
-    eq(providerCredentials.enabled, true),
-    eq(providerCredentials.validationStatus, "verified"),
-  )).limit(1);
-  if (!credential || !credential.models.includes(model)) {
-    throw new ApiError(422, "MODEL_UNAVAILABLE", "المزود غير متاح أو النموذج لم يعد ضمن النماذج المكتشفة.");
-  }
-  return credential;
-}
 
 export async function GET(request: Request) {
   const requestId = getRequestId(request);
@@ -86,36 +71,11 @@ export async function POST(request: Request) {
     assertSameOrigin(request);
     const session = await requireSession("agents:manage");
     const body = await parseJson(request, agentCreateSchema, 48 * 1024);
-    await verifiedCredential(session.organizationId, body.providerCredentialId, body.model);
-    const result = await db().transaction(async (tx) => {
-      const [agent] = await tx.insert(agents).values({
-        organizationId: session.organizationId,
-        name: body.name,
-        description: body.description || null,
-        status: body.publish ? "published" : "draft",
-        currentVersion: 1,
-      }).returning();
-      if (!agent) throw new Error("AGENT_CREATE_FAILED");
-      const [version] = await tx.insert(agentVersions).values({
-        agentId: agent.id,
-        version: 1,
-        providerCredentialId: body.providerCredentialId,
-        model: body.model,
-        instructions: body.instructions,
-        temperatureMilli: Math.round(body.temperature * 1000),
-        maxOutputTokens: body.maxOutputTokens,
-      }).returning();
-      if (!version) throw new Error("AGENT_VERSION_CREATE_FAILED");
-      await tx.insert(auditLogs).values({
-        organizationId: session.organizationId,
-        actorType: "user",
-        actorId: session.userId,
-        action: body.publish ? "agent.created_and_published" : "agent.created",
-        resourceType: "agent",
-        resourceId: agent.id,
-        metadata: { version: 1, model: body.model, requestId },
-      });
-      return { agent, version };
+    const result = await createAgent({
+      organizationId: session.organizationId,
+      actorUserId: session.userId,
+      requestId,
+      values: body,
     });
     return apiSuccess(result, requestId, 201);
   } catch (error) {
@@ -149,7 +109,11 @@ export async function PATCH(request: Request) {
     ].some((value) => value !== undefined);
     const publishing = body.status === "published" && current.agent.status !== "published";
     if (versionFieldsChanged || publishing) {
-      await verifiedCredential(session.organizationId, nextProviderId, nextModel);
+      await requireVerifiedProviderModel({
+        organizationId: session.organizationId,
+        providerCredentialId: nextProviderId,
+        model: nextModel,
+      });
     }
 
     const result = await db().transaction(async (tx) => {
