@@ -16,23 +16,18 @@ import {
   handleWhatsAppAgentCreationInput,
   listWhatsAppAgents,
   showWhatsAppAgent,
-  startWhatsAppAgentCreation,
 } from "./agent-flows";
 import {
   confirmWhatsAppDisconnect,
-  requestWhatsAppDisconnect,
-  showWhatsAppAccount,
 } from "./account-flows";
 import {
   activateWhatsAppChatAgent,
   chooseWhatsAppAgent,
   continueWhatsAppChat,
   listWhatsAppConversations,
-  openWhatsAppChat,
   showWhatsAppConversation,
   startNewWhatsAppConversation,
 } from "./conversation-flows";
-import { showWhatsAppFileInstructions } from "./file-flows";
 import { sendWhatsAppMainMenu, sendWhatsAppSectionMenu } from "./menu-renderer";
 import { answerWhatsAppMessage, sendWhatsAppError, sendWhatsAppText } from "./message-renderer";
 import {
@@ -111,13 +106,31 @@ function section(value: string): WhatsAppCapability["section"] | null {
     .find((item) => item === value) ?? null;
 }
 
-async function invokeCapability(context: WhatsAppRuntimeContext, id: string) {
+async function requireCapability(context: WhatsAppRuntimeContext, id: string) {
   const capability = whatsappCapability(id);
   if (!capability || !await capabilityVisible(context, capability)) {
-    await sendWhatsAppError({ to: context.message.from, text: "هذه القدرة غير متاحة وفق الوحدة أو الصلاحيات أو سياسة WhatsApp الحالية." });
-    return;
+    await sendWhatsAppError({
+      to: context.message.from,
+      text: "هذه القدرة غير متاحة وفق الوحدة أو الصلاحيات أو سياسة WhatsApp الحالية.",
+    });
+    return null;
   }
+  return capability;
+}
+
+async function invokeCapability(context: WhatsAppRuntimeContext, id: string) {
+  const capability = await requireCapability(context, id);
+  if (!capability) return;
   await capability.handler(context);
+}
+
+async function runCapabilityAction(
+  context: WhatsAppRuntimeContext,
+  capabilityId: string,
+  action: () => Promise<unknown>,
+) {
+  if (!await requireCapability(context, capabilityId)) return;
+  await action();
 }
 
 async function handleAction(context: WhatsAppRuntimeContext, actionId: string) {
@@ -130,34 +143,65 @@ async function handleAction(context: WhatsAppRuntimeContext, actionId: string) {
   const capabilityMatch = /^wa\.cap:([a-z0-9._-]+)$/.exec(actionId);
   if (capabilityMatch) return invokeCapability(context, capabilityMatch[1]);
 
-  if (actionId === "wa.agents") return listWhatsAppAgents(context, 0);
-  if (actionId === "wa.agents.create") return startWhatsAppAgentCreation(context);
+  if (actionId === "wa.agents") return invokeCapability(context, "agents.list");
+  if (actionId === "wa.agents.create") return invokeCapability(context, "agents.create");
   const agentsPage = /^wa\.agents\.page:(\d+)$/.exec(actionId);
-  if (agentsPage) return listWhatsAppAgents(context, Number(agentsPage[1]));
+  if (agentsPage) {
+    return runCapabilityAction(context, "agents.list", () => listWhatsAppAgents(context, Number(agentsPage[1])));
+  }
   const agentView = /^wa\.agent\.view:([0-9a-f-]{36})$/i.exec(actionId);
-  if (agentView) return showWhatsAppAgent(context, agentView[1]);
+  if (agentView) {
+    return runCapabilityAction(context, "agents.list", () => showWhatsAppAgent(context, agentView[1]));
+  }
 
-  if (actionId === "wa.chat") return openWhatsAppChat(context);
-  if (actionId === "wa.chat.choose") return chooseWhatsAppAgent(context, 0);
-  if (actionId === "wa.chat.continue") return continueWhatsAppChat(context);
-  if (actionId === "wa.chat.new") return startNewWhatsAppConversation(context);
+  if (actionId === "wa.chat") return invokeCapability(context, "chat.open");
+  if (actionId === "wa.chat.choose") {
+    return runCapabilityAction(context, "chat.open", () => chooseWhatsAppAgent(context, 0));
+  }
+  if (actionId === "wa.chat.continue") {
+    return runCapabilityAction(context, "chat.open", () => continueWhatsAppChat(context));
+  }
+  if (actionId === "wa.chat.new") {
+    return runCapabilityAction(context, "chat.open", () => startNewWhatsAppConversation(context));
+  }
   const chatPage = /^wa\.chat\.page:(\d+)$/.exec(actionId);
-  if (chatPage) return chooseWhatsAppAgent(context, Number(chatPage[1]));
+  if (chatPage) {
+    return runCapabilityAction(context, "chat.open", () => chooseWhatsAppAgent(context, Number(chatPage[1])));
+  }
   const chatAgent = /^wa\.chat\.agent:([0-9a-f-]{36})$/i.exec(actionId);
-  if (chatAgent) return activateWhatsAppChatAgent(context, chatAgent[1]);
+  if (chatAgent) {
+    return runCapabilityAction(context, "chat.open", () => activateWhatsAppChatAgent(context, chatAgent[1]));
+  }
 
-  if (actionId === "wa.conversations") return listWhatsAppConversations(context, 0);
+  if (actionId === "wa.conversations") return invokeCapability(context, "conversations.list");
   const conversationsPage = /^wa\.conversations\.page:(\d+)$/.exec(actionId);
-  if (conversationsPage) return listWhatsAppConversations(context, Number(conversationsPage[1]));
+  if (conversationsPage) {
+    return runCapabilityAction(
+      context,
+      "conversations.list",
+      () => listWhatsAppConversations(context, Number(conversationsPage[1])),
+    );
+  }
   const conversationView = /^wa\.conversation\.view:([0-9a-f-]{36})$/i.exec(actionId);
-  if (conversationView) return showWhatsAppConversation(context, conversationView[1]);
+  if (conversationView) {
+    return runCapabilityAction(
+      context,
+      "conversations.list",
+      () => showWhatsAppConversation(context, conversationView[1]),
+    );
+  }
 
-  if (actionId === "wa.files") return showWhatsAppFileInstructions(context);
-  if (actionId === "wa.account" || actionId === "wa.status") return showWhatsAppAccount(context);
-  if (actionId === "wa.disconnect") return requestWhatsAppDisconnect(context);
-  if (actionId === "wa.disconnect.confirm") return confirmWhatsAppDisconnect(context);
+  if (actionId === "wa.files") return invokeCapability(context, "files.upload");
+  if (actionId === "wa.account" || actionId === "wa.status") return invokeCapability(context, "account.status");
+  if (actionId === "wa.disconnect") return invokeCapability(context, "account.disconnect");
+  if (actionId === "wa.disconnect.confirm") {
+    return runCapabilityAction(context, "account.disconnect", () => confirmWhatsAppDisconnect(context));
+  }
 
-  await sendWhatsAppError({ to: context.message.from, text: "الإجراء غير معروف أو لم يعد متاحًا. افتح القائمة الرئيسية." });
+  await sendWhatsAppError({
+    to: context.message.from,
+    text: "الإجراء غير معروف أو لم يعد متاحًا. افتح القائمة الرئيسية.",
+  });
 }
 
 export async function processWhatsAppUpdate(input: {
@@ -191,10 +235,15 @@ export async function processWhatsAppUpdate(input: {
   }
 
   if (context.session.activeFlow === "agent.create") {
-    await handleWhatsAppAgentCreationInput(context);
+    if (await requireCapability(context, "agents.create")) {
+      await handleWhatsAppAgentCreationInput(context);
+    }
     return { handled: true, context };
   }
   if (context.session.activeFlow === "account.disconnect") {
+    if (!await requireCapability(context, "account.disconnect")) {
+      return { handled: true, context };
+    }
     if (parsed.kind === "action" && parsed.actionId === "wa.disconnect.confirm") {
       await confirmWhatsAppDisconnect(context);
     } else {
@@ -211,7 +260,10 @@ export async function processWhatsAppUpdate(input: {
     return { handled: true, context };
   }
   if (parsed.kind === "unknown") {
-    await sendWhatsAppError({ to: input.message.from, text: "نوع الرسالة غير مدعوم. افتح القائمة لمعرفة الخيارات المتاحة." });
+    await sendWhatsAppError({
+      to: input.message.from,
+      text: "نوع الرسالة غير مدعوم. افتح القائمة لمعرفة الخيارات المتاحة.",
+    });
     return { handled: true, context };
   }
   return { handled: false, context };
