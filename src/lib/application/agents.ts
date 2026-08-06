@@ -13,6 +13,18 @@ import { agentCreateSchema } from "@/lib/http/contracts";
 
 export type AgentCreateInput = z.infer<typeof agentCreateSchema>;
 
+function credentialModels(input: {
+  defaultModel: string | null;
+  allowedModels: string[];
+  discoveredModels: string[];
+}) {
+  return [...new Set([
+    ...(input.defaultModel?.trim() ? [input.defaultModel.trim()] : []),
+    ...input.allowedModels.map((model) => model.trim()),
+    ...input.discoveredModels.map((model) => model.trim()),
+  ].filter(Boolean))];
+}
+
 export async function requireVerifiedProviderModel(input: {
   organizationId: string;
   providerCredentialId: string;
@@ -21,7 +33,9 @@ export async function requireVerifiedProviderModel(input: {
   const [credential] = await db().select({
     id: providerCredentials.id,
     name: providerCredentials.name,
-    models: providerCredentials.discoveredModels,
+    defaultModel: providerCredentials.defaultModel,
+    allowedModels: providerCredentials.allowedModels,
+    discoveredModels: providerCredentials.discoveredModels,
   }).from(providerCredentials).where(and(
     eq(providerCredentials.id, input.providerCredentialId),
     eq(providerCredentials.organizationId, input.organizationId),
@@ -32,10 +46,11 @@ export async function requireVerifiedProviderModel(input: {
   if (!credential) {
     throw new ApiError(422, "PROVIDER_UNAVAILABLE", "لا يوجد مزود متحقق ومفعل بهذا المعرّف.");
   }
-  if (!credential.models.includes(input.model)) {
-    throw new ApiError(422, "MODEL_UNAVAILABLE", "النموذج لم يعد ضمن النماذج المكتشفة لهذا المزود.");
+  const models = credentialModels(credential);
+  if (!models.includes(input.model.trim())) {
+    throw new ApiError(422, "MODEL_UNAVAILABLE", "النموذج لم يعد ضمن النماذج المتاحة لهذا المزود.");
   }
-  return credential;
+  return { ...credential, models };
 }
 
 export async function listVerifiedProviderModels(organizationId: string) {
@@ -56,11 +71,7 @@ export async function listVerifiedProviderModels(organizationId: string) {
 
   return rows.map((row) => ({
     ...row,
-    models: [...new Set([
-      ...(row.defaultModel ? [row.defaultModel] : []),
-      ...row.allowedModels,
-      ...row.discoveredModels,
-    ].filter((value): value is string => Boolean(value?.trim())))],
+    models: credentialModels(row),
   })).filter((row) => row.models.length > 0);
 }
 
