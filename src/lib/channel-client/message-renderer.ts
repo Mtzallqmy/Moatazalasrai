@@ -13,12 +13,11 @@ function nonEmpty(value: unknown, fallback?: string) {
 
 function safeAction(action: ChannelClientAction): ChannelClientAction {
   const title = nonEmpty(action.title).slice(0, 64);
-  if (action.url) return { title, url: action.url };
   const id = nonEmpty(action.id);
   if (Buffer.byteLength(id, "utf8") > MAX_CALLBACK_BYTES) {
     throw new ApiError(500, "CHANNEL_CALLBACK_TOO_LONG", "معرّف الإجراء أطول من الحد المسموح.");
   }
-  return { title, id };
+  return action.url ? { id, title, url: action.url } : { id, title };
 }
 
 export function normalizeChannelClientView(view: ChannelClientView): ChannelClientView {
