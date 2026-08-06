@@ -168,8 +168,7 @@ export async function proxyCredentialRequest(input: CredentialProxyRequest) {
     allowDns: true,
     allowedMethods: ["POST"],
     maxRequests: 1,
-    maxNetworkBytes: maximumNetworkBytes,
-  } as never);
+  });
   await assertAllowedEgressUrl({ policy, url: input.url, method: input.method });
   const apiKey = resolveProviderApiKey(row.credential, consumed.organizationId);
   const headers = credentialHeaders({
