@@ -27,7 +27,15 @@ FROM base AS builder
 ENV NODE_ENV=production
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
-RUN mkdir -p public && npm run build
+RUN mkdir -p public dist \
+  && npm run build \
+  && ./node_modules/.bin/esbuild src/worker/index.ts \
+    --bundle \
+    --platform=node \
+    --target=node22 \
+    --format=esm \
+    --packages=external \
+    --outfile=dist/worker.mjs
 
 FROM node:${NODE_VERSION}-alpine AS runner
 WORKDIR /app
@@ -44,6 +52,7 @@ RUN addgroup --system --gid 1001 nodejs \
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/dist ./dist
 COPY --from=production-dependencies --chown=nextjs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
 COPY --from=builder --chown=nextjs:nodejs /app/drizzle ./drizzle
@@ -52,13 +61,16 @@ COPY --from=builder --chown=nextjs:nodejs \
   /app/scripts/migrate-worker.mjs \
   /app/scripts/sql-utils.mjs \
   /app/scripts/start-production.mjs \
+  /app/scripts/start-worker.mjs \
   /app/scripts/check-telegram-schema.mjs \
   /app/scripts/setup-telegram-webhook.mjs \
   /app/scripts/validate-runtime-env.mjs \
   ./scripts/
 
-# Fail the image build if Railway startup or pre-deploy migration assets are incomplete.
+# Fail the image build if Railway startup, worker, or pre-deploy migration assets are incomplete.
 RUN test -f /app/scripts/start-production.mjs \
+  && test -f /app/scripts/start-worker.mjs \
+  && test -f /app/dist/worker.mjs \
   && test -f /app/scripts/check-telegram-schema.mjs \
   && test -f /app/scripts/setup-telegram-webhook.mjs \
   && test -f /app/scripts/validate-runtime-env.mjs \
