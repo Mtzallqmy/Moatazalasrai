@@ -3,24 +3,26 @@ import { agents, conversations, organizations, users } from "./schema";
 
 export type ChannelSessionState = Record<string, unknown>;
 
-const commonColumns = {
-  id: uuid("id").defaultRandom().primaryKey(),
-  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
-  activeFlow: text("active_flow"),
-  currentStep: text("current_step"),
-  selectedAgentId: uuid("selected_agent_id").references(() => agents.id, { onDelete: "set null" }),
-  selectedTeamId: uuid("selected_team_id"),
-  selectedConversationId: uuid("selected_conversation_id").references(() => conversations.id, { onDelete: "set null" }),
-  state: jsonb("state").$type<ChannelSessionState>().notNull().default({}),
-  version: integer("version").notNull().default(1),
-  expiresAt: timestamp("expires_at", { withTimezone: true }),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-};
+function commonColumns() {
+  return {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    activeFlow: text("active_flow"),
+    currentStep: text("current_step"),
+    selectedAgentId: uuid("selected_agent_id").references(() => agents.id, { onDelete: "set null" }),
+    selectedTeamId: uuid("selected_team_id"),
+    selectedConversationId: uuid("selected_conversation_id").references(() => conversations.id, { onDelete: "set null" }),
+    state: jsonb("state").$type<ChannelSessionState>().notNull().default({}),
+    version: integer("version").notNull().default(1),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  };
+}
 
 export const telegramUserSessions = pgTable("telegram_user_sessions", {
-  ...commonColumns,
+  ...commonColumns(),
   telegramUserId: text("telegram_user_id").notNull(),
   telegramChatId: text("telegram_chat_id").notNull(),
 }, (table) => [
@@ -31,7 +33,7 @@ export const telegramUserSessions = pgTable("telegram_user_sessions", {
 ]);
 
 export const whatsappUserSessions = pgTable("whatsapp_user_sessions", {
-  ...commonColumns,
+  ...commonColumns(),
   whatsappWaId: text("whatsapp_wa_id").notNull(),
   whatsappChatId: text("whatsapp_chat_id").notNull(),
 }, (table) => [
