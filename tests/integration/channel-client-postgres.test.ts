@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createTestSqlClient, type Sql } from "../helpers/pg-sql";
+import { createAgentApplication } from "@/lib/agents/application-service";
 import {
   advanceChannelFlow,
   ensureChannelClientSession,
@@ -92,5 +93,66 @@ describeDatabase("persistent channel client sessions", () => {
     expect(finished.activeFlow).toBeNull();
     expect(finished.currentStep).toBeNull();
     expect(finished.state).toEqual({});
+  });
+
+  test("creates a real provider-backed agent through the shared application service", async () => {
+    const providerId = randomUUID();
+    const model = "channel-test-model";
+    await sql`
+      INSERT INTO provider_credentials (
+        id, organization_id, provider, name, base_url, provider_type_id,
+        default_model, allowed_models, discovered_models, validation_status,
+        health_status, enabled, is_default
+      ) VALUES (
+        ${providerId}, ${organizationId}, 'openai_compatible', 'Channel Test Provider',
+        'https://provider.example/v1', 'openai-compatible', ${model},
+        ${sql.json([model])}, ${sql.json([model])}, 'verified', 'healthy', true, true
+      )
+    `;
+
+    const result = await createAgentApplication({
+      organizationId,
+      userId,
+      requestId: "channel-integration-test",
+      source: "telegram",
+      data: {
+        name: "وكيل تيليجرام الحقيقي",
+        description: "أُنشئ من خدمة التطبيق المشتركة.",
+        instructions: "أجب بوضوح واستخدم بيانات المؤسسة المصرح بها فقط.",
+        providerCredentialId: providerId,
+        model,
+        temperature: 0.2,
+        maxOutputTokens: 1024,
+        publish: true,
+      },
+    });
+
+    expect(result.agent.status).toBe("published");
+    expect(result.version.providerCredentialId).toBe(providerId);
+    expect(result.version.model).toBe(model);
+
+    const [stored] = await sql<{
+      agent_name: string;
+      agent_status: string;
+      version_model: string;
+      audit_source: string;
+    }[]>`
+      SELECT
+        a.name AS agent_name,
+        a.status AS agent_status,
+        v.model AS version_model,
+        l.metadata->>'source' AS audit_source
+      FROM agents a
+      JOIN agent_versions v ON v.agent_id = a.id AND v.version = a.current_version
+      JOIN audit_logs l ON l.resource_type = 'agent' AND l.resource_id = a.id
+      WHERE a.id = ${result.agent.id}
+      LIMIT 1
+    `;
+    expect(stored).toEqual({
+      agent_name: "وكيل تيليجرام الحقيقي",
+      agent_status: "published",
+      version_model: model,
+      audit_source: "telegram",
+    });
   });
 });
