@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { sendTextMessage } from "@/lib/integrations/whatsapp/client";
 import {
   requireWhatsAppText,
   splitWhatsAppText,
@@ -6,10 +7,35 @@ import {
 } from "@/lib/whatsapp/message-renderer";
 import { parseWhatsAppUpdate } from "@/lib/whatsapp/update-parser";
 
+const config = {
+  appId: "123456",
+  appSecret: "0123456789abcdef0123456789abcdef",
+  graphApiVersion: "v23.0",
+  accessToken: "test-access-token-that-is-long-enough",
+  phoneNumberId: "1234567890",
+  businessAccountId: "9876543210",
+  displayPhoneNumber: "967700000000",
+  webhookVerifyToken: "verify-token-123456",
+  connectTokenSecret: "connect-token-secret-32-characters-minimum",
+  connectTokenTtlMinutes: 10,
+  publicAppUrl: "https://app.example",
+};
+
 describe("central WhatsApp renderer", () => {
   it("rejects empty and whitespace-only messages", () => {
     expect(() => requireWhatsAppText("   \n\t  ")).toThrowError(WhatsAppRenderError);
     expect(() => requireWhatsAppText(undefined)).toThrowError("رفض Renderer إرسال رسالة WhatsApp فارغة");
+  });
+
+  it("rejects empty text inside the only Cloud API client before any network request", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    await expect(sendTextMessage({
+      to: "967711111111",
+      text: " \n ",
+      config,
+      fetchImpl,
+    })).rejects.toMatchObject({ code: "WHATSAPP_EMPTY_TEXT", retryable: false });
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("splits long responses into non-empty messages within WhatsApp limits", () => {
