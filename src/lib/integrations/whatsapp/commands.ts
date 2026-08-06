@@ -8,7 +8,7 @@ import { parseWhatsAppUpdate } from "@/lib/whatsapp/update-parser";
 export const WHATSAPP_COMMAND_IDS = Object.freeze({
   account: "wa.account",
   openChat: "wa.chat",
-  status: "wa.account",
+  status: "wa.status",
   disconnect: "wa.disconnect",
   menu: "wa.menu",
 });
@@ -26,6 +26,8 @@ export function parseWhatsAppCommand(message: WhatsAppIncomingMessage): ParsedCo
       return { kind: "account" };
     case "wa.chat":
       return { kind: "open_chat" };
+    case "wa.status":
+      return { kind: "status" };
     case "wa.disconnect":
       return { kind: "disconnect" };
     case "wa.menu":
