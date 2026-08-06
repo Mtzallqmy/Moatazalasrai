@@ -1,6 +1,6 @@
 import { ApiError } from "@/lib/http/api";
 import { createConversation, getWritableConversation, sendConversationMessage } from "@/lib/chat/service";
-import { getAccessibleAgent, listRunnableAgents } from "@/lib/agents/service";
+import { getAccessibleAgent, listAccessibleAgents, listRunnableAgents } from "@/lib/agents/service";
 import {
   beginTelegramFlow,
   completeTelegramFlow,
@@ -35,7 +35,7 @@ export async function openConversation(context: TelegramActionContext) {
               messageId: messageId(context),
               path: "الرئيسية ← العمل الذكي ← المحادثة",
               title: `المحادثة مع ${agent.name}`,
-              description: `المحادثة النشطة: ${conversation.title ?? "محادثة بلا عنوان بعد"}\nاختر المتابعة أو ابدأ محادثة جديدة.",
+              description: `المحادثة النشطة: ${conversation.title ?? "محادثة بلا عنوان بعد"}\nاختر المتابعة أو ابدأ محادثة جديدة.`,
               buttonRows: [
                 [{ id: "chat:resume", title: "متابعة المحادثة" }],
                 [{ id: "chat:new", title: "محادثة جديدة" }, { id: "chat:agents", title: "اختيار وكيل آخر" }],
@@ -68,8 +68,7 @@ export async function openConversation(context: TelegramActionContext) {
 
   const agents = await listRunnableAgents(context.actor);
   if (!agents.length) {
-    const all = await import("@/lib/agents/service").then(({ listAccessibleAgents }) =>
-      listAccessibleAgents({ actor: context.actor, page: 1, limit: 50 }));
+    const all = await listAccessibleAgents({ actor: context.actor, page: 1, limit: 50 });
     const hasDraft = all.rows.some((agent) => agent.status !== "published");
     const hasProviderFailure = all.rows.some((agent) => agent.unavailableReason === "PROVIDER_UNAVAILABLE");
     const hasModelFailure = all.rows.some((agent) => agent.unavailableReason === "MODEL_UNAVAILABLE");
