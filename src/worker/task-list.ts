@@ -4,6 +4,13 @@ import { agentTeamRunTask } from "@/worker/tasks/agent-team-run";
 import { browserTaskExecuteTask } from "@/worker/tasks/browser-task-execute";
 import { browserTaskResumeTask } from "@/worker/tasks/browser-task-resume";
 import { documentParseTask } from "@/worker/tasks/document-parse";
+import { executionCancelTask } from "@/worker/tasks/execution-cancel";
+import { executionCleanupTask } from "@/worker/tasks/execution-cleanup";
+import { executionCollectArtifactsTask } from "@/worker/tasks/execution-collect-artifacts";
+import { executionExpireTask } from "@/worker/tasks/execution-expire";
+import { executionProvisionTask } from "@/worker/tasks/execution-provision";
+import { executionReconcileTask } from "@/worker/tasks/execution-reconcile";
+import { executionRunStepTask } from "@/worker/tasks/execution-run-step";
 import { notificationDispatchTask } from "@/worker/tasks/notification-dispatch";
 import { sandboxCleanupTask } from "@/worker/tasks/sandbox-cleanup";
 import { sandboxCreateTask } from "@/worker/tasks/sandbox-create";
@@ -17,6 +24,13 @@ export const taskList = {
   "browser-task-execute": browserTaskExecuteTask,
   "browser-task-resume": browserTaskResumeTask,
   "document-parse": documentParseTask,
+  "execution-provision": executionProvisionTask,
+  "execution-run-step": executionRunStepTask,
+  "execution-collect-artifacts": executionCollectArtifactsTask,
+  "execution-cancel": executionCancelTask,
+  "execution-cleanup": executionCleanupTask,
+  "execution-reconcile": executionReconcileTask,
+  "execution-expire": executionExpireTask,
   "notification-dispatch": notificationDispatchTask,
   "sandbox-create": sandboxCreateTask,
   "sandbox-execute": sandboxExecuteTask,
