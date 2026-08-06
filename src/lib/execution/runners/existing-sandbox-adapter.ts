@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type {
   CommandRequest,
   CommandResult,
@@ -57,18 +56,19 @@ export class ExistingSandboxAdapter implements ExecutionRunner {
     try {
       const result = await getRunnerHealth();
       return {
-        ok: result.ok,
+        ok: result.ok && result.argvExecution === true && result.protocolVersion === 2,
         kind: this.kind,
         checkedAt: new Date().toISOString(),
         latencyMs: Date.now() - started,
         capabilities: {
-          command: true,
+          command: result.argvExecution === true,
           files: true,
           cancellation: true,
-          networkIsolation: result.networkIsolation !== false,
+          networkIsolation: result.networkIsolation === true,
           snapshots: false,
           pauseResume: false,
         },
+        ...(result.protocolVersion === 2 ? {} : { errorCode: "RUNNER_PROTOCOL_VERSION_UNSUPPORTED" }),
       };
     } catch (error) {
       return {
@@ -122,7 +122,7 @@ export class ExistingSandboxAdapter implements ExecutionRunner {
     },
   ): Promise<CommandResult> {
     const input = validateCommandRequest(request);
-    const externalExecutionId = randomUUID();
+    const externalExecutionId = workspaceId;
     const started = await startRunnerExecution({
       tenantId: this.organizationId,
       workspaceId,
@@ -213,11 +213,10 @@ export class ExistingSandboxAdapter implements ExecutionRunner {
   }
 
   async terminateProcess(workspaceId: string, processId?: string) {
-    if (!processId) return;
     await stopRunnerExecution({
       tenantId: this.organizationId,
       externalWorkspaceId: workspaceId,
-      externalExecutionId: processId,
+      externalExecutionId: processId ?? workspaceId,
     });
   }
 
