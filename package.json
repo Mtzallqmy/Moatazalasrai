@@ -20,7 +20,7 @@
     "db:migrate:all": "npm run db:migrate && npm run worker:migrate",
     "db:studio": "drizzle-kit studio",
     "bootstrap:owner": "node scripts/bootstrap-owner.mjs",
-    "worker": "node --import tsx src/worker/index.ts",
+    "worker": "node scripts/start-worker.mjs",
     "worker:dev": "node --import tsx --watch src/worker/index.ts",
     "verify:deployment": "node scripts/verify-deployment.mjs",
     "telegram:webhook:setup": "node scripts/setup-telegram-webhook.mjs",
