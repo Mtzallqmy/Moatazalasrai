@@ -53,6 +53,10 @@ export const notificationDispatchPayloadSchema = z.object({
   eventId: uuid,
 }).strict();
 
+export const telegramUpdateProcessPayloadSchema = z.object({
+  updateRowId: uuid,
+}).strict();
+
 export type AgentTeamRunPayload = z.infer<typeof agentTeamRunPayloadSchema>;
 export type DocumentParsePayload = z.infer<typeof documentParsePayloadSchema>;
 export type AgentRunResumePayload = z.infer<typeof agentRunResumePayloadSchema>;
@@ -63,12 +67,14 @@ export type SandboxCleanupPayload = z.infer<typeof sandboxCleanupPayloadSchema>;
 export type BrowserTaskPayload = z.infer<typeof browserTaskPayloadSchema>;
 export type BrowserResumePayload = z.infer<typeof browserResumePayloadSchema>;
 export type NotificationDispatchPayload = z.infer<typeof notificationDispatchPayloadSchema>;
+export type TelegramUpdateProcessPayload = z.infer<typeof telegramUpdateProcessPayloadSchema>;
 
 export const supportedWorkerTasks = [
   "agent-team-run",
   "document-parse",
   "agent-run-resume",
   "notification-dispatch",
+  "telegram-update-process",
   "sandbox-create",
   "sandbox-execute",
   "sandbox-resume",
