@@ -1,6 +1,5 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { databaseRows } from "@/db/result";
 import { apiFailure, apiSuccess, getRequestId } from "@/lib/http/api";
 import { answerTelegramCallback } from "@/lib/integrations/telegram";
 import { telegramPlatformConfig, verifyTelegramWebhookSecret } from "@/lib/integrations/telegram-platform";
@@ -10,8 +9,16 @@ import type { CentralTelegramUpdate } from "@/lib/telegram/update-processor";
 
 export const runtime = "nodejs";
 
+type PersistedUpdateRow = { id: string; status: string };
+
 function safeLog(level: "info" | "warn" | "error", event: string, metadata: Record<string, unknown>) {
   console[level](JSON.stringify({ level, event, ...metadata }));
+}
+
+function firstPersistedRow(result: { rows: Record<string, unknown>[] }) {
+  const row = result.rows[0];
+  if (!row || typeof row.id !== "string" || typeof row.status !== "string") return null;
+  return { id: row.id, status: row.status } satisfies PersistedUpdateRow;
 }
 
 async function centralUpdateRow(updateId: string) {
@@ -21,7 +28,7 @@ async function centralUpdateRow(updateId: string) {
     ON CONFLICT DO NOTHING
     RETURNING "id", "status"
   `);
-  const created = databaseRows<{ id: string; status: string }>(inserted)[0];
+  const created = firstPersistedRow(inserted);
   if (created) return { ...created, duplicate: false };
   const existing = await db().execute(sql`
     SELECT "id", "status"
@@ -29,7 +36,7 @@ async function centralUpdateRow(updateId: string) {
     WHERE "integration_id" IS NULL AND "update_id" = ${updateId}
     LIMIT 1
   `);
-  const row = databaseRows<{ id: string; status: string }>(existing)[0];
+  const row = firstPersistedRow(existing);
   return row ? { ...row, duplicate: true } : null;
 }
 
@@ -92,7 +99,7 @@ export async function POST(request: Request) {
   try {
     await enqueueTelegramCentralUpdate({
       updateRowId: row.id,
-      update: update as Record<string, unknown>,
+      update: update as unknown as Record<string, unknown>,
     });
   } catch (error) {
     await db().execute(sql`
