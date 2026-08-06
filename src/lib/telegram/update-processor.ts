@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { telegramUpdates } from "@/db/schema";
 import { ensureCentralTelegramChannelConnection } from "@/lib/channels/connections";
 import { telegramChannelAdapter } from "@/lib/channels/telegram-adapter";
+import { deniedChannelFeature, requiredChannelFeatures } from "@/lib/channel-client/feature-guard";
 import { processChannelClientInput } from "@/lib/channel-client/runtime";
 import { ensureChannelClientSession, finishChannelFlow } from "@/lib/channel-client/session-service";
 import { presentChannelClientError } from "@/lib/channel-client/error-presenter";
@@ -139,6 +140,9 @@ export async function processCentralTelegramUpdate(input: {
         botUsername: bot.username,
         actorUserId: linked.userId,
       });
+      const featureAllowed = async (key: string) => Boolean(
+        await telegramFeatureAllowed(linked.userId, linked.organizationId, key as never),
+      );
       await sendChannelClientView(transport, { text: "تم ربط حسابك بنجاح ✅" });
       await processChannelClientInput({
         identity: {
@@ -154,7 +158,7 @@ export async function processCentralTelegramUpdate(input: {
         incoming: { ...incoming, eventId: `${incoming.eventId}:linked`, text: "/start" },
         text: "/start",
         transport,
-        featureAllowed: async (key) => Boolean(await telegramFeatureAllowed(linked.userId, linked.organizationId, key as never)),
+        featureAllowed,
       });
       safeLog("info", "telegram.link.succeeded", { updateRowId: input.updateRowId });
       await markUpdate(input.updateRowId, "completed");
@@ -220,6 +224,28 @@ export async function processCentralTelegramUpdate(input: {
       return;
     }
 
+    const featureAllowed = async (key: string) => Boolean(
+      await telegramFeatureAllowed(account.userId, account.organizationId, key as never),
+    );
+    const denied = await deniedChannelFeature({
+      requirements: requiredChannelFeatures({
+        channel: "telegram",
+        session,
+        incoming,
+        actionId: incoming.interactiveActionId,
+        text: incoming.text,
+      }),
+      featureAllowed,
+    });
+    if (denied) {
+      await sendChannelClientView(transport, {
+        text: `الميزة المطلوبة غير مفعلة لحسابك: ${denied.labelAr}. راجع مسؤول المؤسسة لتفعيلها.`,
+        actions: [[{ id: "cc.home", title: "الرئيسية" }]],
+      });
+      await markUpdate(input.updateRowId, "ignored", "TELEGRAM_FEATURE_DENIED");
+      return;
+    }
+
     const result = await processChannelClientInput({
       identity: {
         channel: "telegram",
@@ -235,7 +261,7 @@ export async function processCentralTelegramUpdate(input: {
       text: incoming.text,
       actionId: incoming.interactiveActionId,
       transport,
-      featureAllowed: async (key) => Boolean(await telegramFeatureAllowed(account.userId, account.organizationId, key as never)),
+      featureAllowed,
     });
     safeLog("info", "telegram.command.handled", {
       updateRowId: input.updateRowId,
