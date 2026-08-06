@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
 import {
   access,
+  lstat,
   mkdir,
   readFile,
   readdir,
@@ -13,19 +14,23 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { createServer } from "node:http";
-import { extname, join, normalize, relative, resolve, sep } from "node:path";
+import { basename, extname, join, normalize, relative, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
 
 const PORT = integerEnv("PORT", 8080, 1, 65_535);
 const ROOT = resolve(process.env.SANDBOX_WORKSPACE_ROOT || "/data/workspaces");
 const SHARED_SECRET = required("SANDBOX_RUNNER_SHARED_SECRET");
 const MAX_REQUEST_BYTES = integerEnv("SANDBOX_RUNNER_MAX_REQUEST_BYTES", 4 * 1024 * 1024, 1_024, 32 * 1024 * 1024);
+const MAX_FILE_READ_BYTES = integerEnv("SANDBOX_RUNNER_MAX_FILE_READ_BYTES", 25 * 1024 * 1024, 1_024, 100 * 1024 * 1024);
 const MAX_CONCURRENT = integerEnv("SANDBOX_RUNNER_CONCURRENCY", 2, 1, 32);
 const MAX_PROCESSES = integerEnv("SANDBOX_MAX_PROCESSES", 64, 8, 512);
 const CPU_SECONDS = integerEnv("SANDBOX_CPU_SECONDS", 300, 1, 1_800);
 const MEMORY_KB = integerEnv("SANDBOX_MEMORY_KB", 524_288, 65_536, 8_388_608);
 const FILE_SIZE_KB = integerEnv("SANDBOX_FILE_SIZE_KB", 524_288, 1_024, 10_485_760);
 const ALLOWED_TEMPLATES = new Set((process.env.SANDBOX_ALLOWED_TEMPLATES || "moataz-code").split(",").map((value) => value.trim()).filter(Boolean));
+const ALLOWED_EXECUTABLES = new Set((process.env.SANDBOX_ALLOWED_EXECUTABLES || "python3,python,node,npm,git").split(",").map((value) => value.trim()).filter(Boolean));
+const SAFE_ENVIRONMENT_KEYS = new Set(["LANG", "LC_ALL", "TZ", "NO_COLOR", "PYTHONIOENCODING"]);
+const FORBIDDEN_ENVIRONMENT = /(?:DATABASE_URL|RAILWAY|SECRET|TOKEN|PASSWORD|COOKIE|SESSION|ENCRYPTION|API_KEY|ACCESS_KEY|PRIVATE_KEY)/i;
 const activeExecutions = new Map();
 const usedNonces = new Map();
 
@@ -70,9 +75,13 @@ async function readBody(request) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function expectedSignature(timestamp, nonce, method, pathname, body) {
+function bodySha256(body) {
+  return createHash("sha256").update(body, "utf8").digest("base64url");
+}
+
+function expectedSignature(timestamp, nonce, service, method, pathname, bodyHash) {
   return createHmac("sha256", SHARED_SECRET)
-    .update([timestamp, nonce, method.toUpperCase(), pathname, body].join("\n"), "utf8")
+    .update([timestamp, nonce, service, method.toUpperCase(), pathname, bodyHash].join("\n"), "utf8")
     .digest("base64url");
 }
 
@@ -80,10 +89,23 @@ function authenticate(request, pathname, body) {
   const timestamp = request.headers["x-moataz-timestamp"];
   const nonce = request.headers["x-moataz-nonce"];
   const signature = request.headers["x-moataz-signature"];
-  if (typeof timestamp !== "string" || typeof nonce !== "string" || typeof signature !== "string") return false;
+  const service = request.headers["x-moataz-service"];
+  const suppliedBodyHash = request.headers["x-moataz-body-sha256"];
+  if (
+    typeof timestamp !== "string"
+    || typeof nonce !== "string"
+    || typeof signature !== "string"
+    || typeof service !== "string"
+    || typeof suppliedBodyHash !== "string"
+  ) return false;
+  if (!new Set(["platform-execution-kernel", "platform-sandbox"]).has(service)) return false;
   const age = Math.abs(Date.now() - Number(timestamp));
   if (!Number.isFinite(age) || age > 5 * 60_000 || usedNonces.has(nonce)) return false;
-  const expected = Buffer.from(expectedSignature(timestamp, nonce, request.method || "GET", pathname, body));
+  const calculatedBodyHash = bodySha256(body);
+  const expectedBodyHash = Buffer.from(calculatedBodyHash);
+  const actualBodyHash = Buffer.from(suppliedBodyHash);
+  if (expectedBodyHash.length !== actualBodyHash.length || !timingSafeEqual(expectedBodyHash, actualBodyHash)) return false;
+  const expected = Buffer.from(expectedSignature(timestamp, nonce, service, request.method || "GET", pathname, calculatedBodyHash));
   const actual = Buffer.from(signature);
   if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return false;
   usedNonces.set(nonce, Date.now());
@@ -104,6 +126,13 @@ function workspaceDirectory(tenantId, workspaceId) {
   return join(ROOT, safeId(tenantId, "tenantId"), safeId(workspaceId, "workspaceId"));
 }
 
+function assertContained(root, target) {
+  const rel = relative(root, target);
+  if (rel === ".." || rel.startsWith(`..${sep}`) || resolve(target) === ROOT) {
+    throw Object.assign(new Error("Path traversal is forbidden."), { status: 400, code: "PATH_TRAVERSAL" });
+  }
+}
+
 function safeWorkspacePath(root, value = ".") {
   if (typeof value !== "string" || value.includes("\0") || value.includes("\\")) {
     throw Object.assign(new Error("Path is invalid."), { status: 400, code: "PATH_INVALID" });
@@ -113,16 +142,59 @@ function safeWorkspacePath(root, value = ".") {
     throw Object.assign(new Error("Path traversal is forbidden."), { status: 400, code: "PATH_TRAVERSAL" });
   }
   const target = resolve(root, normalizedPath);
+  assertContained(root, target);
+  return target;
+}
+
+async function assertNoSymlinkSegments(root, target, allowMissing = false) {
+  const rootReal = await realpath(root);
   const rel = relative(root, target);
-  if (rel === ".." || rel.startsWith(`..${sep}`) || resolve(target) === ROOT) {
-    throw Object.assign(new Error("Path traversal is forbidden."), { status: 400, code: "PATH_TRAVERSAL" });
+  assertContained(root, target);
+  let current = root;
+  for (const segment of rel.split(sep).filter(Boolean)) {
+    current = join(current, segment);
+    try {
+      const info = await lstat(current);
+      if (info.isSymbolicLink()) {
+        throw Object.assign(new Error("Symbolic links are forbidden."), { status: 422, code: "SYMLINK_FORBIDDEN" });
+      }
+      if (!info.isDirectory() && current !== target) {
+        throw Object.assign(new Error("Path parent is not a directory."), { status: 422, code: "PATH_PARENT_INVALID" });
+      }
+    } catch (cause) {
+      if (allowMissing && cause?.code === "ENOENT") break;
+      throw cause;
+    }
   }
+  try {
+    const targetReal = await realpath(target);
+    const realRel = relative(rootReal, targetReal);
+    if (realRel === ".." || realRel.startsWith(`..${sep}`)) {
+      throw Object.assign(new Error("Path escapes workspace."), { status: 400, code: "PATH_TRAVERSAL" });
+    }
+  } catch (cause) {
+    if (!(allowMissing && cause?.code === "ENOENT")) throw cause;
+  }
+}
+
+async function safeExistingPath(root, value) {
+  const target = safeWorkspacePath(root, value);
+  await assertNoSymlinkSegments(root, target, false);
+  return target;
+}
+
+async function safeWritablePath(root, value) {
+  const target = safeWorkspacePath(root, value);
+  await assertNoSymlinkSegments(root, target, true);
+  const parent = resolve(target, "..");
+  await assertNoSymlinkSegments(root, parent, true);
   return target;
 }
 
 async function ensureWorkspace(tenantId, workspaceId) {
   const directory = workspaceDirectory(tenantId, workspaceId);
   await access(directory);
+  await assertNoSymlinkSegments(resolve(ROOT, safeId(tenantId, "tenantId")), directory, false);
   return directory;
 }
 
@@ -163,8 +235,41 @@ function baseEnvironment() {
   };
 }
 
+function safeEnvironment(value) {
+  if (value === undefined) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw Object.assign(new Error("Environment is invalid."), { status: 400, code: "ENVIRONMENT_INVALID" });
+  }
+  const output = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (!SAFE_ENVIRONMENT_KEYS.has(key) || FORBIDDEN_ENVIRONMENT.test(key) || typeof item !== "string" || item.length > 8_192 || item.includes("\0")) {
+      throw Object.assign(new Error("Environment entry is forbidden."), { status: 400, code: "ENVIRONMENT_FORBIDDEN" });
+    }
+    output[key] = item;
+  }
+  return output;
+}
+
+function safeArgv(value) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 128) {
+    throw Object.assign(new Error("argv is invalid."), { status: 400, code: "ARGV_INVALID" });
+  }
+  const argv = value.map((argument) => {
+    if (typeof argument !== "string" || argument.length > 8_192 || argument.includes("\0")) {
+      throw Object.assign(new Error("argv contains an invalid argument."), { status: 400, code: "ARGV_INVALID" });
+    }
+    return argument;
+  });
+  const executable = argv[0];
+  if (basename(executable) !== executable || !ALLOWED_EXECUTABLES.has(executable)) {
+    throw Object.assign(new Error("Executable is not allowlisted."), { status: 403, code: "EXECUTABLE_FORBIDDEN" });
+  }
+  return argv;
+}
+
 function bwrapArguments(workspaceRoot, workingDirectory, command) {
-  return [
+  const environment = { ...baseEnvironment(), ...command.environment };
+  const args = [
     "--die-with-parent",
     "--new-session",
     "--unshare-all",
@@ -179,12 +284,20 @@ function bwrapArguments(workspaceRoot, workingDirectory, command) {
     "--tmpfs", "/tmp",
     "--bind", workspaceRoot, "/workspace",
     "--chdir", `/workspace/${workingDirectory === "." ? "" : workingDirectory}`,
-    "--setenv", "HOME", "/workspace",
-    "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin",
-    "--setenv", "LANG", "C.UTF-8",
-    "--setenv", "LC_ALL", "C.UTF-8",
-    "--", "/bin/bash", "--noprofile", "--norc", "-o", "pipefail", "-c", command,
   ];
+  for (const [key, value] of Object.entries(environment)) args.push("--setenv", key, value);
+  if (command.mode === "argv") return [...args, "--", ...command.argv];
+  return [...args, "--", "/bin/bash", "--noprofile", "--norc", "-o", "pipefail", "-c", command.command];
+}
+
+function normalizedCommand(input) {
+  if (Array.isArray(input.argv)) {
+    return { mode: "argv", argv: safeArgv(input.argv), environment: safeEnvironment(input.environment) };
+  }
+  if (typeof input.command === "string" && input.command.trim() && input.command.length <= 20_000) {
+    return { mode: "legacy-shell", command: input.command, environment: {} };
+  }
+  throw Object.assign(new Error("Command is invalid."), { status: 400, code: "COMMAND_INVALID" });
 }
 
 async function startExecution(input) {
@@ -194,13 +307,13 @@ async function startExecution(input) {
   const tenantId = safeId(input.tenantId, "tenantId");
   const workspaceId = safeId(input.workspaceId, "workspaceId");
   const executionId = safeId(input.executionId, "executionId");
-  if (typeof input.command !== "string" || !input.command.trim() || input.command.length > 20_000) {
-    throw Object.assign(new Error("Command is invalid."), { status: 400, code: "COMMAND_INVALID" });
-  }
+  const command = normalizedCommand(input);
   const timeoutMs = Math.min(Math.max(Number(input.timeoutMs) || 300_000, 1_000), 1_800_000);
   const maxOutputBytes = Math.min(Math.max(Number(input.maxOutputBytes) || 2_097_152, 1_024), 20_971_520);
   const workspaceRoot = await ensureWorkspace(tenantId, workspaceId);
-  const workingDirectory = relative(workspaceRoot, safeWorkspacePath(workspaceRoot, input.workingDirectory || ".")) || ".";
+  const requestedWorkingDirectory = safeWorkspacePath(workspaceRoot, input.workingDirectory || ".");
+  await assertNoSymlinkSegments(workspaceRoot, requestedWorkingDirectory, false);
+  const workingDirectory = relative(workspaceRoot, requestedWorkingDirectory) || ".";
   const paths = executionPaths(workspaceRoot, executionId);
   await mkdir(metadataDirectory(workspaceRoot), { recursive: true, mode: 0o700 });
   try {
@@ -210,24 +323,43 @@ async function startExecution(input) {
   } catch {}
 
   const startedAt = new Date().toISOString();
-  const status = { executionId, status: "running", startedAt, completedAt: null, exitCode: null, outputTruncated: false, stdoutBytes: 0, stderrBytes: 0 };
+  const status = {
+    executionId,
+    status: "running",
+    startedAt,
+    completedAt: null,
+    exitCode: null,
+    signal: null,
+    outputTruncated: false,
+    stdoutBytes: 0,
+    stderrBytes: 0,
+  };
   await writeStatus(paths.status, status);
-  await appendEvent(paths.events, { sequence: 1, type: "status", payload: { status: "running", startedAt }, createdAt: startedAt });
+  await appendEvent(paths.events, { sequence: 1, type: "status", payload: { status: "running", startedAt, mode: command.mode }, createdAt: startedAt });
 
   const child = spawn("prlimit", [
     `--cpu=${Math.max(1, Math.ceil(Math.min(timeoutMs / 1000, CPU_SECONDS)))}`,
     `--as=${MEMORY_KB * 1024}`,
     `--fsize=${FILE_SIZE_KB * 1024}`,
     `--nproc=${MAX_PROCESSES}`,
-    "--", "bwrap", ...bwrapArguments(workspaceRoot, workingDirectory, input.command),
+    "--", "bwrap", ...bwrapArguments(workspaceRoot, workingDirectory, command),
   ], {
     cwd: workspaceRoot,
     env: baseEnvironment(),
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: [typeof input.stdin === "string" ? "pipe" : "ignore", "pipe", "pipe"],
     detached: true,
     uid: process.getuid?.(),
     gid: process.getgid?.(),
   });
+
+  if (typeof input.stdin === "string") {
+    const stdin = Buffer.from(input.stdin, "utf8");
+    if (stdin.length > 1_048_576) {
+      try { process.kill(-child.pid, "SIGKILL"); } catch {}
+      throw Object.assign(new Error("stdin is too large."), { status: 413, code: "STDIN_TOO_LARGE" });
+    }
+    child.stdin.end(stdin);
+  }
 
   const state = { child, workspaceRoot, paths, sequence: 1, outputBytes: 0, maxOutputBytes, status };
   activeExecutions.set(executionId, state);
@@ -252,6 +384,7 @@ async function startExecution(input) {
     }
     if (state.outputBytes >= maxOutputBytes) {
       state.status.outputTruncated = true;
+      state.status.status = "failed";
       try { process.kill(-child.pid, "SIGTERM"); } catch {}
     }
   };
@@ -261,6 +394,7 @@ async function startExecution(input) {
 
   const timeout = setTimeout(() => {
     state.status.status = "timed_out";
+    state.status.signal = "SIGTERM";
     try { process.kill(-child.pid, "SIGTERM"); } catch {}
     setTimeout(() => { try { process.kill(-child.pid, "SIGKILL"); } catch {} }, 2_000).unref();
   }, timeoutMs);
@@ -281,6 +415,7 @@ async function startExecution(input) {
       state.status.status = code === 0 ? "completed" : signal ? "cancelled" : "failed";
     }
     state.status.exitCode = Number.isInteger(code) ? code : null;
+    state.status.signal = signal || state.status.signal;
     state.status.completedAt = new Date().toISOString();
     await writeStatus(paths.status, state.status);
     state.sequence += 1;
@@ -308,14 +443,18 @@ async function executionSnapshot(workspaceRoot, executionId, after = 0) {
 }
 
 async function fileInfo(root, target) {
-  const value = await stat(target);
+  await assertNoSymlinkSegments(root, target, false);
+  const value = await lstat(target);
+  if (value.isSymbolicLink() || (!value.isFile() && !value.isDirectory())) {
+    throw Object.assign(new Error("Unsupported workspace file type."), { status: 422, code: "FILE_TYPE_FORBIDDEN" });
+  }
   const rel = relative(root, target).split(sep).join("/") || ".";
   return {
     path: rel,
     isDirectory: value.isDirectory(),
     sizeBytes: value.isFile() ? value.size : 0,
     mimeType: value.isDirectory() ? null : mimeType(rel),
-    sha256: value.isFile() && value.size <= 20 * 1024 * 1024 ? await fileSha256(target) : null,
+    sha256: value.isFile() && value.size <= MAX_FILE_READ_BYTES ? await fileSha256(target) : null,
     modifiedAt: value.mtime.toISOString(),
   };
 }
@@ -338,7 +477,7 @@ async function fileSha256(target) {
 }
 
 async function listFiles(root, requestedPath, depth) {
-  const start = safeWorkspacePath(root, requestedPath);
+  const start = await safeExistingPath(root, requestedPath);
   const output = [];
   async function walk(current, remaining) {
     const info = await fileInfo(root, current);
@@ -347,7 +486,7 @@ async function listFiles(root, requestedPath, depth) {
     if (!info.isDirectory || remaining <= 0 || output.length >= 10_000) return;
     const entries = await readdir(current, { withFileTypes: true });
     for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-      if (entry.name === ".moataz") continue;
+      if (entry.name === ".moataz" || entry.isSymbolicLink() || (!entry.isFile() && !entry.isDirectory())) continue;
       await walk(join(current, entry.name), remaining - 1);
       if (output.length >= 10_000) break;
     }
@@ -360,7 +499,13 @@ async function handleRequest(request, response) {
   const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
   const pathname = url.pathname;
   if (request.method === "GET" && pathname === "/health") {
-    return json(response, 200, { ok: true, activeExecutions: activeExecutions.size });
+    return json(response, 200, {
+      ok: true,
+      protocolVersion: 2,
+      argvExecution: true,
+      networkIsolation: true,
+      activeExecutions: activeExecutions.size,
+    });
   }
   const bodyText = request.method === "GET" || request.method === "DELETE" ? "" : await readBody(request);
   if (!authenticate(request, pathname, bodyText)) return error(response, 401, "UNAUTHORIZED", "Invalid runner signature.");
@@ -381,6 +526,7 @@ async function handleRequest(request, response) {
     const tenantId = safeId(body.tenantId, "tenantId");
     const workspaceId = safeId(body.workspaceId, "workspaceId");
     if (!ALLOWED_TEMPLATES.has(body.template)) return error(response, 422, "TEMPLATE_NOT_ALLOWED", "Workspace template is not allowed.");
+    if (body.networkMode !== "disabled") return error(response, 403, "NETWORK_FORBIDDEN", "Network access is disabled by default.");
     const directory = workspaceDirectory(tenantId, workspaceId);
     await mkdir(directory, { recursive: true, mode: 0o700 });
     await mkdir(metadataDirectory(directory), { recursive: true, mode: 0o700 });
@@ -424,6 +570,7 @@ async function handleRequest(request, response) {
     const state = activeExecutions.get(stopMatch[2]);
     if (!state) return json(response, 200, { stopped: false });
     state.status.status = "cancelled";
+    state.status.signal = "SIGTERM";
     try { process.kill(-state.child.pid, "SIGTERM"); } catch {}
     setTimeout(() => { try { process.kill(-state.child.pid, "SIGKILL"); } catch {} }, 2_000).unref();
     return json(response, 200, { stopped: true });
@@ -439,10 +586,10 @@ async function handleRequest(request, response) {
   if (fileMatch && request.method === "GET") {
     const tenantId = safeId(url.searchParams.get("tenantId"), "tenantId");
     const directory = await ensureWorkspace(tenantId, fileMatch[1]);
-    const target = safeWorkspacePath(directory, url.searchParams.get("path") || "");
-    const value = await stat(target);
-    if (!value.isFile()) return error(response, 422, "NOT_A_FILE", "Path is not a file.");
-    const maxBytes = Math.min(Math.max(Number(url.searchParams.get("maxBytes") || 262_144), 1), 1_048_576);
+    const target = await safeExistingPath(directory, url.searchParams.get("path") || "");
+    const value = await lstat(target);
+    if (!value.isFile() || value.isSymbolicLink()) return error(response, 422, "NOT_A_FILE", "Path is not a regular file.");
+    const maxBytes = Math.min(Math.max(Number(url.searchParams.get("maxBytes") || 262_144), 1), MAX_FILE_READ_BYTES);
     if (value.size > maxBytes) return error(response, 413, "FILE_TOO_LARGE", "File is larger than the read limit.");
     const content = await readFile(target);
     const utf8 = !content.includes(0) && mimeType(target).startsWith("text/");
@@ -452,22 +599,30 @@ async function handleRequest(request, response) {
   if (fileMatch && request.method === "POST") {
     const tenantId = safeId(body.tenantId, "tenantId");
     const directory = await ensureWorkspace(tenantId, fileMatch[1]);
-    const target = safeWorkspacePath(directory, body.path);
-    const exists = await stat(target).then(() => true).catch(() => false);
+    const target = await safeWritablePath(directory, body.path);
+    const exists = await lstat(target).then((value) => {
+      if (value.isSymbolicLink() || !value.isFile()) throw Object.assign(new Error("Target type is forbidden."), { status: 422, code: "FILE_TYPE_FORBIDDEN" });
+      return true;
+    }).catch((cause) => {
+      if (cause?.code === "ENOENT") return false;
+      throw cause;
+    });
     if (exists && body.overwrite !== true) return error(response, 409, "FILE_EXISTS", "File already exists.");
     const content = Buffer.from(String(body.content || ""), body.encoding === "base64" ? "base64" : "utf8");
     if (content.length > MAX_REQUEST_BYTES) return error(response, 413, "FILE_TOO_LARGE", "File is larger than the write limit.");
     await mkdir(resolve(target, ".."), { recursive: true, mode: 0o700 });
-    await writeFile(target, content, { mode: 0o600 });
+    await assertNoSymlinkSegments(directory, resolve(target, ".."), false);
+    await writeFile(target, content, { mode: 0o600, flag: exists ? "w" : "wx" });
     return json(response, 200, await fileInfo(directory, target));
   }
 
   if (fileMatch && request.method === "DELETE") {
     const tenantId = safeId(url.searchParams.get("tenantId"), "tenantId");
     const directory = await ensureWorkspace(tenantId, fileMatch[1]);
-    const target = safeWorkspacePath(directory, url.searchParams.get("path") || "");
+    const target = await safeExistingPath(directory, url.searchParams.get("path") || "");
     const recursive = url.searchParams.get("recursive") === "true";
-    const value = await stat(target);
+    const value = await lstat(target);
+    if (value.isSymbolicLink() || (!value.isDirectory() && !value.isFile())) return error(response, 422, "FILE_TYPE_FORBIDDEN", "Unsupported path type.");
     if (value.isDirectory() && !recursive) return error(response, 409, "RECURSIVE_REQUIRED", "Recursive deletion must be explicit.");
     await rm(target, { recursive, force: false });
     return json(response, 200, { deleted: true });
@@ -486,11 +641,18 @@ const server = createServer((request, response) => {
     else response.end();
   });
 });
-server.requestTimeout = 35_000;
+server.requestTimeout = 65_000;
 server.headersTimeout = 10_000;
 server.keepAliveTimeout = 5_000;
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(JSON.stringify({ level: "info", event: "sandbox.runner.started", port: PORT }));
+  console.log(JSON.stringify({
+    level: "info",
+    event: "sandbox.runner.started",
+    port: PORT,
+    protocolVersion: 2,
+    argvExecution: true,
+    networkIsolation: true,
+  }));
 });
 
 function shutdown(signal) {
