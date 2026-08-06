@@ -31,6 +31,12 @@ CREATE INDEX IF NOT EXISTS "telegram_user_sessions_user_org_idx"
 CREATE INDEX IF NOT EXISTS "telegram_user_sessions_expiry_idx"
   ON "telegram_user_sessions" ("expires_at");
 
+-- Both the web chat and Telegram reuse client_request_id. A per-role unique key
+-- keeps retries idempotent while allowing one user row and one assistant row.
+CREATE UNIQUE INDEX IF NOT EXISTS "messages_conversation_client_role_unique_idx"
+  ON "messages" ("conversation_id", "client_request_id", "role")
+  WHERE "client_request_id" IS NOT NULL;
+
 COMMENT ON TABLE "telegram_user_sessions" IS
   'Durable optimistic-locking state for central Telegram navigation and multi-step flows';
 COMMENT ON COLUMN "telegram_updates"."payload" IS
