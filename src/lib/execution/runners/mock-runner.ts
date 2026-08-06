@@ -10,11 +10,16 @@ import { ExecutionError } from "@/lib/execution/errors";
 import { normalizeWorkspacePath, validateCommandRequest } from "@/lib/execution/validation";
 
 const encoder = new TextEncoder();
+const mockWorkspaces = new Map<string, Map<string, Uint8Array>>();
+const cancelledWorkspaces = new Set<string>();
+
+export function resetMockExecutionRunner() {
+  mockWorkspaces.clear();
+  cancelledWorkspaces.clear();
+}
 
 export class MockExecutionRunner implements ExecutionRunner {
   readonly kind = "existing" as const;
-  private readonly workspaces = new Map<string, Map<string, Uint8Array>>();
-  private cancelled = false;
 
   constructor(private readonly limits: ExecutionLimits) {
     if (process.env.NODE_ENV === "production") {
@@ -49,7 +54,8 @@ export class MockExecutionRunner implements ExecutionRunner {
     if (input.networkPolicy.mode !== "deny_all") {
       throw new ExecutionError("EXECUTION_NETWORK_DENIED", "MockRunner يحاكي شبكة مغلقة فقط.");
     }
-    this.workspaces.set(input.executionId, new Map());
+    mockWorkspaces.set(input.executionId, new Map());
+    cancelledWorkspaces.delete(input.executionId);
     return { externalWorkspaceId: input.executionId, state: "ready" as const };
   }
 
@@ -63,7 +69,7 @@ export class MockExecutionRunner implements ExecutionRunner {
     },
   ): Promise<CommandResult> {
     validateCommandRequest(request);
-    const files = this.workspaces.get(workspaceId);
+    const files = mockWorkspaces.get(workspaceId);
     if (!files) throw new ExecutionError("EXECUTION_WORKSPACE_NOT_READY", "مساحة الاختبار غير موجودة.");
     const startedAt = new Date().toISOString();
     await callbacks.onState("running");
@@ -95,7 +101,7 @@ export class MockExecutionRunner implements ExecutionRunner {
         timedOut: false,
       };
     }
-    if (this.cancelled) {
+    if (cancelledWorkspaces.has(workspaceId)) {
       await callbacks.onState("cancelled");
       return {
         exitCode: null,
@@ -124,7 +130,7 @@ export class MockExecutionRunner implements ExecutionRunner {
   }
 
   async uploadFile(workspaceId: string, destination: string, content: AsyncIterable<Uint8Array>) {
-    const files = this.workspaces.get(workspaceId);
+    const files = mockWorkspaces.get(workspaceId);
     if (!files) throw new ExecutionError("EXECUTION_WORKSPACE_NOT_READY", "مساحة الاختبار غير موجودة.");
     const chunks: Uint8Array[] = [];
     let total = 0;
@@ -140,22 +146,23 @@ export class MockExecutionRunner implements ExecutionRunner {
   }
 
   async downloadFile(workspaceId: string, source: string): Promise<AsyncIterable<Uint8Array>> {
-    const body = this.workspaces.get(workspaceId)?.get(normalizeWorkspacePath(source));
+    const body = mockWorkspaces.get(workspaceId)?.get(normalizeWorkspacePath(source));
     if (!body) throw new ExecutionError("EXECUTION_ARTIFACT_NOT_FOUND", "ملف الاختبار غير موجود.");
     return (async function* stream() { yield body; })();
   }
 
   async listFiles(workspaceId: string) {
-    const files = this.workspaces.get(workspaceId);
+    const files = mockWorkspaces.get(workspaceId);
     if (!files) throw new ExecutionError("EXECUTION_WORKSPACE_NOT_READY", "مساحة الاختبار غير موجودة.");
     return [...files].map(([path, body]) => ({ path, sizeBytes: body.byteLength, type: "file" as const }));
   }
 
-  async terminateProcess() {
-    this.cancelled = true;
+  async terminateProcess(workspaceId: string) {
+    cancelledWorkspaces.add(workspaceId);
   }
 
   async destroyWorkspace(workspaceId: string) {
-    this.workspaces.delete(workspaceId);
+    mockWorkspaces.delete(workspaceId);
+    cancelledWorkspaces.delete(workspaceId);
   }
 }
