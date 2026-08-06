@@ -9,6 +9,7 @@ import {
   withWhatsAppChannelPolicy,
 } from "@/lib/channels/whatsapp-platform";
 import { whatsappChannelAdapter } from "@/lib/channels/whatsapp-adapter";
+import { deniedChannelFeature, requiredChannelFeatures } from "@/lib/channel-client/feature-guard";
 import { processChannelClientInput } from "@/lib/channel-client/runtime";
 import { ensureChannelClientSession, finishChannelFlow } from "@/lib/channel-client/session-service";
 import { presentChannelClientError } from "@/lib/channel-client/error-presenter";
@@ -79,6 +80,23 @@ function safeLog(level: "info" | "warn" | "error", event: string, metadata: Reco
   console[level](JSON.stringify({ level, event, ...metadata }));
 }
 
+function policyFeatureResolver(policy: Awaited<ReturnType<typeof resolveEffectiveWhatsAppPolicy>>) {
+  return async (key: string) => {
+    if (key === "whatsapp.chat") {
+      return policy.status === "active"
+        && policy.autoReplyEnabled
+        && policy.permissions.includes("ai.chat")
+        && policy.permissions.includes("conversation.open");
+    }
+    if (key === "whatsapp.agents") return policy.permissions.includes("agent.use");
+    if (["whatsapp.files", "whatsapp.images", "whatsapp.audio", "whatsapp.video"].includes(key)) {
+      return policy.filesEnabled && policy.permissions.includes("files.use");
+    }
+    if (key === "whatsapp.admin_commands") return policy.allowedActions.includes("agents.manage");
+    return false;
+  };
+}
+
 export async function processWhatsAppChannelUpdate(input: {
   eventRowId: string;
   message: WhatsAppIncomingMessage;
@@ -122,6 +140,7 @@ export async function processWhatsAppChannelUpdate(input: {
         externalAccountId: config.phoneNumberId,
       })[0];
       if (!incoming) throw new Error("WHATSAPP_MESSAGE_NORMALIZATION_FAILED");
+      const featureAllowed = policyFeatureResolver(policy);
       await sendChannelClientView(transport, { text: "تم ربط حسابك بنجاح ✅" });
       await withWhatsAppChannelPolicy({
         organizationId: connection.organizationId,
@@ -140,13 +159,7 @@ export async function processWhatsAppChannelUpdate(input: {
         incoming: { ...incoming, eventId: `${incoming.eventId}:linked`, text: "/start" },
         text: "/start",
         transport,
-        featureAllowed: async (key) => {
-          if (key === "whatsapp.chat") return policy.status === "active" && policy.autoReplyEnabled && policy.permissions.includes("ai.chat");
-          if (key === "whatsapp.agents") return policy.permissions.includes("agent.use");
-          if (key === "whatsapp.files") return policy.filesEnabled && policy.permissions.includes("files.use");
-          if (key === "whatsapp.admin_commands") return policy.allowedActions.includes("agents.manage");
-          return false;
-        },
+        featureAllowed,
       }));
       await markEvent(input.eventRowId, "completed");
       return;
@@ -215,6 +228,26 @@ export async function processWhatsAppChannelUpdate(input: {
       return;
     }
 
+    const featureAllowed = policyFeatureResolver(policy);
+    const denied = await deniedChannelFeature({
+      requirements: requiredChannelFeatures({
+        channel: "whatsapp",
+        session,
+        incoming,
+        actionId: actionId(input.message),
+        text: incoming.text,
+      }),
+      featureAllowed,
+    });
+    if (denied) {
+      await sendChannelClientView(transport, {
+        text: `الميزة المطلوبة غير مفعلة لحسابك: ${denied.labelAr}. راجع مسؤول المؤسسة لتفعيلها.`,
+        actions: [[{ id: "cc.home", title: "الرئيسية" }]],
+      });
+      await markEvent(input.eventRowId, "ignored", "WHATSAPP_FEATURE_DENIED");
+      return;
+    }
+
     const result = await withWhatsAppChannelPolicy({
       organizationId: connection.organizationId,
       connectionId: connection.id,
@@ -234,13 +267,7 @@ export async function processWhatsAppChannelUpdate(input: {
       text: incoming.text,
       actionId: actionId(input.message),
       transport,
-      featureAllowed: async (key) => {
-        if (key === "whatsapp.chat") return policy.permissions.includes("ai.chat") && policy.permissions.includes("conversation.open");
-        if (key === "whatsapp.agents") return policy.permissions.includes("agent.use");
-        if (key === "whatsapp.files") return policy.filesEnabled && policy.permissions.includes("files.use");
-        if (key === "whatsapp.admin_commands") return policy.allowedActions.includes("agents.manage");
-        return false;
-      },
+      featureAllowed,
     }));
     safeLog("info", "whatsapp.command.handled", {
       eventRowId: input.eventRowId,
