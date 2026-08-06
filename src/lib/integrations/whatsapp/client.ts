@@ -6,6 +6,7 @@ const RETRYABLE_STATUSES = new Set([408, 429]);
 const MAX_ATTEMPTS = 3;
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
+const ACTION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 
 type FetchLike = typeof fetch;
 
@@ -30,6 +31,12 @@ export class WhatsAppApiError extends ApiError {
     super(status, code, message, details);
     this.name = "WhatsAppApiError";
   }
+}
+
+function requiredText(value: string, input: { code: string; message: string; maximum: number }) {
+  const text = value.trim();
+  if (!text) throw new WhatsAppApiError(400, input.code, input.message, false);
+  return text.length > input.maximum ? `${text.slice(0, Math.max(1, input.maximum - 1))}…` : text;
 }
 
 function graphUrl(config: WhatsAppRuntimeConfig, resource: string) {
@@ -205,7 +212,11 @@ export async function sendTextMessage(input: {
   config?: WhatsAppRuntimeConfig;
   fetchImpl?: FetchLike;
 }) {
-  const text = input.text.length > 4096 ? `${input.text.slice(0, 4090)}…` : input.text;
+  const text = requiredText(input.text, {
+    code: "WHATSAPP_EMPTY_TEXT",
+    message: "لا يمكن إرسال رسالة WhatsApp فارغة.",
+    maximum: 4096,
+  });
   const response = await graphRequest({
     messaging_product: "whatsapp",
     recipient_type: "individual",
@@ -226,12 +237,21 @@ export async function sendInteractiveButtons(input: {
   fetchImpl?: FetchLike;
 }) {
   if (input.buttons.length < 1 || input.buttons.length > 3) {
-    throw new Error("WhatsApp interactive buttons must contain between one and three buttons.");
+    throw new WhatsAppApiError(400, "WHATSAPP_BUTTON_COUNT_INVALID", "يجب أن تحتوي رسالة الأزرار على زر واحد إلى ثلاثة أزرار.", false);
   }
-  for (const button of input.buttons) {
-    if (!/^[A-Za-z0-9._:-]{1,128}$/.test(button.id)) throw new Error("WhatsApp button ID is invalid.");
-    if (!button.title.trim() || button.title.length > 20) throw new Error("WhatsApp button title is invalid.");
-  }
+  const bodyText = requiredText(input.bodyText, {
+    code: "WHATSAPP_EMPTY_TEXT",
+    message: "لا يمكن إرسال قائمة أزرار بلا محتوى.",
+    maximum: 1024,
+  });
+  const buttons = input.buttons.map((button) => {
+    const id = button.id.trim();
+    const title = button.title.trim();
+    if (!ACTION_ID_PATTERN.test(id)) throw new WhatsAppApiError(400, "WHATSAPP_ACTION_ID_INVALID", "معرّف زر WhatsApp غير صالح.", false);
+    if (!title || title.length > 20) throw new WhatsAppApiError(400, "WHATSAPP_ACTION_TITLE_INVALID", "عنوان زر WhatsApp غير صالح.", false);
+    return { id, title };
+  });
+  const footerText = input.footerText?.trim();
   const response = await graphRequest({
     messaging_product: "whatsapp",
     recipient_type: "individual",
@@ -239,10 +259,10 @@ export async function sendInteractiveButtons(input: {
     type: "interactive",
     interactive: {
       type: "button",
-      body: { text: input.bodyText.slice(0, 1024) },
-      ...(input.footerText ? { footer: { text: input.footerText.slice(0, 60) } } : {}),
+      body: { text: bodyText },
+      ...(footerText ? { footer: { text: footerText.slice(0, 60) } } : {}),
       action: {
-        buttons: input.buttons.map((button) => ({
+        buttons: buttons.map((button) => ({
           type: "reply",
           reply: { id: button.id, title: button.title },
         })),
@@ -262,8 +282,34 @@ export async function sendInteractiveList(input: {
   fetchImpl?: FetchLike;
 }) {
   if (input.actions.length < 1 || input.actions.length > 10) {
-    throw new Error("WhatsApp lists must contain between one and ten rows.");
+    throw new WhatsAppApiError(400, "WHATSAPP_LIST_COUNT_INVALID", "يجب أن تحتوي قائمة WhatsApp على عنصر واحد إلى عشرة عناصر.", false);
   }
+  const bodyText = requiredText(input.bodyText, {
+    code: "WHATSAPP_EMPTY_TEXT",
+    message: "لا يمكن إرسال قائمة WhatsApp بلا محتوى.",
+    maximum: 1024,
+  });
+  const buttonText = requiredText(input.buttonText, {
+    code: "WHATSAPP_LIST_BUTTON_EMPTY",
+    message: "عنوان فتح قائمة WhatsApp مطلوب.",
+    maximum: 20,
+  });
+  const title = requiredText(input.title, {
+    code: "WHATSAPP_LIST_TITLE_EMPTY",
+    message: "عنوان قسم WhatsApp مطلوب.",
+    maximum: 24,
+  });
+  const actions = input.actions.map((action) => {
+    const id = action.id.trim();
+    const actionTitle = action.title.trim();
+    if (!ACTION_ID_PATTERN.test(id)) throw new WhatsAppApiError(400, "WHATSAPP_ACTION_ID_INVALID", "معرّف عنصر WhatsApp غير صالح.", false);
+    if (!actionTitle) throw new WhatsAppApiError(400, "WHATSAPP_ACTION_TITLE_INVALID", "عنوان عنصر WhatsApp مطلوب.", false);
+    return {
+      id,
+      title: actionTitle.slice(0, 24),
+      ...(action.description?.trim() ? { description: action.description.trim().slice(0, 72) } : {}),
+    };
+  });
   const response = await graphRequest({
     messaging_product: "whatsapp",
     recipient_type: "individual",
@@ -271,17 +317,10 @@ export async function sendInteractiveList(input: {
     type: "interactive",
     interactive: {
       type: "list",
-      body: { text: input.bodyText.slice(0, 1024) },
+      body: { text: bodyText },
       action: {
-        button: input.buttonText.slice(0, 20),
-        sections: [{
-          title: input.title.slice(0, 24),
-          rows: input.actions.map((action) => ({
-            id: action.id.slice(0, 200),
-            title: action.title.slice(0, 24),
-            ...(action.description ? { description: action.description.slice(0, 72) } : {}),
-          })),
-        }],
+        button: buttonText,
+        sections: [{ title, rows: actions }],
       },
     },
   }, input);
@@ -293,10 +332,15 @@ export async function markMessageAsRead(input: {
   config?: WhatsAppRuntimeConfig;
   fetchImpl?: FetchLike;
 }) {
+  const messageId = requiredText(input.messageId, {
+    code: "WHATSAPP_MESSAGE_ID_EMPTY",
+    message: "معرّف رسالة WhatsApp مطلوب.",
+    maximum: 512,
+  });
   const response = await graphRequest({
     messaging_product: "whatsapp",
     status: "read",
-    message_id: input.messageId,
+    message_id: messageId,
   }, input);
   if (!response || typeof response !== "object" || Array.isArray(response)
     || (response as Record<string, unknown>).success !== true) {
@@ -338,8 +382,13 @@ export async function downloadWhatsAppMedia(input: {
   fetchImpl?: FetchLike;
 }) {
   const config = input.config ?? requireWhatsAppConfig();
+  const mediaId = requiredText(input.mediaId, {
+    code: "WHATSAPP_MEDIA_ID_EMPTY",
+    message: "معرّف وسائط WhatsApp مطلوب.",
+    maximum: 512,
+  });
   const metadata = await fetchJson<{ url?: string; mime_type?: string; file_size?: number }>({
-    url: graphUrl(config, input.mediaId),
+    url: graphUrl(config, mediaId),
     accessToken: config.accessToken,
     fetchImpl: input.fetchImpl,
   });
@@ -373,7 +422,7 @@ export async function downloadWhatsAppMedia(input: {
     return {
       content,
       mimeType,
-      filename: input.filename?.trim() || `whatsapp-${input.mediaId}`,
+      filename: input.filename?.trim() || `whatsapp-${mediaId}`,
     };
   } finally {
     clearTimeout(timeout);
