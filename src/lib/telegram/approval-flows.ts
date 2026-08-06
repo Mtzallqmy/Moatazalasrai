@@ -23,8 +23,8 @@ function messageId(context: TelegramActionContext) {
 
 export async function renderApprovals(context: TelegramActionContext) {
   assertApprovalRole(context);
-  const rows = await listPendingToolApprovals(context.actor.organizationId);
-  if (!rows.length) {
+  const allRows = await listPendingToolApprovals(context.actor.organizationId);
+  if (!allRows.length) {
     return sendTelegramEmptyState({
       chatId: context.update.chatId,
       messageId: messageId(context),
@@ -33,15 +33,23 @@ export async function renderApprovals(context: TelegramActionContext) {
       buttonRows: [[{ id: "nav:home", title: "الرئيسية" }, { id: "cap:approvals.list:1", title: "تحديث" }]],
     });
   }
+  const limit = 5;
+  const pages = Math.max(1, Math.ceil(allRows.length / limit));
+  const page = Math.min(Math.max(1, context.page), pages);
+  const rows = allRows.slice((page - 1) * limit, page * limit);
+  const pager = [] as Array<{ id: string; title: string }>;
+  if (page > 1) pager.push({ id: `cap:approvals.list:${page - 1}`, title: "السابق" });
+  if (page < pages) pager.push({ id: `cap:approvals.list:${page + 1}`, title: "التالي" });
   return sendTelegramList({
     chatId: context.update.chatId,
     messageId: messageId(context),
     path: "الرئيسية ← التشغيل ← الموافقات",
-    title: "الموافقات المعلقة الفعلية",
-    items: rows.slice(0, 20).map((approval, index) => `${index + 1}. ${approval.toolName}\nالوكيل: ${approval.agentName}\nالمصدر: ${approval.serverName}\nالمخاطر: ${approval.risk ?? "غير محددة"}\nتنتهي: ${approval.expiresAt.toISOString()}`),
+    title: `الموافقات المعلقة الفعلية — صفحة ${page} من ${pages}`,
+    items: rows.map((approval, index) => `${(page - 1) * limit + index + 1}. ${approval.toolName}\nالوكيل: ${approval.agentName}\nالمصدر: ${approval.serverName}\nالمخاطر: ${approval.risk ?? "غير محددة"}\nتنتهي: ${approval.expiresAt.toISOString()}`),
     buttonRows: [
-      ...rows.slice(0, 20).map((approval) => [{ id: `ap:v:${approval.id}`, title: `${approval.toolName} — ${approval.risk ?? "موافقة"}`.slice(0, 60) }]),
-      [{ id: "nav:home", title: "الرئيسية" }, { id: "cap:approvals.list:1", title: "تحديث" }],
+      ...rows.map((approval) => [{ id: `ap:v:${approval.id}`, title: `${approval.toolName} — ${approval.risk ?? "موافقة"}`.slice(0, 60) }]),
+      ...(pager.length ? [pager] : []),
+      [{ id: "nav:home", title: "الرئيسية" }, { id: `cap:approvals.list:${page}`, title: "تحديث" }],
     ],
   });
 }
@@ -127,7 +135,7 @@ export async function decideApproval(context: TelegramActionContext, rowId: stri
     messageId: messageId(context),
     path: "الرئيسية ← التشغيل ← الموافقات ← النتيجة",
     title: approved ? "تم حفظ الموافقة" : "تم حفظ الرفض",
-    description: `الحالة الجديدة: ${result.status}\nتم إنشاء مهمة استئناف فعلية: ${queued.jobId}\nلن يُعالج القرار مرة ثانية.",
+    description: `الحالة الجديدة: ${result.status}\nتم إنشاء مهمة استئناف فعلية: ${queued.jobId}\nلن يُعالج القرار مرة ثانية.`,
     buttonRows: [[{ id: "cap:approvals.list:1", title: "الموافقات المعلقة" }, { id: "nav:home", title: "الرئيسية" }]],
   });
 }
