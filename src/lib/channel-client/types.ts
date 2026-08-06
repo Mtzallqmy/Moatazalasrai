@@ -39,6 +39,7 @@ export type ChannelClientRuntimeInput = {
   actionId?: string | null;
   transport: ChannelClientTransport;
   featureAllowed(featureKey: string): Promise<boolean>;
+  unlinkAccount?(): Promise<void>;
 };
 
 export type ChannelClientRuntimeResult = {
