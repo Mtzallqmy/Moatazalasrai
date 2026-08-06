@@ -6,6 +6,8 @@ import type {
   BrowserResumePayload,
   BrowserTaskPayload,
   DocumentParsePayload,
+  ExecutionMaintenancePayload,
+  ExecutionTaskPayload,
   NotificationDispatchPayload,
   SandboxCleanupPayload,
   SandboxExecutionPayload,
@@ -133,5 +135,63 @@ export function enqueueBrowserResume(payload: BrowserResumePayload) {
     queueName: `browser:${payload.organizationId}`,
     maxAttempts: 3,
     jobKey: `browser-task-resume:${payload.approvalId}`,
+  });
+}
+
+export function enqueueExecutionProvision(payload: ExecutionTaskPayload) {
+  return addJob("execution-provision", payload, {
+    queueName: "execution-provision",
+    maxAttempts: 3,
+    jobKey: `execution:provision:${payload.jobId}`,
+  });
+}
+
+export function enqueueExecutionRunStep(payload: ExecutionTaskPayload) {
+  return addJob("execution-run-step", payload, {
+    queueName: "execution-run",
+    maxAttempts: 3,
+    jobKey: `execution:run:${payload.jobId}:1`,
+  });
+}
+
+export function enqueueExecutionCollectArtifacts(payload: ExecutionTaskPayload) {
+  return addJob("execution-collect-artifacts", payload, {
+    queueName: "execution-run",
+    maxAttempts: 3,
+    jobKey: `execution:artifacts:${payload.jobId}`,
+  });
+}
+
+export function enqueueExecutionCancel(payload: ExecutionTaskPayload) {
+  return addJob("execution-cancel", payload, {
+    queueName: "execution-cleanup",
+    maxAttempts: 5,
+    jobKey: `execution:cancel:${payload.jobId}`,
+  });
+}
+
+export function enqueueExecutionCleanup(payload: ExecutionTaskPayload) {
+  return addJob("execution-cleanup", payload, {
+    queueName: "execution-cleanup",
+    maxAttempts: 10,
+    jobKey: `execution:cleanup:${payload.jobId}`,
+  });
+}
+
+export function enqueueExecutionReconcile(payload: ExecutionMaintenancePayload) {
+  return addJob("execution-reconcile", payload, {
+    queueName: "execution-maintenance",
+    maxAttempts: 3,
+    jobKey: "execution:reconcile",
+    jobKeyMode: "replace",
+  });
+}
+
+export function enqueueExecutionExpire(payload: ExecutionMaintenancePayload) {
+  return addJob("execution-expire", payload, {
+    queueName: "execution-maintenance",
+    maxAttempts: 3,
+    jobKey: "execution:expire",
+    jobKeyMode: "replace",
   });
 }
