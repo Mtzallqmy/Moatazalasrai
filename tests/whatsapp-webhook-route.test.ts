@@ -2,95 +2,31 @@ import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetEnvForTests } from "@/lib/config/env";
 
-const connection = {
-  id: "00000000-0000-4000-8000-000000000010",
-  organizationId: "00000000-0000-4000-8000-000000000011",
-  kind: "whatsapp" as const,
-  integrationId: null,
-  name: "WhatsApp",
-  externalAccountId: "1234567890",
-  displayAddress: "+967700000000",
-  credentialSource: "environment",
-  defaultAgentId: null,
-  defaultProviderCredentialId: null,
-  defaultModel: null,
-  inboxId: null,
-  workflowId: null,
-  settings: {},
-  status: "healthy",
-  enabled: true,
-  webhookStatus: "configured",
-  webhookLastVerifiedAt: null,
-  lastHealthAt: null,
-  lastErrorCode: null,
-  createdByUserId: null,
-  createdAt: new Date(),
-  updatedAt: new Date(),
-};
-
-const effectivePolicy = {
-  organizationId: connection.organizationId,
-  userId: "00000000-0000-4000-8000-000000000012",
-  agentId: null,
-  providerCredentialId: null,
-  modelId: null,
-  teamId: null,
-  inboxId: null,
-  workflowId: null,
-  allowedTools: [],
-  allowedActions: [],
-  permissions: ["ai.chat", "agent.use", "conversation.open"],
-  monthlyLimit: null,
-  autoReplyEnabled: true,
-  humanHandoffEnabled: true,
-  memoryEnabled: true,
-  filesEnabled: true,
-  status: "active" as const,
-  forceHumanHandoff: false,
-};
-
 const mocks = vi.hoisted(() => ({
-  processMessage: vi.fn(async () => undefined),
-  routeIncoming: vi.fn(async () => ({ duplicate: false })),
-  featureEnabled: vi.fn(async () => true),
-  insertReturning: vi.fn(async () => [{ id: "event-id" }]),
+  insertReturning: vi.fn(),
+  selectLimit: vi.fn(),
   updateWhere: vi.fn(async () => []),
-  resolveSender: vi.fn(),
-  resolvePolicy: vi.fn(),
-  ensureProjection: vi.fn(),
+  enqueue: vi.fn(async () => ({ jobId: "job-1" })),
 }));
 
-vi.mock("@/lib/integrations/whatsapp/commands", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/integrations/whatsapp/commands")>();
-  return { ...actual, processWhatsAppMessage: mocks.processMessage };
-});
-vi.mock("@/lib/channels/whatsapp-platform", () => ({
-  resolveWhatsAppSender: mocks.resolveSender,
-  resolveEffectiveWhatsAppPolicy: mocks.resolvePolicy,
-  ensureOrganizationWhatsAppProjection: mocks.ensureProjection,
-  connectionForWhatsAppPolicy: (value: typeof connection) => value,
-  channelPolicyForWhatsApp: () => ({
-    settings: {},
-    permissions: new Set(["ai.chat", "agent.use", "conversation.open"]),
-    blockedOperations: new Set(["financial", "sensitive"]),
-    allowedCommands: new Set(),
-    allowedToolIds: [],
-  }),
-  withWhatsAppChannelPolicy: (_input: unknown, callback: () => Promise<unknown>) => callback(),
-}));
-vi.mock("@/lib/channels/router", () => ({ routeIncomingChannelMessage: mocks.routeIncoming }));
-vi.mock("@/lib/control-plane/features", () => ({ isFeatureEnabled: mocks.featureEnabled }));
-vi.mock("@/lib/security/rate-limit", () => ({ enforceRateLimit: vi.fn(async () => undefined) }));
 vi.mock("@/db", () => ({
   db: () => ({
-    insert: () => ({ values: () => ({ returning: mocks.insertReturning }) }),
+    insert: () => ({
+      values: () => ({
+        onConflictDoNothing: () => ({ returning: mocks.insertReturning }),
+      }),
+    }),
+    select: () => ({
+      from: () => ({
+        where: () => ({ limit: mocks.selectLimit }),
+      }),
+    }),
     update: () => ({ set: () => ({ where: mocks.updateWhere }) }),
   }),
 }));
-vi.mock("next/server", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("next/server")>();
-  return { ...actual, after: (callback: () => unknown) => { void callback(); } };
-});
+vi.mock("@/lib/security/rate-limit", () => ({ enforceRateLimit: vi.fn(async () => undefined) }));
+vi.mock("@/lib/platform/runtime-hydration", () => ({ hydrateRuntimeForRequest: vi.fn(async () => undefined) }));
+vi.mock("@/worker/queue", () => ({ enqueueWhatsAppChannelUpdate: mocks.enqueue }));
 
 const managed = [
   "NODE_ENV", "DATABASE_URL", "CREDENTIAL_ENCRYPTION_KEY", "APP_URL", "PUBLIC_APP_URL",
@@ -122,13 +58,9 @@ beforeEach(() => {
     WHATSAPP_CONNECT_TOKEN_TTL_MINUTES: "10",
   });
   resetEnvForTests();
-  for (const mock of Object.values(mocks)) mock.mockClear();
-  mocks.featureEnabled.mockResolvedValue(true);
-  mocks.routeIncoming.mockResolvedValue({ duplicate: false });
-  mocks.insertReturning.mockResolvedValue([{ id: "event-id" }]);
-  mocks.resolveSender.mockResolvedValue({ organizationId: connection.organizationId, userId: effectivePolicy.userId, linked: true });
-  mocks.resolvePolicy.mockResolvedValue(effectivePolicy);
-  mocks.ensureProjection.mockResolvedValue(connection);
+  vi.clearAllMocks();
+  mocks.insertReturning.mockResolvedValue([{ id: "event-id", status: "accepted" }]);
+  mocks.selectLimit.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -141,6 +73,15 @@ afterEach(() => {
   resetEnvForTests();
 });
 
+function signedRequest(raw: string, signature?: string) {
+  const value = signature ?? `sha256=${createHmac("sha256", process.env.META_APP_SECRET!).update(raw).digest("hex")}`;
+  return new Request("https://app.example/api/webhooks/whatsapp", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-hub-signature-256": value },
+    body: raw,
+  });
+}
+
 describe("WhatsApp webhook route", () => {
   it("returns the Meta challenge only for the configured verify token", async () => {
     const { GET } = await import("@/app/api/webhooks/whatsapp/route");
@@ -151,58 +92,52 @@ describe("WhatsApp webhook route", () => {
     expect(invalid.status).toBe(403);
   });
 
-  it("routes ordinary messages through the channel platform and handles commands separately", async () => {
+  it("persists and queues every ordinary or interactive message without heavy processing", async () => {
     const { POST } = await import("@/app/api/webhooks/whatsapp/route");
+    const messages = [
+      { id: "wamid.1", from: "967711111111", type: "text", text: { body: "لخص آخر محادثة" } },
+      { id: "wamid.2", from: "967722222222", type: "interactive", interactive: { button_reply: { id: "cc.account" } } },
+    ];
     const raw = JSON.stringify({ entry: [{ changes: [{ value: {
       metadata: { phone_number_id: "1234567890" },
-      messages: [
-        { id: "wamid.1", from: "967711111111", type: "text", text: { body: "لخص آخر محادثة" } },
-        { id: "wamid.2", from: "967722222222", type: "interactive", interactive: { button_reply: { id: "wa.account" } } },
-      ],
+      messages,
     } }] }] });
-    const signature = `sha256=${createHmac("sha256", process.env.META_APP_SECRET!).update(raw).digest("hex")}`;
-    const response = await POST(new Request("https://app.example/api/webhooks/whatsapp", { method: "POST", headers: { "content-type": "application/json", "x-hub-signature-256": signature }, body: raw }));
+    const response = await POST(signedRequest(raw));
     expect(response.status).toBe(200);
-    expect((await response.json()).data).toMatchObject({ legacyCommands: 1, channelMessages: 1 });
-    expect(mocks.insertReturning).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => expect(mocks.processMessage).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() => expect(mocks.routeIncoming).toHaveBeenCalledTimes(1));
+    expect((await response.json()).data).toMatchObject({ messages: 2, queued: 2, failed: 0 });
+    expect(mocks.insertReturning).toHaveBeenCalledTimes(2);
+    expect(mocks.enqueue).toHaveBeenNthCalledWith(1, { eventRowId: "event-id", message: messages[0] });
+    expect(mocks.enqueue).toHaveBeenNthCalledWith(2, { eventRowId: "event-id", message: messages[1] });
   });
 
-  it("acknowledges status-only events without scheduling message processing", async () => {
+  it("acknowledges status-only events without scheduling processing", async () => {
     const { POST } = await import("@/app/api/webhooks/whatsapp/route");
     const raw = JSON.stringify({ entry: [{ changes: [{ value: { metadata: { phone_number_id: "1234567890" }, statuses: [{ id: "wamid.status" }] } }] }] });
-    const signature = `sha256=${createHmac("sha256", process.env.META_APP_SECRET!).update(raw).digest("hex")}`;
-    const response = await POST(new Request("https://app.example/api/webhooks/whatsapp", { method: "POST", headers: { "content-type": "application/json", "x-hub-signature-256": signature }, body: raw }));
+    const response = await POST(signedRequest(raw));
     expect(response.status).toBe(200);
-    expect((await response.json()).data).toMatchObject({ messages: 0, duplicates: 0 });
-    expect(mocks.processMessage).not.toHaveBeenCalled();
-    expect(mocks.routeIncoming).not.toHaveBeenCalled();
+    expect((await response.json()).data).toMatchObject({ messages: 0, queued: 0, duplicates: 0 });
+    expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 
-  it("delegates repeated ordinary message IDs to the idempotent channel router", async () => {
-    mocks.routeIncoming.mockResolvedValueOnce({ duplicate: true });
+  it("does not queue an event already completed", async () => {
+    mocks.insertReturning.mockResolvedValueOnce([]);
+    mocks.selectLimit.mockResolvedValueOnce([{ id: "event-id", status: "completed" }]);
     const { POST } = await import("@/app/api/webhooks/whatsapp/route");
     const raw = JSON.stringify({ entry: [{ changes: [{ value: {
       metadata: { phone_number_id: "1234567890" },
-      messages: [{ id: "wamid.duplicate", from: "967711111111", type: "text", text: { body: "اكتب تقريرًا قصيرًا" } }],
+      messages: [{ id: "wamid.duplicate", from: "967711111111", type: "text", text: { body: "رسالة" } }],
     } }] }] });
-    const signature = `sha256=${createHmac("sha256", process.env.META_APP_SECRET!).update(raw).digest("hex")}`;
-    const response = await POST(new Request("https://app.example/api/webhooks/whatsapp", { method: "POST", headers: { "content-type": "application/json", "x-hub-signature-256": signature }, body: raw }));
+    const response = await POST(signedRequest(raw));
     expect(response.status).toBe(200);
-    expect((await response.json()).data).toMatchObject({ messages: 1, channelMessages: 1 });
-    await vi.waitFor(() => expect(mocks.routeIncoming).toHaveBeenCalledTimes(1));
+    expect((await response.json()).data).toMatchObject({ messages: 1, queued: 0, duplicates: 1 });
+    expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 
-  it("rejects a POST with an invalid signature before database processing", async () => {
+  it("rejects an invalid signature before database processing", async () => {
     const { POST } = await import("@/app/api/webhooks/whatsapp/route");
-    const response = await POST(new Request("https://app.example/api/webhooks/whatsapp", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-hub-signature-256": `sha256=${"0".repeat(64)}` },
-      body: JSON.stringify({ entry: [] }),
-    }));
+    const response = await POST(signedRequest(JSON.stringify({ entry: [] }), `sha256=${"0".repeat(64)}`));
     expect(response.status).toBe(401);
     expect(mocks.insertReturning).not.toHaveBeenCalled();
-    expect(mocks.routeIncoming).not.toHaveBeenCalled();
+    expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 });
