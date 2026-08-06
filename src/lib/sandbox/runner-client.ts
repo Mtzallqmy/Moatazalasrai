@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { env } from "@/lib/config/env";
 import { ApiError } from "@/lib/http/api";
@@ -71,9 +71,13 @@ function runnerConfig() {
   return { baseUrl: config.sandboxRunnerUrl, secret: config.sandboxRunnerSharedSecret };
 }
 
-function signature(secret: string, timestamp: string, nonce: string, method: string, pathname: string, body: string) {
+function bodySha256(body: string) {
+  return createHash("sha256").update(body, "utf8").digest("base64url");
+}
+
+function signature(secret: string, timestamp: string, nonce: string, service: string, method: string, pathname: string, bodyHash: string) {
   return createHmac("sha256", secret)
-    .update([timestamp, nonce, method.toUpperCase(), pathname, body].join("\n"), "utf8")
+    .update([timestamp, nonce, service, method.toUpperCase(), pathname, bodyHash].join("\n"), "utf8")
     .digest("base64url");
 }
 
@@ -85,12 +89,15 @@ async function runnerRequest<T>(input: {
   signal?: AbortSignal;
   authenticated?: boolean;
   timeoutMs?: number;
+  service?: "platform-execution-kernel" | "platform-sandbox";
 }): Promise<T> {
   const { baseUrl, secret } = runnerConfig();
   const method = input.method ?? "POST";
   const body = input.body === undefined ? "" : JSON.stringify(input.body);
   const timestamp = Date.now().toString();
   const nonce = randomUUID();
+  const service = input.service ?? "platform-sandbox";
+  const hash = bodySha256(body);
   const url = new URL(input.pathname, `${baseUrl}/`);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), input.timeoutMs ?? 30_000);
@@ -106,8 +113,9 @@ async function runnerRequest<T>(input: {
         ...(authenticated ? {
           "x-moataz-timestamp": timestamp,
           "x-moataz-nonce": nonce,
-          "x-moataz-signature": signature(secret, timestamp, nonce, method, url.pathname, body),
-          "x-moataz-service": "platform-execution-kernel",
+          "x-moataz-body-sha256": hash,
+          "x-moataz-signature": signature(secret, timestamp, nonce, service, method, url.pathname, hash),
+          "x-moataz-service": service,
         } : {}),
       },
       ...(body ? { body } : {}),
@@ -203,6 +211,7 @@ export function startRunnerExecution(input: LegacyExecutionRequest | ArgvExecuti
     pathname: `/v1/workspaces/${encodeURIComponent(input.workspaceId)}/executions`,
     body: input,
     schema: executionResponseSchema,
+    service: "argv" in input ? "platform-execution-kernel" : "platform-sandbox",
   });
 }
 
