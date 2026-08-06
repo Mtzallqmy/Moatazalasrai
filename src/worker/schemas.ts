@@ -53,6 +53,15 @@ export const notificationDispatchPayloadSchema = z.object({
   eventId: uuid,
 }).strict();
 
+export const executionTaskPayloadSchema = z.object({
+  organizationId: uuid,
+  jobId: uuid,
+}).strict();
+
+export const executionMaintenancePayloadSchema = z.object({
+  requestedAt: z.string().datetime(),
+}).strict();
+
 export type AgentTeamRunPayload = z.infer<typeof agentTeamRunPayloadSchema>;
 export type DocumentParsePayload = z.infer<typeof documentParsePayloadSchema>;
 export type AgentRunResumePayload = z.infer<typeof agentRunResumePayloadSchema>;
@@ -63,6 +72,8 @@ export type SandboxCleanupPayload = z.infer<typeof sandboxCleanupPayloadSchema>;
 export type BrowserTaskPayload = z.infer<typeof browserTaskPayloadSchema>;
 export type BrowserResumePayload = z.infer<typeof browserResumePayloadSchema>;
 export type NotificationDispatchPayload = z.infer<typeof notificationDispatchPayloadSchema>;
+export type ExecutionTaskPayload = z.infer<typeof executionTaskPayloadSchema>;
+export type ExecutionMaintenancePayload = z.infer<typeof executionMaintenancePayloadSchema>;
 
 export const supportedWorkerTasks = [
   "agent-team-run",
@@ -82,5 +93,12 @@ export const supportedWorkerTasks = [
   "browser-artifact-cleanup",
   "site-connection-health-check",
   "oauth-token-refresh",
+  "execution-provision",
+  "execution-run-step",
+  "execution-collect-artifacts",
+  "execution-cancel",
+  "execution-cleanup",
+  "execution-reconcile",
+  "execution-expire",
 ] as const;
 export type SupportedWorkerTask = typeof supportedWorkerTasks[number];
