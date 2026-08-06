@@ -18,7 +18,7 @@ jobs:
   validate:
     name: validate
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 55
     services:
       postgres:
         image: postgres:16-alpine
@@ -75,6 +75,13 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Railway production image contract
+        run: |
+          docker build --target runner -t moataz-railway-ci .
+          docker run --rm --entrypoint node moataz-railway-ci --check dist/worker.mjs
+          docker run --rm --entrypoint node moataz-railway-ci --check scripts/start-worker.mjs
+          docker run --rm --entrypoint sh moataz-railway-ci -c 'test -f dist/worker.mjs && test -f drizzle/0041_channel_client_sessions.sql && test -f scripts/start-production.mjs'
 
       - name: Migration dry-run and PostgreSQL integration tests
         env:
