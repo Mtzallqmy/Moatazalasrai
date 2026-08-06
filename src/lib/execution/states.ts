@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { executionArtifacts, executionEvents, executionJobs, executionSteps } from "@/db/execution-schema";
 import type { ExecutionStatus } from "@/lib/execution/contracts";
 import { ExecutionError } from "@/lib/execution/errors";
+import type { ExecutionTransaction } from "@/lib/execution/repository";
 
 export const TERMINAL_EXECUTION_STATUSES = new Set<ExecutionStatus>([
   "completed",
@@ -50,7 +51,7 @@ function transitionEvent(status: ExecutionStatus) {
   return events[status] ?? "job.failed";
 }
 
-async function assertCompletionEvidence(tx: Parameters<Parameters<ReturnType<typeof db>["transaction"]>[0]>[0], job: typeof executionJobs.$inferSelect) {
+async function assertCompletionEvidence(tx: ExecutionTransaction, job: typeof executionJobs.$inferSelect) {
   const [incomplete] = await tx.select({ value: count() }).from(executionSteps).where(and(
     eq(executionSteps.jobId, job.id),
     ne(executionSteps.status, "completed"),
@@ -58,7 +59,7 @@ async function assertCompletionEvidence(tx: Parameters<Parameters<ReturnType<typ
   if ((incomplete?.value ?? 0) > 0) {
     throw new ExecutionError("EXECUTION_INVALID_TRANSITION", "لا يمكن إكمال التنفيذ قبل اكتمال جميع الخطوات.");
   }
-  const summary = job.resultSummary && typeof job.resultSummary === "object" ? job.resultSummary : {};
+  const summary = job.resultSummary ?? {};
   if (summary.executionVerified !== true) {
     throw new ExecutionError("EXECUTION_INVALID_TRANSITION", "لا يمكن إكمال التنفيذ دون دليل تنفيذ موثق.");
   }
