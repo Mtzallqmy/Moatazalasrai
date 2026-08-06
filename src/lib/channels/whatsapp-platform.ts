@@ -8,7 +8,7 @@ import {
   type ChannelConnectionSettings,
   type ChannelPermissionName,
 } from "@/db/channel-schema";
-import { whatsappConnections } from "@/db/schema";
+import { agents, agentVersions, whatsappConnections } from "@/db/schema";
 import {
   platformWhatsAppDefaults,
   platformWhatsAppEndpoints,
@@ -17,12 +17,15 @@ import {
 } from "@/db/whatsapp-platform-schema";
 import { requireWhatsAppConfig } from "@/lib/integrations/whatsapp/config";
 import type { ChannelRoutingPolicy } from "@/lib/channels/types";
+import type { WhatsAppSession } from "@/lib/whatsapp/session-service";
 
 const ENDPOINT_ID = "primary";
 const SAFE_DEFAULT_PERMISSIONS: ChannelPermissionName[] = [
   "ai.chat",
   "agent.use",
+  "account.read",
   "conversation.open",
+  "files.use",
   "handoff.request",
 ];
 const KNOWN_PERMISSIONS = new Set<ChannelPermissionName>([
@@ -39,7 +42,7 @@ const KNOWN_PERMISSIONS = new Set<ChannelPermissionName>([
   "handoff.request",
 ]);
 
-type EffectiveWhatsAppPolicy = {
+export type EffectiveWhatsAppPolicy = {
   organizationId: string;
   userId: string | null;
   agentId: string | null;
@@ -245,6 +248,32 @@ export async function resolveEffectiveWhatsAppPolicy(input: {
   };
 }
 
+export async function applyWhatsAppSessionSelection(
+  policy: EffectiveWhatsAppPolicy,
+  session: WhatsAppSession | null | undefined,
+): Promise<EffectiveWhatsAppPolicy> {
+  if (!session?.selectedAgentId) return policy;
+  const [selected] = await db().select({
+    id: agents.id,
+    providerCredentialId: agentVersions.providerCredentialId,
+    model: agentVersions.model,
+  }).from(agents).innerJoin(agentVersions, and(
+    eq(agentVersions.agentId, agents.id),
+    eq(agentVersions.version, agents.currentVersion),
+  )).where(and(
+    eq(agents.id, session.selectedAgentId),
+    eq(agents.organizationId, policy.organizationId),
+    eq(agents.status, "published"),
+  )).limit(1);
+  if (!selected) return { ...policy, agentId: null, providerCredentialId: null, modelId: null };
+  return {
+    ...policy,
+    agentId: selected.id,
+    providerCredentialId: selected.providerCredentialId,
+    modelId: selected.model,
+  };
+}
+
 export function connectionForWhatsAppPolicy<T extends {
   defaultAgentId: string | null;
   defaultProviderCredentialId: string | null;
@@ -274,7 +303,7 @@ export function connectionForWhatsAppPolicy<T extends {
   };
 }
 
-export function channelPolicyForWhatsApp(connectionId: string, policy: EffectiveWhatsAppPolicy): ChannelRoutingPolicy {
+export function channelPolicyForWhatsApp(_connectionId: string, policy: EffectiveWhatsAppPolicy): ChannelRoutingPolicy {
   return {
     settings: {
       autoReplyEnabled: policy.autoReplyEnabled,
