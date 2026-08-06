@@ -82,7 +82,7 @@ export async function listAccessibleAgents(input: {
   limit?: number;
   offset?: number;
 }) {
-  const publishedOnly = input.publishedOnly ?? input.role === "member";
+  const runnableOnly = input.publishedOnly ?? input.role === "member";
   return db().select({
     id: agents.id,
     name: agents.name,
@@ -91,6 +91,9 @@ export async function listAccessibleAgents(input: {
     currentVersion: agents.currentVersion,
     providerCredentialId: agentVersions.providerCredentialId,
     providerName: providerCredentials.name,
+    providerEnabled: providerCredentials.enabled,
+    providerValidationStatus: providerCredentials.validationStatus,
+    providerDeletedAt: providerCredentials.deletedAt,
     model: agentVersions.model,
     updatedAt: agents.updatedAt,
   }).from(agents)
@@ -101,8 +104,10 @@ export async function listAccessibleAgents(input: {
     .innerJoin(providerCredentials, eq(providerCredentials.id, agentVersions.providerCredentialId))
     .where(and(
       eq(agents.organizationId, input.organizationId),
-      publishedOnly ? eq(agents.status, "published") : undefined,
-      isNull(providerCredentials.deletedAt),
+      runnableOnly ? eq(agents.status, "published") : undefined,
+      runnableOnly ? eq(providerCredentials.enabled, true) : undefined,
+      runnableOnly ? eq(providerCredentials.validationStatus, "verified") : undefined,
+      runnableOnly ? isNull(providerCredentials.deletedAt) : undefined,
     ))
     .orderBy(desc(agents.updatedAt), desc(agents.id))
     .limit(Math.min(Math.max(input.limit ?? 25, 1), 100))
@@ -115,6 +120,7 @@ export async function getAccessibleAgent(input: {
   agentId: string;
   requirePublished?: boolean;
 }) {
+  const runnableOnly = input.requirePublished === true || input.role === "member";
   const [agent] = await db().select({
     id: agents.id,
     name: agents.name,
@@ -123,6 +129,9 @@ export async function getAccessibleAgent(input: {
     currentVersion: agents.currentVersion,
     providerCredentialId: agentVersions.providerCredentialId,
     providerName: providerCredentials.name,
+    providerEnabled: providerCredentials.enabled,
+    providerValidationStatus: providerCredentials.validationStatus,
+    providerDeletedAt: providerCredentials.deletedAt,
     model: agentVersions.model,
     updatedAt: agents.updatedAt,
   }).from(agents)
@@ -134,15 +143,25 @@ export async function getAccessibleAgent(input: {
     .where(and(
       eq(agents.id, input.agentId),
       eq(agents.organizationId, input.organizationId),
-      input.requirePublished || input.role === "member" ? eq(agents.status, "published") : undefined,
-      eq(providerCredentials.enabled, true),
-      eq(providerCredentials.validationStatus, "verified"),
-      isNull(providerCredentials.deletedAt),
+      runnableOnly ? eq(agents.status, "published") : undefined,
+      runnableOnly ? eq(providerCredentials.enabled, true) : undefined,
+      runnableOnly ? eq(providerCredentials.validationStatus, "verified") : undefined,
+      runnableOnly ? isNull(providerCredentials.deletedAt) : undefined,
     )).limit(1);
   if (!agent) {
-    throw new ApiError(404, "AGENT_UNAVAILABLE", "الوكيل غير موجود أو غير جاهز للاستخدام.");
+    throw new ApiError(
+      runnableOnly ? 422 : 404,
+      runnableOnly ? "AGENT_UNAVAILABLE" : "AGENT_NOT_FOUND",
+      runnableOnly ? "الوكيل غير منشور أو المزود والنموذج غير جاهزين." : "الوكيل غير موجود.",
+    );
   }
-  return agent;
+  return {
+    ...agent,
+    runnable: agent.status === "published"
+      && agent.providerEnabled
+      && agent.providerValidationStatus === "verified"
+      && !agent.providerDeletedAt,
+  };
 }
 
 export async function createAgent(input: {
