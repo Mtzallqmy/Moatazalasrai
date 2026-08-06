@@ -11,6 +11,7 @@ import { sandboxExecuteTask } from "@/worker/tasks/sandbox-execute";
 import { sandboxResetTask } from "@/worker/tasks/sandbox-reset";
 import { sandboxResumeTask } from "@/worker/tasks/sandbox-resume";
 import { telegramCentralUpdateTask } from "@/worker/tasks/telegram-central-update";
+import { whatsappChannelUpdateTask } from "@/worker/tasks/whatsapp-channel-update";
 
 export const taskList = {
   "agent-run-resume": agentRunResumeTask,
@@ -20,6 +21,7 @@ export const taskList = {
   "document-parse": documentParseTask,
   "notification-dispatch": notificationDispatchTask,
   "telegram-central-update": telegramCentralUpdateTask,
+  "whatsapp-channel-update": whatsappChannelUpdateTask,
   "sandbox-create": sandboxCreateTask,
   "sandbox-execute": sandboxExecuteTask,
   "sandbox-resume": sandboxResumeTask,
