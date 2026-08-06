@@ -1,4 +1,4 @@
-// Telegram Bot API client used by the shared channel adapter and legacy integrations.
+// Low-level Telegram Bot API client. Central platform code must use src/lib/telegram/client.ts.
 import { ApiError } from "@/lib/http/api";
 import { integrationFetch } from "./http";
 
@@ -22,14 +22,14 @@ export type TelegramInlineButton = {
 };
 
 export const CENTRAL_TELEGRAM_COMMANDS = [
-  { command: "start", description: "بدء البوت وعرض الحالة" },
-  { command: "help", description: "عرض جميع الأوامر" },
-  { command: "status", description: "حالة الربط والميزات" },
-  { command: "agents", description: "عرض الوكلاء المتاحين" },
-  { command: "new", description: "بدء محادثة جديدة" },
-  { command: "files", description: "تعليمات إرسال الملفات" },
-  { command: "unlink", description: "فصل حساب Telegram" },
-  { command: "cancel", description: "إلغاء العملية الحالية" },
+  { command: "start", description: "بدء البوت وعرض القائمة" },
+  { command: "help", description: "عرض الأوامر المتاحة" },
+  { command: "status", description: "حالة الحساب والجلسة" },
+  { command: "agents", description: "عرض الوكلاء الحقيقيين" },
+  { command: "new", description: "بدء محادثة حقيقية" },
+  { command: "files", description: "عرض وإرسال الملفات" },
+  { command: "unlink", description: "فصل الحساب بعد التأكيد" },
+  { command: "cancel", description: "إلغاء العملية النشطة" },
 ] as const;
 
 async function telegramCall<T>(
@@ -50,11 +50,21 @@ async function telegramCall<T>(
     throw new ApiError(
       response.status === 401 ? 422 : 502,
       response.status === 401 ? "TELEGRAM_TOKEN_INVALID" : "TELEGRAM_API_ERROR",
-      response.status === 401 ? "توكن Telegram غير صالح." : "رفض Telegram طلب التكامل.",
+      response.status === 401 ? "توكن Telegram غير صالح." : "تعذر تنفيذ الطلب لدى Telegram.",
       { telegramStatus: payload?.error_code, telegramDescription: payload?.description?.slice(0, 240) },
     );
   }
   return payload.result;
+}
+
+function inlineKeyboard(rows: TelegramInlineButton[][] | undefined) {
+  if (!rows?.length) return undefined;
+  return {
+    inline_keyboard: rows.slice(0, 8).map((row) => row.slice(0, 4).map((button) => ({
+      text: button.title.slice(0, 64),
+      ...(button.url ? { url: button.url } : { callback_data: button.id }),
+    }))),
+  };
 }
 
 export function verifyTelegramToken(token: string) {
@@ -69,7 +79,7 @@ export function configureTelegramWebhook(input: {
   return telegramCall<boolean>(input.token, "setWebhook", {
     url: input.url,
     secret_token: input.secretToken,
-    allowed_updates: ["message", "edited_message", "callback_query"],
+    allowed_updates: ["message", "edited_message", "callback_query", "my_chat_member"],
     drop_pending_updates: false,
   });
 }
@@ -92,17 +102,13 @@ export function sendTelegramMessage(input: {
   replyKeyboard?: string[][];
   removeKeyboard?: boolean;
 }) {
-  const text = input.text.length > 4000 ? `${input.text.slice(0, 3990)}…` : input.text;
+  const text = input.text.length > 4096 ? `${input.text.slice(0, 4093)}…` : input.text;
   const legacyRows: TelegramInlineButton[][] | undefined = input.buttons
     ?.slice(0, 12)
     .map((button) => [{ title: button.title, id: button.id }]);
-  const rows = (input.buttonRows ?? legacyRows)?.slice(0, 8).map((row) => row.slice(0, 4).map((button) => ({
-    text: button.title.slice(0, 64),
-    ...(button.url ? { url: button.url } : { callback_data: (button.id ?? "telegram.help").slice(0, 64) }),
-  })));
-  const replyMarkup = rows?.length
-    ? { inline_keyboard: rows }
-    : input.replyKeyboard?.length
+  const keyboard = inlineKeyboard(input.buttonRows ?? legacyRows);
+  const replyMarkup = keyboard
+    ?? (input.replyKeyboard?.length
       ? {
           keyboard: input.replyKeyboard.slice(0, 8).map((row) => row.slice(0, 4).map((label) => ({ text: label.slice(0, 64) }))),
           resize_keyboard: true,
@@ -110,13 +116,53 @@ export function sendTelegramMessage(input: {
         }
       : input.removeKeyboard
         ? { remove_keyboard: true }
-        : undefined;
+        : undefined);
   return telegramCall<{ message_id?: number }>(input.token, "sendMessage", {
     chat_id: input.chatId,
     text,
     disable_web_page_preview: true,
     ...(input.replyToMessageId ? { reply_parameters: { message_id: Number(input.replyToMessageId) } } : {}),
     ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+  });
+}
+
+export function editTelegramMessage(input: {
+  token: string;
+  chatId: string;
+  messageId: string;
+  text: string;
+  buttonRows?: TelegramInlineButton[][];
+}) {
+  return telegramCall<{ message_id?: number }>(input.token, "editMessageText", {
+    chat_id: input.chatId,
+    message_id: Number(input.messageId),
+    text: input.text.length > 4096 ? `${input.text.slice(0, 4093)}…` : input.text,
+    disable_web_page_preview: true,
+    ...(input.buttonRows ? { reply_markup: inlineKeyboard(input.buttonRows) } : {}),
+  });
+}
+
+export function editTelegramReplyMarkup(input: {
+  token: string;
+  chatId: string;
+  messageId: string;
+  buttonRows?: TelegramInlineButton[][];
+}) {
+  return telegramCall<boolean | { message_id?: number }>(input.token, "editMessageReplyMarkup", {
+    chat_id: input.chatId,
+    message_id: Number(input.messageId),
+    reply_markup: inlineKeyboard(input.buttonRows) ?? { inline_keyboard: [] },
+  });
+}
+
+export function sendTelegramChatAction(input: {
+  token: string;
+  chatId: string;
+  action: "typing" | "upload_document" | "upload_photo" | "record_voice" | "upload_video";
+}) {
+  return telegramCall<boolean>(input.token, "sendChatAction", {
+    chat_id: input.chatId,
+    action: input.action,
   });
 }
 
@@ -127,12 +173,39 @@ export function answerTelegramCallback(input: { token: string; callbackQueryId: 
   });
 }
 
+export async function sendTelegramDocumentApi(input: {
+  token: string;
+  chatId: string;
+  filename: string;
+  mimeType: string;
+  content: Buffer;
+  caption?: string;
+}) {
+  const form = new FormData();
+  form.set("chat_id", input.chatId);
+  form.set("document", new Blob([new Uint8Array(input.content)], { type: input.mimeType }), input.filename);
+  if (input.caption?.trim()) form.set("caption", input.caption.trim().slice(0, 1024));
+  const response = await integrationFetch(
+    `https://api.telegram.org/bot${encodeURIComponent(input.token)}/sendDocument`,
+    { method: "POST", body: form },
+    30_000,
+  );
+  const payload = await response.json().catch(() => null) as TelegramEnvelope<{ message_id?: number }> | null;
+  if (!response.ok || !payload?.ok || !payload.result) {
+    throw new ApiError(502, "TELEGRAM_API_ERROR", "تعذر إرسال المستند عبر Telegram.", {
+      telegramStatus: payload?.error_code,
+      telegramDescription: payload?.description?.slice(0, 240),
+    });
+  }
+  return payload.result;
+}
+
 export async function downloadTelegramFile(token: string, fileId: string): Promise<{
   content: Buffer;
   filePath: string;
 }> {
   const metadata = await telegramCall<{ file_path?: string }>(token, "getFile", { file_id: fileId });
-  if (!metadata.file_path || metadata.file_path.includes("..")) {
+  if (!metadata.file_path || metadata.file_path.includes("..") || metadata.file_path.startsWith("/")) {
     throw new ApiError(502, "TELEGRAM_FILE_INVALID", "تعذر تحديد ملف Telegram.");
   }
   const response = await integrationFetch(
