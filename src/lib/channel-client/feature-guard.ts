@@ -45,6 +45,11 @@ export function requiredChannelFeatures(input: {
     || normalized === "الوكلاء";
   if (listingAgents) add("agents", "الوكلاء");
 
+  const opensFiles = action === "cc.files"
+    || normalized === "/files"
+    || normalized === "الملفات";
+  if (opensFiles) add("files", "الملفات");
+
   const startsChat = action === "cc.chat"
     || action === "cc.chat.continue"
     || action.startsWith("cc.agent:")
