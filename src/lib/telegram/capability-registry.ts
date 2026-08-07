@@ -10,6 +10,9 @@ export type TelegramCapabilityId =
   | "chat.start"
   | "agents.list"
   | "agents.create"
+  | "teams.list"
+  | "teams.run"
+  | "runs.list"
   | "approvals.list"
   | "account.status";
 
@@ -68,6 +71,45 @@ export const TELEGRAM_CAPABILITIES: readonly TelegramCapability[] = [
     adminOnly: true,
   },
   {
+    id: "teams.list",
+    labelAr: "فرق الوكلاء",
+    descriptionAr: "عرض الفرق المفعلة وأعضائها وحالة جاهزيتها.",
+    icon: "👥",
+    requiredPermission: "agents:read",
+    telegramFeatureKey: "telegram.agents",
+    requiredPlatformModule: "agents",
+    fallbackDashboardUrl: "/dashboard/teams",
+    supportsPagination: true,
+    destructive: false,
+    adminOnly: false,
+  },
+  {
+    id: "teams.run",
+    labelAr: "تشغيل فريق",
+    descriptionAr: "إنشاء تشغيل حقيقي لفريق وكلاء عبر Graphile Worker.",
+    icon: "▶️",
+    requiredPermission: "agents:run",
+    telegramFeatureKey: "telegram.agents",
+    requiredPlatformModule: "agents",
+    fallbackDashboardUrl: "/dashboard/teams",
+    supportsPagination: false,
+    destructive: true,
+    adminOnly: false,
+  },
+  {
+    id: "runs.list",
+    labelAr: "عمليات التشغيل",
+    descriptionAr: "عرض حالات تشغيل فرق الوكلاء وإلغائها أو إعادة المحاولة وفق الصلاحيات.",
+    icon: "📈",
+    requiredPermission: "runs:read",
+    telegramFeatureKey: "telegram.agents",
+    requiredPlatformModule: "agents",
+    fallbackDashboardUrl: "/dashboard/runs",
+    supportsPagination: true,
+    destructive: false,
+    adminOnly: false,
+  },
+  {
     id: "approvals.list",
     labelAr: "الموافقات",
     descriptionAr: "مراجعة طلبات الأدوات المعلقة واتخاذ قرار حقيقي.",
@@ -110,8 +152,6 @@ async function moduleEnabled(organizationId: string, moduleKey: string) {
     eq(platformModules.organizationId, organizationId),
     eq(platformModules.key, moduleKey),
   )).limit(1);
-  // Core modules predate the control-plane table. A missing record means the module
-  // remains available; an explicit disabled/hidden/deleted state is authoritative.
   return !module || module.status === "active";
 }
 
