@@ -8,6 +8,7 @@ const scriptsDirectory = path.dirname(fileURLToPath(import.meta.url));
 const applicationRoot = path.resolve(scriptsDirectory, "..");
 const telegramSchemaScript = path.join(scriptsDirectory, "check-telegram-schema.mjs");
 const telegramSetupScript = path.join(scriptsDirectory, "setup-telegram-webhook.mjs");
+const whatsappSchemaScript = path.join(scriptsDirectory, "check-whatsapp-schema.mjs");
 
 validateOptionalRuntimeEnvironment();
 
@@ -58,6 +59,14 @@ if (enabled("TELEGRAM_INTEGRATION_ENABLED")) {
       timeoutMs: 70_000,
     });
   }
+}
+
+if (enabled("WHATSAPP_INTEGRATION_ENABLED")) {
+  runRequiredScript({
+    event: "whatsapp.schema.verification",
+    script: whatsappSchemaScript,
+    timeoutMs: 30_000,
+  });
 }
 
 const host = process.env.APP_HOST?.trim() || process.env.HOSTNAME?.trim() || "0.0.0.0";

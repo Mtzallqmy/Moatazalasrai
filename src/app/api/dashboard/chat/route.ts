@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { agents, attachments, conversationMembers, conversations, messages, users } from "@/db/schema";
 import { requireSession } from "@/lib/auth/authorization";
 import { canManageConversation, canWriteConversation, conversationAccessFilter } from "@/lib/chat/access";
+import { createConversationForAgent } from "@/lib/chat/conversation-service";
 import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { conversationActionSchema, paginationSchema, uuidSchema } from "@/lib/http/contracts";
 
@@ -157,34 +158,11 @@ export async function POST(request: Request) {
     const session = await requireSession("agents:run");
     const body = await parseJson(request, conversationActionSchema, 8 * 1024);
     if (body.action === "create") {
-      const [agent] = await db().select({ id: agents.id, name: agents.name })
-        .from(agents)
-        .where(and(
-          eq(agents.id, body.agentId),
-          eq(agents.organizationId, session.organizationId),
-          eq(agents.status, "published"),
-        ))
-        .limit(1);
-      if (!agent) throw new ApiError(422, "AGENT_UNAVAILABLE", "الوكيل غير منشور أو غير موجود.");
-      const conversation = await db().transaction(async (tx) => {
-        const [created] = await tx.insert(conversations).values({
-          organizationId: session.organizationId,
-          agentId: agent.id,
-          createdByUserId: session.userId,
-          title: null,
-          status: "active",
-        }).returning();
-        if (!created) throw new Error("CONVERSATION_CREATE_FAILED");
-        await tx.insert(conversationMembers).values({
-          organizationId: session.organizationId,
-          conversationId: created.id,
-          userId: session.userId,
-          role: "manager",
-          addedByUserId: session.userId,
-        });
-        return created;
-      });
-      return apiSuccess(conversation, requestId, 201);
+      const result = await createConversationForAgent({
+        userId: session.userId,
+        organizationId: session.organizationId,
+      }, body.agentId);
+      return apiSuccess(result.conversation, requestId, 201);
     }
 
     const ownedWhere = and(

@@ -1,4 +1,4 @@
-// Telegram Bot API client used by the shared channel adapter and legacy integrations.
+// Telegram Bot API client used by the shared channel adapter and central Telegram runtime.
 import { ApiError } from "@/lib/http/api";
 import { integrationFetch } from "./http";
 
@@ -22,14 +22,16 @@ export type TelegramInlineButton = {
 };
 
 export const CENTRAL_TELEGRAM_COMMANDS = [
-  { command: "start", description: "بدء البوت وعرض الحالة" },
-  { command: "help", description: "عرض جميع الأوامر" },
-  { command: "status", description: "حالة الربط والميزات" },
+  { command: "start", description: "بدء البوت وعرض القائمة" },
+  { command: "help", description: "عرض المساعدة" },
+  { command: "status", description: "حالة الحساب والجلسة" },
   { command: "agents", description: "عرض الوكلاء المتاحين" },
-  { command: "new", description: "بدء محادثة جديدة" },
-  { command: "files", description: "تعليمات إرسال الملفات" },
-  { command: "unlink", description: "فصل حساب Telegram" },
+  { command: "teams", description: "عرض فرق الوكلاء" },
+  { command: "runs", description: "عرض عمليات تشغيل الفرق" },
+  { command: "new", description: "بدء محادثة حقيقية" },
+  { command: "approvals", description: "عرض الموافقات المعلقة" },
   { command: "cancel", description: "إلغاء العملية الحالية" },
+  { command: "unlink", description: "فصل حساب Telegram" },
 ] as const;
 
 async function telegramCall<T>(
@@ -92,13 +94,15 @@ export function sendTelegramMessage(input: {
   replyKeyboard?: string[][];
   removeKeyboard?: boolean;
 }) {
-  const text = input.text.length > 4000 ? `${input.text.slice(0, 3990)}…` : input.text;
+  const text = input.text.trim();
+  if (!text) throw new ApiError(500, "TELEGRAM_EMPTY_MESSAGE", "تم منع إرسال رسالة Telegram فارغة.");
+  const safeText = text.length > 4096 ? `${text.slice(0, 4086)}…` : text;
   const legacyRows: TelegramInlineButton[][] | undefined = input.buttons
     ?.slice(0, 12)
     .map((button) => [{ title: button.title, id: button.id }]);
   const rows = (input.buttonRows ?? legacyRows)?.slice(0, 8).map((row) => row.slice(0, 4).map((button) => ({
     text: button.title.slice(0, 64),
-    ...(button.url ? { url: button.url } : { callback_data: (button.id ?? "telegram.help").slice(0, 64) }),
+    ...(button.url ? { url: button.url } : { callback_data: (button.id ?? "nav:home").slice(0, 64) }),
   })));
   const replyMarkup = rows?.length
     ? { inline_keyboard: rows }
@@ -113,17 +117,60 @@ export function sendTelegramMessage(input: {
         : undefined;
   return telegramCall<{ message_id?: number }>(input.token, "sendMessage", {
     chat_id: input.chatId,
-    text,
+    text: safeText,
     disable_web_page_preview: true,
     ...(input.replyToMessageId ? { reply_parameters: { message_id: Number(input.replyToMessageId) } } : {}),
     ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
   });
 }
 
-export function answerTelegramCallback(input: { token: string; callbackQueryId: string; text?: string }) {
+export function editTelegramMessage(input: {
+  token: string;
+  chatId: string;
+  messageId: number;
+  text: string;
+  buttonRows?: TelegramInlineButton[][];
+}) {
+  const text = input.text.trim();
+  if (!text) throw new ApiError(500, "TELEGRAM_EMPTY_MESSAGE", "تم منع تعديل رسالة Telegram إلى نص فارغ.");
+  const rows = input.buttonRows?.slice(0, 8).map((row) => row.slice(0, 4).map((button) => ({
+    text: button.title.slice(0, 64),
+    ...(button.url ? { url: button.url } : { callback_data: (button.id ?? "nav:home").slice(0, 64) }),
+  })));
+  return telegramCall<boolean | { message_id?: number }>(input.token, "editMessageText", {
+    chat_id: input.chatId,
+    message_id: input.messageId,
+    text: text.slice(0, 4096),
+    disable_web_page_preview: true,
+    ...(rows?.length ? { reply_markup: { inline_keyboard: rows } } : {}),
+  });
+}
+
+export function answerTelegramCallback(input: {
+  token: string;
+  callbackQueryId: string;
+  text?: string;
+}) {
   return telegramCall<boolean>(input.token, "answerCallbackQuery", {
     callback_query_id: input.callbackQueryId,
-    ...(input.text ? { text: input.text.slice(0, 200) } : {}),
+    ...(input.text ? { text: input.text.slice(0, 180) } : {}),
+  });
+}
+
+export function sendTelegramChatAction(input: {
+  token: string;
+  chatId: string;
+  action: "typing" | "upload_document" | "upload_photo" | "record_voice" | "upload_video";
+}) {
+  return telegramCall<boolean>(input.token, "sendChatAction", {
+    chat_id: input.chatId,
+    action: input.action,
+  });
+}
+
+export function getTelegramFile(input: { token: string; fileId: string }) {
+  return telegramCall<{ file_id: string; file_size?: number; file_path?: string }>(input.token, "getFile", {
+    file_id: input.fileId,
   });
 }
 
@@ -131,9 +178,12 @@ export async function downloadTelegramFile(token: string, fileId: string): Promi
   content: Buffer;
   filePath: string;
 }> {
-  const metadata = await telegramCall<{ file_path?: string }>(token, "getFile", { file_id: fileId });
-  if (!metadata.file_path || metadata.file_path.includes("..")) {
+  const metadata = await getTelegramFile({ token, fileId });
+  if (!metadata.file_path || metadata.file_path.includes("..") || metadata.file_path.startsWith("/")) {
     throw new ApiError(502, "TELEGRAM_FILE_INVALID", "تعذر تحديد ملف Telegram.");
+  }
+  if (metadata.file_size !== undefined && metadata.file_size > 20 * 1024 * 1024) {
+    throw new ApiError(413, "FILE_TOO_LARGE", "حجم الملف يتجاوز 20 ميجابايت.");
   }
   const response = await integrationFetch(
     `https://api.telegram.org/file/bot${encodeURIComponent(token)}/${metadata.file_path}`,

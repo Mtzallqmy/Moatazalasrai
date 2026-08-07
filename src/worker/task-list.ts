@@ -10,6 +10,8 @@ import { sandboxCreateTask } from "@/worker/tasks/sandbox-create";
 import { sandboxExecuteTask } from "@/worker/tasks/sandbox-execute";
 import { sandboxResetTask } from "@/worker/tasks/sandbox-reset";
 import { sandboxResumeTask } from "@/worker/tasks/sandbox-resume";
+import { telegramUpdateProcessTask } from "@/worker/tasks/telegram-update-process";
+import { whatsappChannelUpdateTask } from "@/worker/tasks/whatsapp-channel-update";
 
 export const taskList = {
   "agent-run-resume": agentRunResumeTask,
@@ -18,6 +20,8 @@ export const taskList = {
   "browser-task-resume": browserTaskResumeTask,
   "document-parse": documentParseTask,
   "notification-dispatch": notificationDispatchTask,
+  "telegram-update-process": telegramUpdateProcessTask,
+  "whatsapp-channel-update": whatsappChannelUpdateTask,
   "sandbox-create": sandboxCreateTask,
   "sandbox-execute": sandboxExecuteTask,
   "sandbox-resume": sandboxResumeTask,

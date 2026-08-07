@@ -11,6 +11,8 @@ import type {
   SandboxExecutionPayload,
   SandboxResumePayload,
   SandboxWorkspacePayload,
+  TelegramUpdatePayload,
+  WhatsAppChannelUpdatePayload,
 } from "@/worker/schemas";
 
 let workerUtilsPromise: Promise<WorkerUtils> | null = null;
@@ -76,6 +78,24 @@ export function enqueueNotificationDispatch(payload: NotificationDispatchPayload
     queueName: `notifications:${payload.organizationId}`,
     maxAttempts: 5,
     jobKey: `notification-dispatch:${payload.eventId}`,
+    jobKeyMode: "unsafe_dedupe",
+  });
+}
+
+export function enqueueTelegramUpdate(payload: TelegramUpdatePayload) {
+  return addJob("telegram-update-process", payload, {
+    queueName: "telegram-central",
+    maxAttempts: 5,
+    jobKey: `telegram-update:${payload.updateId}`,
+    jobKeyMode: "unsafe_dedupe",
+  });
+}
+
+export function enqueueWhatsAppChannelUpdate(payload: WhatsAppChannelUpdatePayload) {
+  return addJob("whatsapp-channel-update", payload, {
+    queueName: "whatsapp-central",
+    maxAttempts: 5,
+    jobKey: `whatsapp-channel-update:${payload.eventRowId}`,
     jobKeyMode: "unsafe_dedupe",
   });
 }
