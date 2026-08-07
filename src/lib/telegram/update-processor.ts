@@ -12,6 +12,12 @@ import {
   showTelegramAgent,
   startCreateAgentFlow,
 } from "./agent-flows";
+import {
+  confirmTelegramApprovalDecision,
+  decideTelegramApproval,
+  listTelegramApprovals,
+  showTelegramApproval,
+} from "./approval-flows";
 import { handleTelegramConversationCallback, sendTelegramConversationMessage, startTelegramConversation } from "./conversation-flows";
 import { presentTelegramError } from "./error-presenter";
 import { renderTelegramMainMenu } from "./menu-renderer";
@@ -110,6 +116,33 @@ async function handleCallback(input: {
 
   if (input.action === "nav:home") {
     await renderTelegramMainMenu({ ...base });
+    return;
+  }
+  if (input.action === "approvals:list") {
+    await listTelegramApprovals(base);
+    return;
+  }
+  const approvalView = /^approval:view:([0-9a-f-]{36})$/i.exec(input.action);
+  if (approvalView) {
+    await showTelegramApproval({ ...base, approvalId: approvalView[1] });
+    return;
+  }
+  const approvalConfirm = /^approval:confirm:([0-9a-f-]{36}):(approve|reject)$/i.exec(input.action);
+  if (approvalConfirm) {
+    await confirmTelegramApprovalDecision({
+      ...base,
+      approvalId: approvalConfirm[1],
+      decision: approvalConfirm[2] as "approve" | "reject",
+    });
+    return;
+  }
+  const approvalDecision = /^approval:decide:([0-9a-f-]{36}):(approve|reject)$/i.exec(input.action);
+  if (approvalDecision) {
+    await decideTelegramApproval({
+      ...base,
+      approvalId: approvalDecision[1],
+      decision: approvalDecision[2] as "approve" | "reject",
+    });
     return;
   }
   if (input.action === "agents:list" || input.action === "agents:select") {
@@ -214,6 +247,10 @@ async function handleLinkedText(input: {
   }
   if (cmd === "agents") {
     await listTelegramAgents({ ...base, mode: "browse" });
+    return;
+  }
+  if (cmd === "approvals") {
+    await listTelegramApprovals(base);
     return;
   }
   if (cmd === "new") {
