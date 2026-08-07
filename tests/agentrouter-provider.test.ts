@@ -32,9 +32,10 @@ describe("AgentRouter OpenAI-compatible setup", () => {
       readFile("src/components/provider-form.tsx", "utf8"),
     ]);
     expect(http).toContain('redirect: "error"');
-    expect(form).toContain("استخدام عنوان AgentRouter الرسمي");
+    expect(form).toContain('changePreset("agentrouter")');
     expect(form).toContain("disabled={!canSave}");
     expect(form).toContain("افحص الاتصال واجلب النماذج أولًا");
+    expect(form).toContain('requestValidation(form, "verify", testModel)');
   });
 
   it("ships a non-destructive migration that never touches provider secrets", async () => {

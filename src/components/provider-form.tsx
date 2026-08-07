@@ -55,7 +55,7 @@ export function ProviderForm() {
   const [providerSlug, setProviderSlug] = useState("openai");
   const preset = useMemo(() => getProviderPreset(providerSlug) ?? providerPresets[0], [providerSlug]);
   const [baseUrl, setBaseUrl] = useState(preset.defaultBaseUrl);
-  const [manualModel, setManualModel] = useState("");
+  const [manualModel, setManualModel] = useState(preset.starterModel ?? "");
   const [loading, setLoading] = useState<"validate" | "save" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
@@ -76,7 +76,7 @@ export function ProviderForm() {
     const next = getProviderPreset(slug) ?? providerPresets[0];
     setProviderSlug(next.slug);
     setBaseUrl(next.defaultBaseUrl);
-    setManualModel("");
+    setManualModel(next.starterModel ?? "");
     resetValidation();
     setMessage(null);
   }
@@ -140,7 +140,7 @@ export function ProviderForm() {
     setMessage([
       adjusted ? `تم اعتماد Base URL الآمن: ${checked.data.normalizedBaseUrl}.` : null,
       `نجح الوصول إلى API وجلب ${checked.data.models.length} نموذجًا خلال ${checked.data.latencyMs}ms.`,
-      manualStage ? "استُخدم اسم النموذج اليدوي لأن المزود لا يوفر /models متوافقًا." : null,
+      manualStage ? "استُخدم اسم النموذج المقترح/اليدوي لأن المزود لا يوفر /models متوافقًا؛ سيظل الحفظ ممنوعًا حتى ينجح توليد حقيقي بهذا النموذج." : null,
       checked.data.modelTest
         ? `نجح اختبار توليد حقيقي للنموذج ${checked.data.modelTest.model}.`
         : "لم يُحفظ الاتصال بعد. اختر نموذجًا؛ زر الحفظ سينفذ اختبار توليد حقيقي ثم يحفظ كل البيانات ذريًا.",
@@ -204,7 +204,7 @@ export function ProviderForm() {
       const initial = providerPresets[0];
       setProviderSlug(initial.slug);
       setBaseUrl(initial.defaultBaseUrl);
-      setManualModel("");
+      setManualModel(initial.starterModel ?? "");
       resetValidation();
       setMessage(`تم اختبار ${payload.data?.providerLabel ?? preset.labelAr} وحفظ المفتاح مشفرًا داخل معاملة واحدة. النموذج المختبر: ${payload.data?.testedModel ?? testModel}. النماذج المحفوظة: ${payload.data?.discoveredModels?.length ?? 0}.`);
       router.refresh();
@@ -238,14 +238,16 @@ export function ProviderForm() {
       </label>
 
       <div className="flex flex-wrap gap-2 sm:col-span-2">
-        <button type="button" className="secondary-button px-3 py-2 text-xs" onClick={() => changePreset("agentrouter")}>استخدام عنوان AgentRouter الرسمي</button>
+        <button type="button" className="secondary-button px-3 py-2 text-xs" onClick={() => changePreset("inferx")}>استخدام InferX</button>
+        <button type="button" className="secondary-button px-3 py-2 text-xs" onClick={() => changePreset("opencode-zen")}>استخدام OpenCode Zen</button>
+        <button type="button" className="secondary-button px-3 py-2 text-xs" onClick={() => changePreset("agentrouter")}>استخدام AgentRouter</button>
         <button type="button" className="secondary-button px-3 py-2 text-xs" onClick={() => changePreset("openrouter")}>استخدام OpenRouter</button>
-        <button type="button" className="secondary-button px-3 py-2 text-xs" onClick={() => changePreset("huggingface")}>استخدام Hugging Face</button>
       </div>
 
       <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface-soft)] p-4 text-sm sm:col-span-2">
         <div className="flex flex-wrap items-center justify-between gap-2"><strong>{preset.labelAr}</strong><span className="rounded-full border border-[var(--border)] px-2 py-1 text-xs" dir="ltr">{preset.apiStyle}</span></div>
         <p className="mt-2 leading-7 text-[var(--text-secondary)]">{preset.descriptionAr}</p>
+        {preset.starterModel ? <p className="mt-2 text-xs text-[var(--text-secondary)]">نموذج بدء موثق/مقترح للفحص: <code dir="ltr">{preset.starterModel}</code>. يمكن تغييره قبل التحقق.</p> : null}
       </section>
 
       <label className="grid gap-2 text-sm">اسم الاتصال<input name="name" required minLength={2} maxLength={80} className="form-control" placeholder={`${preset.labelAr} — الإنتاج`} /></label>
@@ -258,15 +260,15 @@ export function ProviderForm() {
       </label>
 
       <label className="grid gap-2 text-sm sm:col-span-2">
-        اسم نموذج يدوي — اختياري
+        نموذج الفحص اليدوي — اختياري
         <input value={manualModel} onChange={(event) => { setManualModel(event.target.value); resetValidation(); }} maxLength={300} dir="ltr" className="form-control font-mono" placeholder="provider/model-name" />
-        <span className="text-xs text-[var(--text-secondary)]">للمزودات التي لا توفر قائمة نماذج عبر /models. سيظل النموذج خاضعًا لاختبار توليد حقيقي.</span>
+        <span className="text-xs text-[var(--text-secondary)]">يُستخدم أيضًا عندما لا يوفر المزود قائمة نماذج عبر /models. لا يعتبر وجود الاسم نجاحًا؛ الحفظ يتطلب طلب توليد حقيقي ناجح.</span>
       </label>
 
       <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
         <button disabled={loading !== null} onClick={validate} className="secondary-button disabled:opacity-60" type="button">{loading === "validate" ? "جارٍ فحص الشبكة والمفتاح..." : "فحص الاتصال وجلب النماذج"}</button>
         <button disabled={!canSave} className="primary-button disabled:opacity-50" type="submit">{loading === "save" ? "جارٍ اختبار النموذج والحفظ الذري..." : "اختبر النموذج واحفظ الاتصال"}</button>
-        {!validation ? <span className="text-xs text-[var(--text-secondary)]">الحفظ لا يتاح قبل اكتشاف النماذج.</span> : null}
+        {!validation ? <span className="text-xs text-[var(--text-secondary)]">الحفظ لا يتاح قبل اكتشاف النماذج أو تثبيت نموذج يدوي ثم اختبار التوليد.</span> : null}
       </div>
 
       {message ? <p className="rounded-2xl border border-[var(--border)] bg-[var(--surface-soft)] px-4 py-3 text-sm sm:col-span-2" role="status">{message}</p> : null}
