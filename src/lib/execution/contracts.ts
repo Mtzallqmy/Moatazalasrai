@@ -34,6 +34,7 @@ export type ExecutionWorkspaceHandle = {
 
 export type ExecutionCommand = {
   command: string;
+  idempotencyKey: string;
   workingDirectory?: string;
   timeoutMs?: number;
   maxOutputBytes?: number;
