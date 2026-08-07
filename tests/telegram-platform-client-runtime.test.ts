@@ -42,9 +42,23 @@ describe("Telegram platform client runtime", () => {
     expect(registry).toContain("requiredPermission");
     expect(registry).toContain("telegramFeatureKey");
     expect(registry).toContain("requiredPlatformModule");
+    expect(registry).toContain("requiredRuntime");
     expect(menu).toContain("resolveTelegramCapabilities");
     expect(menu).not.toContain("GitHub والمستودعات");
-    expect(menu).not.toContain("مهام المتصفح");
+  });
+
+  it("uses real browser and sandbox services for runtime diagnostics", async () => {
+    const flow = await readFile("src/lib/telegram/runtime-flows.ts", "utf8");
+    const registry = await readFile("src/lib/telegram/capability-registry.ts", "utf8");
+    const conversation = await readFile("src/lib/telegram/conversation-flows.ts", "utf8");
+    expect(flow).toContain("listBrowserTasks");
+    expect(flow).toContain("listSandboxWorkspaces");
+    expect(flow).toContain("listSandboxExecutions");
+    expect(flow).not.toContain("sandboxWorkspaces).where");
+    expect(registry).toContain('requiredRuntime: "browser"');
+    expect(registry).toContain('requiredRuntime: "sandbox"');
+    expect(conversation).toContain('input.action === "browser:list"');
+    expect(conversation).toContain('input.action === "sandbox:list"');
   });
 
   it("uses real team runtime services and queues team runs", async () => {
