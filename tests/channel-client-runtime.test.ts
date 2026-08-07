@@ -51,18 +51,64 @@ describe("shared channel client runtime", () => {
     });
   });
 
+  it("requires agent features for real team runs and admin features for approvals and runtimes", () => {
+    const team = requiredChannelFeatures({
+      channel: "whatsapp",
+      session: { activeFlow: "team.run" } as never,
+      incoming: { attachments: [] } as never,
+      actionId: "cc.teamrun.confirm",
+      text: "",
+    });
+    expect(team).toContainEqual({
+      key: "whatsapp.agents",
+      labelAr: "فرق الوكلاء وعمليات التشغيل",
+    });
+
+    const approval = requiredChannelFeatures({
+      channel: "whatsapp",
+      session: { activeFlow: null } as never,
+      incoming: { attachments: [] } as never,
+      actionId: "cc.approvals",
+      text: "",
+    });
+    expect(approval).toContainEqual({
+      key: "whatsapp.admin_commands",
+      labelAr: "أوامر التشغيل الإدارية",
+    });
+  });
+
   it("contains only capabilities backed by implemented shared handlers", async () => {
     const registry = await readFile("src/lib/channel-client/capability-registry.ts", "utf8");
     const runtime = await readFile("src/lib/channel-client/runtime.ts", "utf8");
-    expect(registry).toContain('id: "chat.start"');
-    expect(registry).toContain('id: "agents.list"');
-    expect(registry).toContain('id: "agents.create"');
-    expect(registry).toContain('id: "files.receive"');
+    const operations = await readFile("src/lib/channel-client/operations-runtime.ts", "utf8");
+    const services = await readFile("src/lib/channel-client/operations-service.ts", "utf8");
+    for (const capability of [
+      "chat.start",
+      "agents.list",
+      "agents.create",
+      "teams.list",
+      "teams.run",
+      "runs.list",
+      "approvals.list",
+      "files.receive",
+      "browser.list",
+      "sandbox.list",
+    ]) {
+      expect(registry).toContain(`id: "${capability}"`);
+    }
     expect(registry).not.toContain('id: "repositories.list"');
     expect(runtime).toContain("listAccessibleChannelAgents");
     expect(runtime).toContain("listVerifiedProviderOptions");
     expect(runtime).toContain("createAgentApplication");
     expect(runtime).toContain("routeIncomingChannelMessage");
+    expect(operations).toContain("createChannelTeamRun");
+    expect(operations).toContain("decideChannelApproval");
+    expect(operations).toContain("channelBrowserDiagnostics");
+    expect(operations).toContain("channelSandboxDiagnostics");
+    expect(services).toContain("createAgentTeamRun");
+    expect(services).toContain("listPendingToolApprovals");
+    expect(services).toContain("listBrowserTasks");
+    expect(services).toContain("listSandboxExecutions");
   });
 
   it("persists agent selection and never mutates the shared channel connection", async () => {
@@ -79,5 +125,15 @@ describe("shared channel client runtime", () => {
     expect(telegram).not.toContain("routeIncomingChannelMessage");
     expect(whatsapp).toContain("enqueueWhatsAppChannelUpdate");
     expect(whatsapp).not.toContain("routeIncomingChannelMessage");
+  });
+
+  it("routes WhatsApp operational commands through the shared real runtime", async () => {
+    const processor = await readFile("src/lib/whatsapp/update-processor.ts", "utf8");
+    expect(processor).toContain("processChannelOperations");
+    expect(processor).toContain('actionId: "cc.home"');
+    expect(processor).toContain('"runs.manage"');
+    expect(processor).toContain('"approvals.manage"');
+    expect(processor).toContain('"browser.read"');
+    expect(processor).toContain('"sandbox.read"');
   });
 });
