@@ -194,7 +194,7 @@ async function moduleEnabled(organizationId: string, key: string) {
     eq(platformModules.organizationId, organizationId),
     eq(platformModules.key, key),
   )).limit(1);
-  return row?.status === "active";
+  return !row || row.status === "active";
 }
 
 function runtimeEnabled(runtime: ChannelCapability["requiredRuntime"]) {
