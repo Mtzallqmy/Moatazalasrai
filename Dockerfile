@@ -16,6 +16,8 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund \
   && npm cache clean --force
 
+# Docker Compose depends on this named target for both the web and worker development services.
+# Keep it explicit in every merge result; CI verifies the compose targets against this Dockerfile.
 FROM base AS development
 ENV NODE_ENV=development
 COPY --from=dependencies /app/node_modules ./node_modules
