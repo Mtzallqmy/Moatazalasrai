@@ -44,7 +44,8 @@ describe("execution kernel source contracts", () => {
       expect(client).toContain(header);
       expect(runner).toContain(header);
     }
-    expect(client).toContain('service: "platform-execution-kernel"');
+    expect(client).toContain("platform-execution-kernel");
+    expect(client).toContain('"argv" in input ? "platform-execution-kernel" : "platform-sandbox"');
     expect(runner).toContain("usedNonces.has(nonce)");
     expect(runner).toContain("timingSafeEqual");
   });
@@ -57,7 +58,7 @@ describe("execution kernel source contracts", () => {
     expect(runner).toContain("FORBIDDEN_ENVIRONMENT");
     expect(runner).toContain("ALLOWED_EXECUTABLES");
     expect(runner).toContain("prlimit");
-    expect(runner).toContain("bubblewrap");
+    expect(runner).toContain('"--", "bwrap", ...bwrapArguments');
   });
 
   it("rejects symlink escape path traversal and unsupported file types", async () => {
