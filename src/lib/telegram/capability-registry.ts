@@ -4,6 +4,7 @@ import { platformModules } from "@/db/control-plane-schema";
 import { organizationMembers } from "@/db/schema";
 import { can, type Permission, type Role } from "@/lib/auth/permissions";
 import { loadCustomPermissions } from "@/lib/auth/custom-permissions";
+import { env } from "@/lib/config/env";
 import { telegramFeatureAllowed, type TelegramFeatureKey } from "@/lib/integrations/telegram-platform";
 
 export type TelegramCapabilityId =
@@ -14,6 +15,8 @@ export type TelegramCapabilityId =
   | "teams.run"
   | "runs.list"
   | "approvals.list"
+  | "browser.list"
+  | "sandbox.list"
   | "account.status";
 
 export type TelegramCapability = {
@@ -24,6 +27,7 @@ export type TelegramCapability = {
   requiredPermission: Permission;
   telegramFeatureKey: TelegramFeatureKey;
   requiredPlatformModule: string;
+  requiredRuntime?: "browser" | "sandbox";
   fallbackDashboardUrl: string;
   supportsPagination: boolean;
   destructive: boolean;
@@ -123,6 +127,34 @@ export const TELEGRAM_CAPABILITIES: readonly TelegramCapability[] = [
     adminOnly: true,
   },
   {
+    id: "browser.list",
+    labelAr: "مهام المتصفح",
+    descriptionAr: "تشخيص المهام الحقيقية وحالات الاتصال والخطوات والأخطاء.",
+    icon: "🌐",
+    requiredPermission: "browser_tasks:read",
+    telegramFeatureKey: "telegram.admin_commands",
+    requiredPlatformModule: "browser",
+    requiredRuntime: "browser",
+    fallbackDashboardUrl: "/dashboard/browser-tasks",
+    supportsPagination: false,
+    destructive: false,
+    adminOnly: false,
+  },
+  {
+    id: "sandbox.list",
+    labelAr: "Sandbox",
+    descriptionAr: "تشخيص مساحات التنفيذ والعمليات الحقيقية ونتائج السياسات.",
+    icon: "🧪",
+    requiredPermission: "sandbox:read",
+    telegramFeatureKey: "telegram.admin_commands",
+    requiredPlatformModule: "sandbox",
+    requiredRuntime: "sandbox",
+    fallbackDashboardUrl: "/dashboard/sandbox",
+    supportsPagination: false,
+    destructive: false,
+    adminOnly: false,
+  },
+  {
     id: "account.status",
     labelAr: "الحساب والحالة",
     descriptionAr: "عرض المؤسسة والدور والجلسة والميزات المسموحة.",
@@ -155,6 +187,12 @@ async function moduleEnabled(organizationId: string, moduleKey: string) {
   return !module || module.status === "active";
 }
 
+function runtimeEnabled(runtime: TelegramCapability["requiredRuntime"]) {
+  if (!runtime) return true;
+  const configuration = env();
+  return runtime === "browser" ? configuration.browserAgentEnabled : configuration.sandboxEnabled;
+}
+
 export async function resolveTelegramCapabilities(input: {
   userId: string;
   organizationId: string;
@@ -167,6 +205,7 @@ export async function resolveTelegramCapabilities(input: {
       || membership.custom.has(capability.requiredPermission);
     if (!permissionAllowed) continue;
     if (capability.adminOnly && !new Set<Role>(["owner", "admin", "developer", "operator"]).has(membership.role)) continue;
+    if (!runtimeEnabled(capability.requiredRuntime)) continue;
     if (!await moduleEnabled(input.organizationId, capability.requiredPlatformModule)) continue;
     if (!await telegramFeatureAllowed(input.userId, input.organizationId, capability.telegramFeatureKey)) continue;
     visible.push(capability);
