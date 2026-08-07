@@ -119,10 +119,13 @@ describe("shared channel client runtime", () => {
       expect(processor).toContain(`input.action === "${action}"`);
     }
     expect(processor).toContain("showTelegramRepository");
+    expect(processor).toContain('new ApiError(403, "TELEGRAM_FILES_CAPABILITY_DENIED"');
     expect(runtime).toContain("channelBrowserDiagnostics");
     expect(runtime).toContain("channelSandboxDiagnostics");
     expect(repositories).toContain("listOrganizationGitHubRepositories");
     expect(repositories).toContain("findOrganizationGitHubRepository");
+    expect(repositories).toContain("telegramPlatformConfig");
+    expect(repositories).not.toContain("https://moatazalalqami.online");
   });
 
   it("uses one capability registry for Telegram and WhatsApp", async () => {
