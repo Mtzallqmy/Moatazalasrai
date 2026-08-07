@@ -20,6 +20,7 @@ import {
 } from "./approval-flows";
 import { handleTelegramConversationCallback, sendTelegramConversationMessage, startTelegramConversation } from "./conversation-flows";
 import { presentTelegramError } from "./error-presenter";
+import { handleTelegramMedia } from "./file-flows";
 import { renderTelegramMainMenu } from "./menu-renderer";
 import { sendTelegramError, sendTelegramMenu, sendTelegramText } from "./message-renderer";
 import { cancelTelegramFlow, ensureTelegramSession, getTelegramSession } from "./session-service";
@@ -278,6 +279,7 @@ async function handleCallback(input: {
 async function handleLinkedText(input: {
   token: string;
   updateRowId: string;
+  update: TelegramUpdate;
   context: NonNullable<ReturnType<typeof telegramUpdateContext>>;
   account: NonNullable<Awaited<ReturnType<typeof resolveTelegramAccount>>>;
 }) {
@@ -348,6 +350,11 @@ async function handleLinkedText(input: {
     return;
   }
 
+  if (await handleTelegramMedia({
+    ...base,
+    update: input.update,
+    requestId: `telegram:media:${input.context.updateId}:${input.context.message.message_id}`,
+  })) return;
   if (await handleTelegramTeamRunText({ ...base, text: input.context.text })) return;
   if (await handleAgentCreateText({ ...base, text: input.context.text })) return;
 
@@ -397,7 +404,7 @@ export async function processTelegramUpdate(input: { updateRowId: string; update
     if (context.callbackData) {
       await handleCallback({ token: config.botToken, context, account, action: context.callbackData });
     } else {
-      await handleLinkedText({ token: config.botToken, updateRowId: input.updateRowId, context, account });
+      await handleLinkedText({ token: config.botToken, updateRowId: input.updateRowId, update, context, account });
     }
     await markUpdate(input.updateRowId, "completed");
     safeLog("info", "telegram.command.handled", { updateRowId: input.updateRowId, updateId: context.updateId });
