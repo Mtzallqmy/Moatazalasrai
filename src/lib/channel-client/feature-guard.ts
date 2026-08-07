@@ -55,10 +55,15 @@ export function requiredChannelFeatures(input: {
 
   const administrativeOperations = action.startsWith("cc.approval")
     || action === "cc.approvals"
+    || action === "cc.repos"
+    || action.startsWith("cc.repo:")
     || action === "cc.browser"
     || action === "cc.sandbox"
-    || ["/approvals", "/browser", "/sandbox", "الموافقات", "المتصفح", "ساندبوكس", "sandbox"].includes(normalized);
-  if (administrativeOperations) add("admin_commands", "أوامر التشغيل الإدارية");
+    || [
+      "/approvals", "/github", "/repos", "/repositories", "/browser", "/sandbox",
+      "الموافقات", "github", "جيت هب", "المستودعات", "مستودعات", "المتصفح", "ساندبوكس", "sandbox",
+    ].includes(normalized);
+  if (administrativeOperations) add("admin_commands", "التكاملات وأوامر التشغيل الإدارية");
 
   const opensFiles = action === "cc.files"
     || normalized === "/files"
@@ -79,9 +84,9 @@ export function requiredChannelFeatures(input: {
   const knownNavigation = action.startsWith("cc.")
     || [
       "/start", "/help", "/status", "/agents", "/new", "/files", "/cancel", "/unlink",
-      "/teams", "/runs", "/approvals", "/browser", "/sandbox",
+      "/teams", "/runs", "/approvals", "/github", "/repos", "/repositories", "/browser", "/sandbox",
       "القائمة", "الرئيسية", "الحالة", "الوكلاء", "الملفات", "إلغاء", "الغاء",
-      "الفرق", "فرق الوكلاء", "التشغيلات", "عمليات التشغيل", "الموافقات", "المتصفح", "ساندبوكس", "sandbox",
+      "الفرق", "فرق الوكلاء", "التشغيلات", "عمليات التشغيل", "الموافقات", "github", "جيت هب", "المستودعات", "مستودعات", "المتصفح", "ساندبوكس", "sandbox",
     ].includes(normalized);
   const ordinaryMessage = !knownNavigation
     && input.session.activeFlow !== "agent.create"
