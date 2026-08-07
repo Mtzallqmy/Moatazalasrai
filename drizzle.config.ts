@@ -17,6 +17,7 @@ export default defineConfig({
     "./src/db/whatsapp-platform-schema.ts",
     "./src/db/telegram-platform-schema.ts",
     "./src/db/telegram-runtime-schema.ts",
+    "./src/db/whatsapp-runtime-schema.ts",
   ],
   out: "./drizzle",
   dialect: "postgresql",
