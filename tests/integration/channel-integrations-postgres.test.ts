@@ -21,8 +21,8 @@ describeDatabase("channel integration application services", () => {
     await sql`INSERT INTO users (id, email, name) VALUES (${userId}, ${`channel-integrations-${userId}@example.test`}, 'Integration Admin')`;
     await sql`INSERT INTO organization_members (organization_id, user_id, role) VALUES (${organizationId}, ${userId}, 'admin')`;
     await sql`
-      INSERT INTO mcp_servers (id, organization_id, name, url, auth_type, enabled)
-      VALUES (${serverId}, ${organizationId}, 'Postgres MCP', 'https://mcp.example.test/mcp', 'none', true)
+      INSERT INTO mcp_servers (id, organization_id, name, endpoint, transport, auth_mode, enabled, status)
+      VALUES (${serverId}, ${organizationId}, 'Postgres MCP', 'https://mcp.example.test/mcp', 'streamable_http', 'none', true, 'connected')
     `;
   });
 
@@ -40,6 +40,8 @@ describeDatabase("channel integration application services", () => {
       name: "Postgres MCP",
       url: "https://mcp.example.test/mcp",
       authType: "none",
+      transport: "streamable_http",
+      status: "connected",
       enabled: true,
       tools: [],
       resources: [],
@@ -47,6 +49,8 @@ describeDatabase("channel integration application services", () => {
       prompts: [],
     });
     expect(server).not.toHaveProperty("encryptedBearerToken");
+    expect(server).not.toHaveProperty("encryptedOauthData");
+    expect(server).not.toHaveProperty("tokenHint");
     expect(JSON.stringify(server)).not.toContain("bearerToken");
   });
 
