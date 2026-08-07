@@ -171,3 +171,27 @@ export function getTelegramFile(input: { token: string; fileId: string }) {
     file_id: input.fileId,
   });
 }
+
+export async function downloadTelegramFile(token: string, fileId: string): Promise<{
+  content: Buffer;
+  filePath: string;
+}> {
+  const metadata = await getTelegramFile({ token, fileId });
+  if (!metadata.file_path || metadata.file_path.includes("..") || metadata.file_path.startsWith("/")) {
+    throw new ApiError(502, "TELEGRAM_FILE_INVALID", "تعذر تحديد ملف Telegram.");
+  }
+  if (metadata.file_size !== undefined && metadata.file_size > 20 * 1024 * 1024) {
+    throw new ApiError(413, "FILE_TOO_LARGE", "حجم الملف يتجاوز 20 ميجابايت.");
+  }
+  const response = await integrationFetch(
+    `https://api.telegram.org/file/bot${encodeURIComponent(token)}/${metadata.file_path}`,
+    { method: "GET", headers: { accept: "application/octet-stream" } },
+    30_000,
+  );
+  if (!response.ok) throw new ApiError(502, "TELEGRAM_FILE_DOWNLOAD_FAILED", "تعذر تنزيل ملف Telegram.");
+  const content = Buffer.from(await response.arrayBuffer());
+  if (content.byteLength > 20 * 1024 * 1024) {
+    throw new ApiError(413, "FILE_TOO_LARGE", "حجم الملف يتجاوز 20 ميجابايت.");
+  }
+  return { content, filePath: metadata.file_path };
+}
