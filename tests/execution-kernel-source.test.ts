@@ -80,7 +80,7 @@ describe("execution kernel source contracts", () => {
   });
 
   it("stores append-only events and exposes resumable SSE", async () => {
-    const migration = await readFile("drizzle/0042_execution_kernel_foundation.sql", "utf8");
+    const migration = await readFile("drizzle/0043_execution_kernel_foundation.sql", "utf8");
     const route = await readFile("src/app/api/executions/[executionId]/events/route.ts", "utf8");
     expect(migration).toContain("prevent_execution_event_mutation");
     expect(migration).toContain("execution_events_append_only_update");
