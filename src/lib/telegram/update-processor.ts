@@ -18,11 +18,14 @@ import {
   listTelegramApprovals,
   showTelegramApproval,
 } from "./approval-flows";
+import { assertTelegramCapability } from "./capability-registry";
 import { handleTelegramConversationCallback, sendTelegramConversationMessage, startTelegramConversation } from "./conversation-flows";
 import { presentTelegramError } from "./error-presenter";
 import { handleTelegramMedia } from "./file-flows";
 import { renderTelegramMainMenu } from "./menu-renderer";
 import { sendTelegramError, sendTelegramMenu, sendTelegramText } from "./message-renderer";
+import { listTelegramRepositories, showTelegramRepository } from "./repository-flows";
+import { listTelegramBrowserTasks, listTelegramSandboxRuntime } from "./runtime-flows";
 import { cancelTelegramFlow, ensureTelegramSession, getTelegramSession } from "./session-service";
 import {
   confirmTelegramRunMutation,
@@ -62,6 +65,31 @@ async function markUpdate(id: string, status: "completed" | "failed" | "ignored"
     errorCode: errorCode ?? null,
     completedAt: new Date(),
   }).where(eq(telegramUpdates.id, id));
+}
+
+async function showTelegramFileHelp(input: {
+  token: string;
+  chatId: string;
+  userId: string;
+  organizationId: string;
+}) {
+  const capability = await assertTelegramCapability({
+    userId: input.userId,
+    organizationId: input.organizationId,
+    capabilityId: "files.receive",
+  });
+  if (!capability) throw new Error("TELEGRAM_FILES_CAPABILITY_DENIED");
+  await sendTelegramMenu({
+    token: input.token,
+    chatId: input.chatId,
+    title: [
+      "الرئيسية ← المحتوى والمعرفة ← الملفات والوسائط",
+      "أرسل الملف أو الصورة أو التسجيل الصوتي أو الفيديو مباشرة إلى البوت.",
+      "لا تُرسل رسالة نجاح قبل أن يكتمل تنزيل الوسيط والتحقق منه وتخزينه وربطه بالمحادثة الحقيقية.",
+      "إذا لم تختر وكيلًا بعد فسيطلب منك البوت اختيار وكيل منشور أولًا.",
+    ].join("\n"),
+    buttonRows: [[{ id: "chat:start", title: "اختيار محادثة" }, { id: "nav:home", title: "الرئيسية" }]],
+  });
 }
 
 async function handleLink(input: {
@@ -165,20 +193,12 @@ async function handleCallback(input: {
   }
   const runConfirm = /^run:(cancel|retry):confirm:([0-9a-f-]{36})$/i.exec(input.action);
   if (runConfirm) {
-    await confirmTelegramRunMutation({
-      ...base,
-      operation: runConfirm[1] as "cancel" | "retry",
-      runId: runConfirm[2],
-    });
+    await confirmTelegramRunMutation({ ...base, operation: runConfirm[1] as "cancel" | "retry", runId: runConfirm[2] });
     return;
   }
   const runExecute = /^run:(cancel|retry):execute:([0-9a-f-]{36})$/i.exec(input.action);
   if (runExecute) {
-    await executeTelegramRunMutation({
-      ...base,
-      operation: runExecute[1] as "cancel" | "retry",
-      runId: runExecute[2],
-    });
+    await executeTelegramRunMutation({ ...base, operation: runExecute[1] as "cancel" | "retry", runId: runExecute[2] });
     return;
   }
 
@@ -193,20 +213,12 @@ async function handleCallback(input: {
   }
   const approvalConfirm = /^approval:confirm:([0-9a-f-]{36}):(approve|reject)$/i.exec(input.action);
   if (approvalConfirm) {
-    await confirmTelegramApprovalDecision({
-      ...base,
-      approvalId: approvalConfirm[1],
-      decision: approvalConfirm[2] as "approve" | "reject",
-    });
+    await confirmTelegramApprovalDecision({ ...base, approvalId: approvalConfirm[1], decision: approvalConfirm[2] as "approve" | "reject" });
     return;
   }
   const approvalDecision = /^approval:decide:([0-9a-f-]{36}):(approve|reject)$/i.exec(input.action);
   if (approvalDecision) {
-    await decideTelegramApproval({
-      ...base,
-      approvalId: approvalDecision[1],
-      decision: approvalDecision[2] as "approve" | "reject",
-    });
+    await decideTelegramApproval({ ...base, approvalId: approvalDecision[1], decision: approvalDecision[2] as "approve" | "reject" });
     return;
   }
 
@@ -235,6 +247,27 @@ async function handleCallback(input: {
   }
   if (input.action === "chat:start" || input.action === "chat:new") {
     await startTelegramConversation(base);
+    return;
+  }
+  if (input.action === "files:help") {
+    await showTelegramFileHelp(base);
+    return;
+  }
+  if (input.action === "repositories:list") {
+    await listTelegramRepositories(base);
+    return;
+  }
+  const repositoryView = /^repository:view:(\d+)$/.exec(input.action);
+  if (repositoryView) {
+    await showTelegramRepository({ ...base, repositoryId: Number(repositoryView[1]) });
+    return;
+  }
+  if (input.action === "browser:list") {
+    await listTelegramBrowserTasks(base);
+    return;
+  }
+  if (input.action === "sandbox:list") {
+    await listTelegramSandboxRuntime(base);
     return;
   }
   if (input.action === "account:status") {
@@ -329,6 +362,22 @@ async function handleLinkedText(input: {
   }
   if (cmd === "new") {
     await startTelegramConversation(base);
+    return;
+  }
+  if (cmd === "files") {
+    await showTelegramFileHelp(base);
+    return;
+  }
+  if (cmd === "github" || cmd === "repos" || cmd === "repositories") {
+    await listTelegramRepositories(base);
+    return;
+  }
+  if (cmd === "browser") {
+    await listTelegramBrowserTasks(base);
+    return;
+  }
+  if (cmd === "sandbox") {
+    await listTelegramSandboxRuntime(base);
     return;
   }
   if (cmd === "status") {
