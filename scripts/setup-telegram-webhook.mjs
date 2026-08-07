@@ -27,7 +27,7 @@ const commands = [
   { command: "cancel", description: "إلغاء العملية الحالية" },
   { command: "unlink", description: "فصل حساب Telegram" },
 ];
-const allowedUpdates = ["message", "edited_message", "callback_query", "my_chat_member"];
+const allowedUpdates = ["message", "edited_message", "callback_query"];
 
 async function call(method, body = {}) {
   let lastError;
