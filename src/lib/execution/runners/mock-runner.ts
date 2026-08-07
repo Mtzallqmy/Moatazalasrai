@@ -151,7 +151,8 @@ export class MockExecutionRunner implements ExecutionRunner {
     return (async function* stream() { yield body; })();
   }
 
-  async listFiles(workspaceId: string) {
+  async listFiles(workspaceId: string, root: string) {
+    normalizeWorkspacePath(root);
     const files = mockWorkspaces.get(workspaceId);
     if (!files) throw new ExecutionError("EXECUTION_WORKSPACE_NOT_READY", "مساحة الاختبار غير موجودة.");
     return [...files].map(([path, body]) => ({ path, sizeBytes: body.byteLength, type: "file" as const }));
