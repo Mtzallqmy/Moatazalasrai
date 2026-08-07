@@ -122,7 +122,7 @@ export const CHANNEL_CAPABILITY_REGISTRY: readonly ChannelCapability[] = Object.
     requiredPermission: "runs:read",
     telegramFeatureKey: "telegram.admin_commands",
     whatsappFeatureKey: "whatsapp.admin_commands",
-    requiredPlatformModule: "security",
+    requiredPlatformModule: "security_center",
     fallbackDashboardUrl: "/dashboard/approvals",
     supportsPagination: false,
     destructive: true,
@@ -152,7 +152,6 @@ export const CHANNEL_CAPABILITY_REGISTRY: readonly ChannelCapability[] = Object.
     requiredPermission: "browser_tasks:read",
     telegramFeatureKey: "telegram.admin_commands",
     whatsappFeatureKey: "whatsapp.admin_commands",
-    requiredPlatformModule: "browser",
     requiredRuntime: "browser",
     fallbackDashboardUrl: "/dashboard/browser-tasks",
     supportsPagination: false,
@@ -168,7 +167,6 @@ export const CHANNEL_CAPABILITY_REGISTRY: readonly ChannelCapability[] = Object.
     requiredPermission: "sandbox:read",
     telegramFeatureKey: "telegram.admin_commands",
     whatsappFeatureKey: "whatsapp.admin_commands",
-    requiredPlatformModule: "sandbox",
     requiredRuntime: "sandbox",
     fallbackDashboardUrl: "/dashboard/sandbox",
     supportsPagination: false,
@@ -194,7 +192,7 @@ async function moduleEnabled(organizationId: string, key: string) {
     eq(platformModules.organizationId, organizationId),
     eq(platformModules.key, key),
   )).limit(1);
-  return !row || row.status === "active";
+  return row?.status === "active";
 }
 
 function runtimeEnabled(runtime: ChannelCapability["requiredRuntime"]) {
