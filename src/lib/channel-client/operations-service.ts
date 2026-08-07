@@ -25,6 +25,29 @@ import {
 
 const PAGE_SIZE = 5;
 
+type TeamMemberSummary = {
+  teamId?: string;
+  agentId: string;
+  role: string;
+  position: number;
+  agentName: string;
+  agentStatus: "draft" | "published" | "archived";
+};
+
+function teamReadiness(input: {
+  supervisor: { id: string; name: string; status: "draft" | "published" | "archived" } | undefined;
+  supervisorAgentId: string;
+  members: TeamMemberSummary[];
+}) {
+  const workers = input.members.filter((member) => member.agentId !== input.supervisorAgentId);
+  return {
+    workers,
+    ready: input.supervisor?.status === "published"
+      && workers.length > 0
+      && workers.every((member) => member.agentStatus === "published"),
+  };
+}
+
 export async function listChannelTeams(input: {
   organizationId: string;
   userId: string;
@@ -38,12 +61,13 @@ export async function listChannelTeams(input: {
       id: agentTeams.id,
       name: agentTeams.name,
       description: agentTeams.description,
+      supervisorAgentId: agentTeams.supervisorAgentId,
       maxParallelWorkers: agentTeams.maxParallelWorkers,
       updatedAt: agentTeams.updatedAt,
     }).from(agentTeams).where(where).orderBy(desc(agentTeams.updatedAt)).limit(PAGE_SIZE).offset((page - 1) * PAGE_SIZE),
     db().select({ value: count() }).from(agentTeams).where(where),
   ]);
-  const members = teams.length
+  const members: TeamMemberSummary[] = teams.length
     ? await db().select({
         teamId: agentTeamMembers.teamId,
         agentId: agentTeamMembers.agentId,
@@ -58,14 +82,27 @@ export async function listChannelTeams(input: {
           inArray(agentTeamMembers.teamId, teams.map((team) => team.id)),
         )).orderBy(asc(agentTeamMembers.position))
     : [];
+  const supervisors = teams.length
+    ? await db().select({ id: agents.id, name: agents.name, status: agents.status }).from(agents).where(and(
+        eq(agents.organizationId, input.organizationId),
+        inArray(agents.id, teams.map((team) => team.supervisorAgentId)),
+      ))
+    : [];
+  const supervisorById = new Map(supervisors.map((supervisor) => [supervisor.id, supervisor]));
   const total = Number(totals[0]?.value ?? 0);
   return {
     rows: teams.map((team) => {
-      const teamMembers = members.filter((member) => member.teamId === team.id);
+      const supervisor = supervisorById.get(team.supervisorAgentId);
+      const readiness = teamReadiness({
+        supervisor,
+        supervisorAgentId: team.supervisorAgentId,
+        members: members.filter((member) => member.teamId === team.id),
+      });
       return {
         ...team,
-        members: teamMembers,
-        ready: teamMembers.length > 1 && teamMembers.every((member) => member.agentStatus === "published"),
+        supervisor: supervisor ?? null,
+        members: readiness.workers,
+        ready: readiness.ready,
       };
     }),
     page,
@@ -86,22 +123,31 @@ export async function getChannelTeam(input: {
     eq(agentTeams.enabled, true),
   )).limit(1);
   if (!team) throw new ApiError(404, "AGENT_TEAM_NOT_FOUND", "فريق الوكلاء غير موجود أو معطل.");
-  const members = await db().select({
-    agentId: agentTeamMembers.agentId,
-    role: agentTeamMembers.role,
-    position: agentTeamMembers.position,
-    agentName: agents.name,
-    agentStatus: agents.status,
-  }).from(agentTeamMembers)
-    .innerJoin(agents, eq(agents.id, agentTeamMembers.agentId))
-    .where(and(
-      eq(agentTeamMembers.organizationId, input.organizationId),
-      eq(agentTeamMembers.teamId, team.id),
-    )).orderBy(asc(agentTeamMembers.position));
+  const [members, supervisorRows] = await Promise.all([
+    db().select({
+      agentId: agentTeamMembers.agentId,
+      role: agentTeamMembers.role,
+      position: agentTeamMembers.position,
+      agentName: agents.name,
+      agentStatus: agents.status,
+    }).from(agentTeamMembers)
+      .innerJoin(agents, eq(agents.id, agentTeamMembers.agentId))
+      .where(and(
+        eq(agentTeamMembers.organizationId, input.organizationId),
+        eq(agentTeamMembers.teamId, team.id),
+      )).orderBy(asc(agentTeamMembers.position)),
+    db().select({ id: agents.id, name: agents.name, status: agents.status }).from(agents).where(and(
+      eq(agents.organizationId, input.organizationId),
+      eq(agents.id, team.supervisorAgentId),
+    )).limit(1),
+  ]);
+  const supervisor = supervisorRows[0];
+  const readiness = teamReadiness({ supervisor, supervisorAgentId: team.supervisorAgentId, members });
   return {
     ...team,
-    members,
-    ready: members.length > 1 && members.every((member) => member.agentStatus === "published"),
+    supervisor: supervisor ?? null,
+    members: readiness.workers,
+    ready: readiness.ready,
   };
 }
 
@@ -114,7 +160,14 @@ export async function createChannelTeamRun(input: {
 }) {
   await assertUserPermission({ ...input, permission: "agents:run" });
   const team = await getChannelTeam(input);
-  if (!team.ready) throw new ApiError(422, "TEAM_NOT_READY", "فريق الوكلاء غير جاهز؛ يجب نشر جميع أعضائه المطلوبين للتشغيل.");
+  if (!team.ready) {
+    const reason = team.supervisor?.status !== "published"
+      ? "وكيل الإشراف غير منشور."
+      : team.members.length === 0
+        ? "لا يوجد وكيل عامل في الفريق."
+        : "يوجد وكيل عامل غير منشور.";
+    throw new ApiError(422, "TEAM_NOT_READY", `فريق الوكلاء غير جاهز: ${reason}`);
+  }
   const prompt = input.prompt.trim();
   if (!prompt || prompt.length > 20_000) throw new ApiError(422, "TEAM_INPUT_INVALID", "مهمة الفريق مطلوبة ويجب ألا تتجاوز 20000 حرف.");
   return createAgentTeamRun({
