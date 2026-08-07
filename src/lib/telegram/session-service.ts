@@ -9,6 +9,7 @@ export type TelegramFlow =
   | "agent.create"
   | "agent.select"
   | "conversation.start"
+  | "team.run"
   | "account.unlink";
 
 export type TelegramSessionState = Record<string, unknown>;
@@ -48,12 +49,14 @@ export async function beginTelegramFlow(input: {
   flow: TelegramFlow;
   step: string;
   state?: TelegramSessionState;
+  selectedTeamId?: string | null;
   expiresInMs?: number;
 }) {
   const [session] = await db().update(telegramUserSessions).set({
     activeFlow: input.flow,
     currentStep: input.step,
     state: input.state ?? {},
+    ...(input.selectedTeamId === undefined ? {} : { selectedTeamId: input.selectedTeamId }),
     expiresAt: new Date(Date.now() + (input.expiresInMs ?? DEFAULT_SESSION_TTL_MS)),
     version: sql`${telegramUserSessions.version} + 1`,
     updatedAt: new Date(),
