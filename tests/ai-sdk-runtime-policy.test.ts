@@ -145,6 +145,7 @@ describe("runtime limits and observability safety", () => {
       "sandbox-health-check",
       "sandbox-reset",
       "sandbox-resume",
+      "telegram-update-process",
     ]);
     expect(Object.keys(taskList)).not.toContain("document-embed");
     expect(Object.keys(taskList)).not.toContain("memory-compact");
