@@ -77,6 +77,20 @@ describe("Telegram platform client runtime", () => {
     expect(setup).toContain('{ command: "approvals"');
   });
 
+  it("downloads and stores media through the existing channel pipeline", async () => {
+    const flow = await readFile("src/lib/telegram/file-flows.ts", "utf8");
+    const processor = await readFile("src/lib/telegram/update-processor.ts", "utf8");
+    const adapter = await readFile("src/lib/channels/telegram-adapter.ts", "utf8");
+    expect(flow).toContain("telegramFeatureAllowed");
+    expect(flow).toContain('permission: "files:upload"');
+    expect(flow).toContain("getUsableChannelAgent");
+    expect(flow).toContain("telegramChannelAdapter.normalizeIncoming");
+    expect(flow).toContain("routeIncomingChannelMessage");
+    expect(flow).toContain("setTelegramConversation");
+    expect(adapter).toContain("downloadTelegramFile");
+    expect(processor).toContain("handleTelegramMedia");
+  });
+
   it("rejects empty Telegram messages, restores file downloads and splits long output", async () => {
     const renderer = await readFile("src/lib/telegram/message-renderer.ts", "utf8");
     const client = await readFile("src/lib/integrations/telegram.ts", "utf8");
