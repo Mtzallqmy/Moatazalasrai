@@ -1,40 +1,26 @@
-# Multi-stage image: development tooling stays out of the production runtime.
-ARG NODE_VERSION=22.18.0
-
-FROM node:${NODE_VERSION}-alpine AS base
+FROM node:22.18.0-bookworm-slim AS base
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN apk add --no-cache libc6-compat
 
 FROM base AS dependencies
 COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund
+RUN npm ci
 
-# Production-only dependencies are copied because migration and worker scripts run outside Next standalone tracing.
 FROM base AS production-dependencies
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --no-audit --no-fund \
-  && npm cache clean --force
-
-FROM base AS development
-ENV NODE_ENV=development
-COPY --from=dependencies /app/node_modules ./node_modules
-COPY . .
-EXPOSE 3000
-CMD ["npm", "run", "dev", "--", "--hostname", "0.0.0.0"]
+RUN npm ci --omit=dev
 
 FROM base AS builder
-ENV NODE_ENV=production
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
-RUN mkdir -p public && npm run build
+RUN npm run build
 
-FROM node:${NODE_VERSION}-alpine AS runner
+FROM node:22.18.0-bookworm-slim AS runner
 WORKDIR /app
-ENV NODE_ENV=production
-ENV NEXT_TELEMETRY_DISABLED=1
-ENV PORT=3000
-ENV HOSTNAME=0.0.0.0
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    HOSTNAME=0.0.0.0 \
+    PORT=3000
 
 RUN addgroup --system --gid 1001 nodejs \
   && adduser --system --uid 1001 --ingroup nodejs nextjs \
@@ -64,6 +50,7 @@ RUN test -f /app/scripts/start-production.mjs \
   && test -f /app/scripts/validate-runtime-env.mjs \
   && test -f /app/drizzle/0039_central_telegram_bot.sql \
   && test -f /app/drizzle/0040_telegram_admin_default_permissions.sql \
+  && test -f /app/drizzle/0041_telegram_user_sessions.sql \
   && node --input-type=module -e "await import('graphile-worker'); await import('pg')"
 
 USER nextjs
