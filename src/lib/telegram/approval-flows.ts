@@ -44,7 +44,9 @@ export async function listTelegramApprovals(input: ApprovalContext) {
     return;
   }
 
-  const visible = approvals.slice(0, 8);
+  // Telegram accepts at most eight keyboard rows in this renderer. Keep one
+  // row reserved for refresh/home navigation instead of silently dropping it.
+  const visible = approvals.slice(0, 6);
   await sendTelegramList({
     token: input.token,
     chatId: input.chatId,
