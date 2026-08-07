@@ -23,6 +23,17 @@ import { presentTelegramError } from "./error-presenter";
 import { renderTelegramMainMenu } from "./menu-renderer";
 import { sendTelegramError, sendTelegramMenu, sendTelegramText } from "./message-renderer";
 import { cancelTelegramFlow, ensureTelegramSession, getTelegramSession } from "./session-service";
+import {
+  confirmTelegramRunMutation,
+  confirmTelegramTeamRun,
+  executeTelegramRunMutation,
+  handleTelegramTeamRunText,
+  listTelegramRuns,
+  listTelegramTeams,
+  showTelegramRun,
+  showTelegramTeam,
+  startTelegramTeamRun,
+} from "./team-flows";
 import { parseTelegramUpdate, telegramUpdateContext, type TelegramUpdate } from "./update-parser";
 
 const INVALID_LINK_MESSAGE = "رمز الربط غير صالح أو انتهت صلاحيته. أنشئ رمزًا جديدًا من إعدادات حسابك.";
@@ -118,6 +129,58 @@ async function handleCallback(input: {
     await renderTelegramMainMenu({ ...base });
     return;
   }
+
+  const teamsPage = /^teams:page:(\d+)$/.exec(input.action);
+  if (teamsPage) {
+    await listTelegramTeams({ ...base, page: Number(teamsPage[1]) });
+    return;
+  }
+  const teamView = /^team:view:([0-9a-f-]{36})$/i.exec(input.action);
+  if (teamView) {
+    await showTelegramTeam({ ...base, teamId: teamView[1] });
+    return;
+  }
+  const teamRun = /^team:run:([0-9a-f-]{36})$/i.exec(input.action);
+  if (teamRun) {
+    await startTelegramTeamRun({ ...base, teamId: teamRun[1] });
+    return;
+  }
+  if (input.action === "team:run:confirm") {
+    await confirmTelegramTeamRun({
+      ...base,
+      requestId: `telegram:team:${input.context.updateId}:${input.context.message.message_id ?? 0}`,
+    });
+    return;
+  }
+  const runsPage = /^runs:page:(\d+)$/.exec(input.action);
+  if (runsPage) {
+    await listTelegramRuns({ ...base, page: Number(runsPage[1]) });
+    return;
+  }
+  const runView = /^run:view:([0-9a-f-]{36})$/i.exec(input.action);
+  if (runView) {
+    await showTelegramRun({ ...base, runId: runView[1] });
+    return;
+  }
+  const runConfirm = /^run:(cancel|retry):confirm:([0-9a-f-]{36})$/i.exec(input.action);
+  if (runConfirm) {
+    await confirmTelegramRunMutation({
+      ...base,
+      operation: runConfirm[1] as "cancel" | "retry",
+      runId: runConfirm[2],
+    });
+    return;
+  }
+  const runExecute = /^run:(cancel|retry):execute:([0-9a-f-]{36})$/i.exec(input.action);
+  if (runExecute) {
+    await executeTelegramRunMutation({
+      ...base,
+      operation: runExecute[1] as "cancel" | "retry",
+      runId: runExecute[2],
+    });
+    return;
+  }
+
   if (input.action === "approvals:list") {
     await listTelegramApprovals(base);
     return;
@@ -145,6 +208,7 @@ async function handleCallback(input: {
     });
     return;
   }
+
   if (input.action === "agents:list" || input.action === "agents:select") {
     await listTelegramAgents({ ...base, mode: input.action === "agents:select" ? "select" : "browse" });
     return;
@@ -249,6 +313,14 @@ async function handleLinkedText(input: {
     await listTelegramAgents({ ...base, mode: "browse" });
     return;
   }
+  if (cmd === "teams") {
+    await listTelegramTeams({ ...base, page: 1 });
+    return;
+  }
+  if (cmd === "runs") {
+    await listTelegramRuns({ ...base, page: 1 });
+    return;
+  }
   if (cmd === "approvals") {
     await listTelegramApprovals(base);
     return;
@@ -276,6 +348,7 @@ async function handleLinkedText(input: {
     return;
   }
 
+  if (await handleTelegramTeamRunText({ ...base, text: input.context.text })) return;
   if (await handleAgentCreateText({ ...base, text: input.context.text })) return;
 
   await sendTelegramConversationMessage({
