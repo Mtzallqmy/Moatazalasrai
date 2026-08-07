@@ -68,7 +68,7 @@ export function configureTelegramWebhook(input: {
   return telegramCall<boolean>(input.token, "setWebhook", {
     url: input.url,
     secret_token: input.secretToken,
-    allowed_updates: ["message", "edited_message", "callback_query", "my_chat_member"],
+    allowed_updates: ["message", "edited_message", "callback_query"],
     drop_pending_updates: false,
   });
 }
