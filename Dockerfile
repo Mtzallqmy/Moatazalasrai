@@ -1,21 +1,27 @@
-FROM node:22.18.0-bookworm-slim AS base
+# Multi-stage production image with one Node version shared by CI, local development and Railway.
+ARG NODE_VERSION=22.18.0
+
+FROM node:${NODE_VERSION}-bookworm-slim AS base
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 
 FROM base AS dependencies
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --no-audit --no-fund
 
+# Runtime scripts and Graphile Worker execute outside Next.js standalone tracing.
 FROM base AS production-dependencies
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev --no-audit --no-fund \
+  && npm cache clean --force
 
 FROM base AS builder
+ENV NODE_ENV=production
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
-RUN npm run build
+RUN mkdir -p public && npm run build
 
-FROM node:22.18.0-bookworm-slim AS runner
+FROM node:${NODE_VERSION}-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
@@ -43,7 +49,7 @@ COPY --from=builder --chown=nextjs:nodejs \
   /app/scripts/validate-runtime-env.mjs \
   ./scripts/
 
-# Fail the image build if Railway startup or pre-deploy migration assets are incomplete.
+# Fail image creation when a Railway startup or migration asset is absent.
 RUN test -f /app/scripts/start-production.mjs \
   && test -f /app/scripts/check-telegram-schema.mjs \
   && test -f /app/scripts/setup-telegram-webhook.mjs \
