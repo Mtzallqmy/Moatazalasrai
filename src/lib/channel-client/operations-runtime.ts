@@ -313,11 +313,11 @@ async function approvalView(input: ChannelClientRuntimeInput, approvalId: string
 
 async function browserView(input: ChannelClientRuntimeInput) {
   await requireCapability(input, "browser.list", "تشخيص Browser غير متاح لحسابك.");
-  const tasks = await channelBrowserDiagnostics({ organizationId: input.identity.organizationId, userId: input.identity.userId });
+  const { health, tasks } = await channelBrowserDiagnostics({ organizationId: input.identity.organizationId, userId: input.identity.userId });
   if (!tasks.length) {
     await sendChannelClientView(input.transport, channelEmptyState({
-      title: "لا توجد مهام متصفح",
-      reason: "أنشئ مهمة من لوحة مهام المتصفح بعد توثيق اتصال موقع وربطه بوكيل.",
+      title: `Browser Runner: ${health.status}`,
+      reason: `${health.details} لا توجد مهام متصفح متاحة لحسابك.`,
       action: { id: "cc.home", title: "الرئيسية" },
       path: ["الرئيسية", "مهام المتصفح"],
     }));
@@ -325,14 +325,14 @@ async function browserView(input: ChannelClientRuntimeInput) {
   }
   await sendChannelClientView(input.transport, {
     path: ["الرئيسية", "مهام المتصفح"],
-    text: tasks.map((task, index) => [
+    text: [`حالة Runner: ${health.status} — ${health.details}`, ...tasks.map((task, index) => [
       `${index + 1}. ${task.connectionName} — ${task.siteDomain}`,
       `الوكيل: ${task.agentName}`,
       `الحالة: ${task.status}`,
       `المخاطر: ${task.riskLevel}`,
       `الخطوة: ${task.currentStep}`,
       `الخطأ: ${task.errorCode ?? "لا يوجد"}`,
-    ].join("\n")).join("\n\n"),
+    ].join("\n"))].join("\n\n"),
     actions: [[{ id: "cc.browser", title: "تحديث" }, { id: "cc.home", title: "الرئيسية" }]],
     editCurrent: Boolean(input.actionId),
   });
@@ -340,15 +340,15 @@ async function browserView(input: ChannelClientRuntimeInput) {
 
 async function sandboxView(input: ChannelClientRuntimeInput) {
   await requireCapability(input, "sandbox.list", "تشخيص Sandbox غير متاح لحسابك.");
-  const { workspaces, executions } = await channelSandboxDiagnostics({ organizationId: input.identity.organizationId, userId: input.identity.userId });
+  const { health, workspaces, executions } = await channelSandboxDiagnostics({ organizationId: input.identity.organizationId, userId: input.identity.userId });
   const items = [
     ...workspaces.slice(0, 6).map((workspace) => `مساحة: ${workspace.name}\nالحالة: ${workspace.status}\nالقالب: ${workspace.template}\nالمزود: ${workspace.provider}\nالخطأ: ${workspace.errorCode ?? "لا يوجد"}`),
     ...executions.slice(0, 8).map((execution) => `تنفيذ: ${execution.commandSummary}\nالحالة: ${execution.status}\nالمخاطر: ${execution.riskLevel}\nرمز الخروج: ${execution.exitCode ?? "لم يكتمل"}\nالخطأ: ${execution.errorCode ?? "لا يوجد"}`),
   ];
   if (!items.length) {
     await sendChannelClientView(input.transport, channelEmptyState({
-      title: "لا توجد بيانات Sandbox",
-      reason: "أنشئ مساحة Sandbox حقيقية من لوحة المحادثة أو التشغيل ثم أعد الفحص.",
+      title: `Sandbox Runner: ${health.status}`,
+      reason: `${health.details} لا توجد مساحات أو تنفيذات متاحة لحسابك.`,
       action: { id: "cc.home", title: "الرئيسية" },
       path: ["الرئيسية", "Sandbox"],
     }));
@@ -356,7 +356,7 @@ async function sandboxView(input: ChannelClientRuntimeInput) {
   }
   await sendChannelClientView(input.transport, {
     path: ["الرئيسية", "Sandbox"],
-    text: items.join("\n\n"),
+    text: [`حالة Runner: ${health.status} — ${health.details}`, ...items].join("\n\n"),
     actions: [[{ id: "cc.sandbox", title: "تحديث" }, { id: "cc.home", title: "الرئيسية" }]],
     editCurrent: Boolean(input.actionId),
   });
