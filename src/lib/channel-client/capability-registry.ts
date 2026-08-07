@@ -14,6 +14,7 @@ export type ChannelCapability = {
   requiredPermission?: Permission;
   telegramFeatureKey?: string;
   whatsappFeatureKey?: string;
+  whatsappPolicyAction?: string;
   requiredPlatformModule?: string;
   requiredRuntime?: "browser" | "sandbox";
   fallbackDashboardUrl?: string;
@@ -62,6 +63,7 @@ export const CHANNEL_CAPABILITY_REGISTRY: readonly ChannelCapability[] = Object.
     requiredPermission: "agents:manage",
     telegramFeatureKey: "telegram.admin_commands",
     whatsappFeatureKey: "whatsapp.admin_commands",
+    whatsappPolicyAction: "agents.manage",
     requiredPlatformModule: "agents",
     fallbackDashboardUrl: "/dashboard/agents",
     supportsPagination: false,
@@ -122,6 +124,7 @@ export const CHANNEL_CAPABILITY_REGISTRY: readonly ChannelCapability[] = Object.
     requiredPermission: "runs:read",
     telegramFeatureKey: "telegram.admin_commands",
     whatsappFeatureKey: "whatsapp.admin_commands",
+    whatsappPolicyAction: "approvals.manage",
     requiredPlatformModule: "security_center",
     fallbackDashboardUrl: "/dashboard/approvals",
     supportsPagination: false,
@@ -152,6 +155,7 @@ export const CHANNEL_CAPABILITY_REGISTRY: readonly ChannelCapability[] = Object.
     requiredPermission: "integrations:read",
     telegramFeatureKey: "telegram.admin_commands",
     whatsappFeatureKey: "whatsapp.admin_commands",
+    whatsappPolicyAction: "integrations.read",
     requiredPlatformModule: "content",
     fallbackDashboardUrl: "/dashboard/repositories",
     supportsPagination: false,
@@ -167,6 +171,7 @@ export const CHANNEL_CAPABILITY_REGISTRY: readonly ChannelCapability[] = Object.
     requiredPermission: "site_connections:read",
     telegramFeatureKey: "telegram.admin_commands",
     whatsappFeatureKey: "whatsapp.admin_commands",
+    whatsappPolicyAction: "site_connections.read",
     requiredRuntime: "browser",
     fallbackDashboardUrl: "/dashboard/site-connections",
     supportsPagination: false,
@@ -182,6 +187,7 @@ export const CHANNEL_CAPABILITY_REGISTRY: readonly ChannelCapability[] = Object.
     requiredPermission: "integrations:read",
     telegramFeatureKey: "telegram.admin_commands",
     whatsappFeatureKey: "whatsapp.admin_commands",
+    whatsappPolicyAction: "mcp.read",
     requiredPlatformModule: "agents",
     fallbackDashboardUrl: "/dashboard/mcp",
     supportsPagination: false,
@@ -197,6 +203,7 @@ export const CHANNEL_CAPABILITY_REGISTRY: readonly ChannelCapability[] = Object.
     requiredPermission: "browser_tasks:read",
     telegramFeatureKey: "telegram.admin_commands",
     whatsappFeatureKey: "whatsapp.admin_commands",
+    whatsappPolicyAction: "browser.read",
     requiredRuntime: "browser",
     fallbackDashboardUrl: "/dashboard/browser-tasks",
     supportsPagination: false,
@@ -212,6 +219,7 @@ export const CHANNEL_CAPABILITY_REGISTRY: readonly ChannelCapability[] = Object.
     requiredPermission: "sandbox:read",
     telegramFeatureKey: "telegram.admin_commands",
     whatsappFeatureKey: "whatsapp.admin_commands",
+    whatsappPolicyAction: "sandbox.read",
     requiredRuntime: "sandbox",
     fallbackDashboardUrl: "/dashboard/sandbox",
     supportsPagination: false,
@@ -252,6 +260,7 @@ function runtimeEnabled(runtime: ChannelCapability["requiredRuntime"]) {
 export async function resolveChannelCapabilities(input: {
   identity: ChannelClientIdentity;
   featureAllowed(featureKey: string): Promise<boolean>;
+  actionAllowed?(action: string): Promise<boolean>;
 }) {
   const visible: ChannelCapability[] = [];
   for (const capability of CHANNEL_CAPABILITY_REGISTRY) {
@@ -268,6 +277,9 @@ export async function resolveChannelCapabilities(input: {
       ? capability.telegramFeatureKey
       : capability.whatsappFeatureKey;
     if (featureKey && !await input.featureAllowed(featureKey)) continue;
+    if (input.identity.channel === "whatsapp" && capability.whatsappPolicyAction) {
+      if (!input.actionAllowed || !await input.actionAllowed(capability.whatsappPolicyAction)) continue;
+    }
     if (capability.requiredPlatformModule && !await moduleEnabled(input.identity.organizationId, capability.requiredPlatformModule)) continue;
     if (!runtimeEnabled(capability.requiredRuntime)) continue;
     visible.push(capability);
