@@ -1,4 +1,4 @@
-// Regression guard: Railway startup and pre-deploy migrations must resolve every runtime asset.
+// Regression guard: Railway startup, Compose services, and pre-deploy migrations must resolve every runtime asset.
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
@@ -10,6 +10,21 @@ describe("production Docker runtime dependencies", () => {
     expect(dockerfile).toContain("npm ci --omit=dev --no-audit --no-fund");
     expect(dockerfile).toContain("COPY --from=production-dependencies --chown=nextjs:nodejs /app/node_modules ./node_modules");
     expect(dockerfile).toContain("await import('graphile-worker'); await import('pg')");
+  });
+
+  it("keeps every Docker Compose build target present in the Dockerfile", async () => {
+    const [dockerfile, compose] = await Promise.all([
+      readFile("Dockerfile", "utf8"),
+      readFile("docker-compose.yml", "utf8"),
+    ]);
+    const dockerTargets = new Set(
+      Array.from(dockerfile.matchAll(/^FROM\s+\S+\s+AS\s+([a-zA-Z0-9_-]+)\s*$/gmi), (match) => match[1]),
+    );
+    const composeTargets = Array.from(compose.matchAll(/^\s+target:\s*([a-zA-Z0-9_-]+)\s*$/gmi), (match) => match[1]);
+
+    expect(composeTargets.length).toBeGreaterThan(0);
+    for (const target of composeTargets) expect(dockerTargets.has(target)).toBe(true);
+    expect(dockerTargets.has("development")).toBe(true);
   });
 
   it("packages every production startup script used by Railway", async () => {
