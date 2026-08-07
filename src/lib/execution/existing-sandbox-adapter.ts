@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { executionJobs } from "@/db/execution-schema";
+import { executionJobs, executionWorkspaces } from "@/db/execution-schema";
 import { env } from "@/lib/config/env";
 import type { ExecutionRunner } from "@/lib/execution/contracts";
 import { ApiError } from "@/lib/http/api";
@@ -21,6 +22,11 @@ function assertNetworkPolicy(mode: "deny_all" | "allowlist", hosts: string[]) {
   if (mode !== "deny_all" || hosts.length > 0) {
     throw new ApiError(422, "EXECUTION_NETWORK_UNSUPPORTED", "مشغل Sandbox الحالي يدعم شبكة مغلقة فقط.");
   }
+}
+
+function runnerExecutionId(jobId: string, key: string) {
+  const digest = createHash("sha256").update(key, "utf8").digest("hex").slice(0, 20);
+  return `${jobId}-${digest}`;
 }
 
 export class ExistingSandboxAdapter implements ExecutionRunner {
@@ -62,10 +68,21 @@ export class ExistingSandboxAdapter implements ExecutionRunner {
     assertNetworkPolicy(context.networkPolicy.mode, context.networkPolicy.hosts);
     const timeoutMs = Math.min(context.command.timeoutMs ?? context.limits.timeoutMs, context.limits.timeoutMs);
     const maxOutputBytes = Math.min(context.command.maxOutputBytes ?? context.limits.maxOutputBytes, context.limits.maxOutputBytes);
+    const externalExecutionId = runnerExecutionId(context.executionJobId, context.command.idempotencyKey);
+    const [workspaceRow] = await db().select({ metadata: executionWorkspaces.metadata }).from(executionWorkspaces).where(and(
+      eq(executionWorkspaces.id, context.workspaceId),
+      eq(executionWorkspaces.organizationId, context.organizationId),
+    )).limit(1);
+    await db().update(executionWorkspaces).set({
+      metadata: { ...(workspaceRow?.metadata ?? {}), currentExternalExecutionId: externalExecutionId },
+      lastActivityAt: new Date(),
+      updatedAt: new Date(),
+    }).where(and(eq(executionWorkspaces.id, context.workspaceId), eq(executionWorkspaces.organizationId, context.organizationId)));
+
     const started = await startRunnerExecution({
       tenantId: context.organizationId,
       workspaceId: context.externalWorkspaceRef,
-      executionId: context.executionJobId,
+      executionId: externalExecutionId,
       command: context.command.command,
       workingDirectory: context.command.workingDirectory ?? ".",
       timeoutMs,
@@ -76,57 +93,69 @@ export class ExistingSandboxAdapter implements ExecutionRunner {
     let stdout = "";
     let stderr = "";
     const deadline = Date.now() + timeoutMs + 20_000;
-    while (Date.now() < deadline) {
-      const snapshot = await getRunnerExecution({
-        tenantId: context.organizationId,
-        externalWorkspaceId: context.externalWorkspaceRef,
-        externalExecutionId: started.executionId,
-        after: sequence,
-      });
-      for (const event of snapshot.events) {
-        sequence = Math.max(sequence, event.sequence);
-        if (event.type !== "output" || typeof event.payload.text !== "string") continue;
-        if (event.stream === "stderr") stderr += event.payload.text;
-        else stdout += event.payload.text;
-      }
-      const [job] = await db().select({ cancelRequestedAt: executionJobs.cancelRequestedAt }).from(executionJobs).where(and(
-        eq(executionJobs.id, context.executionJobId),
-        eq(executionJobs.organizationId, context.organizationId),
-      )).limit(1);
-      if (job?.cancelRequestedAt && snapshot.status === "running") {
-        await stopRunnerExecution({
+    try {
+      while (Date.now() < deadline) {
+        const snapshot = await getRunnerExecution({
           tenantId: context.organizationId,
           externalWorkspaceId: context.externalWorkspaceRef,
           externalExecutionId: started.executionId,
-        }).catch(() => undefined);
+          after: sequence,
+        });
+        for (const event of snapshot.events) {
+          sequence = Math.max(sequence, event.sequence);
+          if (event.type !== "output" || typeof event.payload.text !== "string") continue;
+          if (event.stream === "stderr") stderr += event.payload.text;
+          else stdout += event.payload.text;
+        }
+        const [job] = await db().select({ cancelRequestedAt: executionJobs.cancelRequestedAt }).from(executionJobs).where(and(
+          eq(executionJobs.id, context.executionJobId),
+          eq(executionJobs.organizationId, context.organizationId),
+        )).limit(1);
+        if (job?.cancelRequestedAt && snapshot.status === "running") {
+          await stopRunnerExecution({
+            tenantId: context.organizationId,
+            externalWorkspaceId: context.externalWorkspaceRef,
+            externalExecutionId: started.executionId,
+          }).catch(() => undefined);
+        }
+        if (snapshot.status !== "running") {
+          return {
+            status: snapshot.status,
+            exitCode: snapshot.exitCode,
+            stdout,
+            stderr,
+            outputTruncated: snapshot.outputTruncated,
+            stdoutBytes: snapshot.stdoutBytes,
+            stderrBytes: snapshot.stderrBytes,
+          };
+        }
+        await sleep(300);
       }
-      if (snapshot.status !== "running") {
-        return {
-          status: snapshot.status,
-          exitCode: snapshot.exitCode,
-          stdout,
-          stderr,
-          outputTruncated: snapshot.outputTruncated,
-          stdoutBytes: snapshot.stdoutBytes,
-          stderrBytes: snapshot.stderrBytes,
-        };
+      await stopRunnerExecution({
+        tenantId: context.organizationId,
+        externalWorkspaceId: context.externalWorkspaceRef,
+        externalExecutionId: started.executionId,
+      }).catch(() => undefined);
+      return {
+        status: "timed_out",
+        exitCode: null,
+        stdout,
+        stderr,
+        outputTruncated: false,
+        stdoutBytes: Buffer.byteLength(stdout),
+        stderrBytes: Buffer.byteLength(stderr),
+      };
+    } finally {
+      const [fresh] = await db().select({ metadata: executionWorkspaces.metadata }).from(executionWorkspaces).where(and(
+        eq(executionWorkspaces.id, context.workspaceId), eq(executionWorkspaces.organizationId, context.organizationId),
+      )).limit(1);
+      if (fresh?.metadata?.currentExternalExecutionId === externalExecutionId) {
+        const { currentExternalExecutionId: _ignored, ...rest } = fresh.metadata;
+        await db().update(executionWorkspaces).set({ metadata: rest, updatedAt: new Date() }).where(and(
+          eq(executionWorkspaces.id, context.workspaceId), eq(executionWorkspaces.organizationId, context.organizationId),
+        ));
       }
-      await sleep(300);
     }
-    await stopRunnerExecution({
-      tenantId: context.organizationId,
-      externalWorkspaceId: context.externalWorkspaceRef,
-      externalExecutionId: started.executionId,
-    }).catch(() => undefined);
-    return {
-      status: "timed_out",
-      exitCode: null,
-      stdout,
-      stderr,
-      outputTruncated: false,
-      stdoutBytes: Buffer.byteLength(stdout),
-      stderrBytes: Buffer.byteLength(stderr),
-    };
   }
 
   async writeFile(context: Parameters<ExecutionRunner["writeFile"]>[0]) {
@@ -165,10 +194,17 @@ export class ExistingSandboxAdapter implements ExecutionRunner {
   }
 
   async cancel(context: Parameters<ExecutionRunner["cancel"]>[0]) {
+    const [workspace] = await db().select({ metadata: executionWorkspaces.metadata }).from(executionWorkspaces).where(and(
+      eq(executionWorkspaces.id, context.workspaceId), eq(executionWorkspaces.organizationId, context.organizationId),
+    )).limit(1);
+    const externalExecutionId = typeof workspace?.metadata?.currentExternalExecutionId === "string"
+      ? workspace.metadata.currentExternalExecutionId
+      : null;
+    if (!externalExecutionId) return;
     await stopRunnerExecution({
       tenantId: context.organizationId,
       externalWorkspaceId: context.externalWorkspaceRef,
-      externalExecutionId: context.executionJobId,
+      externalExecutionId,
     }).catch(() => undefined);
   }
 
