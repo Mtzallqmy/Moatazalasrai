@@ -1,4 +1,6 @@
 import { ApiError } from "@/lib/http/api";
+import { telegramPlatformConfig } from "@/lib/integrations/telegram-platform";
+import type { TelegramInlineButton } from "@/lib/integrations/telegram";
 import {
   findOrganizationGitHubRepository,
   listOrganizationGitHubRepositories,
@@ -12,6 +14,16 @@ type RepositoryContext = {
   userId: string;
   organizationId: string;
 };
+
+function dashboardUrl(path: string) {
+  const base = telegramPlatformConfig().publicAppUrl?.trim().replace(/\/$/, "");
+  return base ? `${base}${path}` : null;
+}
+
+function dashboardButton(path: string, title: string): TelegramInlineButton[] {
+  const url = dashboardUrl(path);
+  return url ? [{ url, title }] : [];
+}
 
 async function assertRepositories(input: RepositoryContext) {
   const capability = await assertTelegramCapability({
@@ -36,7 +48,10 @@ export async function listTelegramRepositories(input: RepositoryContext) {
         chatId: input.chatId,
         reason: "تكامل GitHub متحقق لكنه لم يُرجع مستودعات متاحة للقراءة.",
         action: "راجع صلاحيات تكامل GitHub من لوحة الموقع.",
-        buttonRows: [[{ url: "https://moatazalalqami.online/dashboard/integrations", title: "فتح التكاملات" }], [{ id: "nav:home", title: "الرئيسية" }]],
+        buttonRows: [
+          ...dashboardButton("/dashboard/integrations", "فتح التكاملات").map((button) => [button]),
+          [{ id: "nav:home", title: "الرئيسية" }],
+        ],
       });
       return;
     }
@@ -69,7 +84,10 @@ export async function listTelegramRepositories(input: RepositoryContext) {
         chatId: input.chatId,
         reason: "لا يوجد تكامل GitHub مفعّل ومتحقق لهذه المؤسسة.",
         action: "اربط GitHub من لوحة الموقع. لا ترسل أي Token داخل Telegram.",
-        buttonRows: [[{ url: "https://moatazalalqami.online/dashboard/integrations", title: "فتح التكاملات" }], [{ id: "nav:home", title: "الرئيسية" }]],
+        buttonRows: [
+          ...dashboardButton("/dashboard/integrations", "فتح التكاملات").map((button) => [button]),
+          [{ id: "nav:home", title: "الرئيسية" }],
+        ],
       });
       return;
     }
@@ -100,7 +118,7 @@ export async function showTelegramRepository(input: RepositoryContext & { reposi
     ].join("\n"),
     buttonRows: [[
       { id: "repositories:list", title: "رجوع" },
-      { url: "https://moatazalalqami.online/dashboard/repositories", title: "فتح في الموقع" },
+      ...dashboardButton("/dashboard/repositories", "فتح في الموقع"),
     ]],
   });
 }
