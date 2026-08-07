@@ -24,6 +24,7 @@ const commands = [
   { command: "status", description: "حالة الحساب والجلسة" },
   { command: "agents", description: "عرض الوكلاء المتاحين" },
   { command: "new", description: "بدء محادثة حقيقية" },
+  { command: "approvals", description: "عرض الموافقات المعلقة" },
   { command: "cancel", description: "إلغاء العملية الحالية" },
   { command: "unlink", description: "فصل حساب Telegram" },
 ];
