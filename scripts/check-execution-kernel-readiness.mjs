@@ -5,6 +5,7 @@ import path from "node:path";
 import process from "node:process";
 
 const root = process.cwd();
+const productionRoots = ["src", "services", "drizzle"];
 const ignoredDirectories = new Set([".git", ".next", "node_modules", "coverage", "dist", "build", ".open-next"]);
 const searchableExtensions = new Set([".ts", ".tsx", ".js", ".mjs", ".sql"]);
 
@@ -12,7 +13,7 @@ async function collectFiles(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
-    if (entry.name.startsWith(".") && entry.name !== ".env.example") continue;
+    if (entry.name.startsWith(".")) continue;
     if (entry.isDirectory()) {
       if (ignoredDirectories.has(entry.name)) continue;
       files.push(...await collectFiles(path.join(directory, entry.name)));
@@ -23,7 +24,11 @@ async function collectFiles(directory) {
   return files;
 }
 
-const files = await collectFiles(root);
+const files = [];
+for (const productionRoot of productionRoots) {
+  files.push(...await collectFiles(path.join(root, productionRoot)));
+}
+
 const corpusParts = [];
 for (const file of files) {
   const relative = path.relative(root, file).replaceAll("\\", "/");
@@ -118,6 +123,8 @@ const missing = checks.filter((check) => check.required && !check.ok);
 const result = {
   ready: missing.length === 0,
   checkedAt: new Date().toISOString(),
+  scannedRoots: productionRoots,
+  scannedFiles: files.length,
   checks: checks.map(({ id, ok, expected }) => ({ id, ok, expected })),
   missing: missing.map(({ id, expected }) => ({ id, expected })),
 };
