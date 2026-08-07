@@ -11,6 +11,7 @@ describe("Telegram platform client runtime", () => {
     expect(migration).toContain('"version" integer');
     expect(service).toContain("expectedVersion");
     expect(service).toContain("TELEGRAM_SESSION_CONFLICT");
+    expect(service).toContain('"team.run"');
   });
 
   it("keeps the webhook thin and moves heavy work to Graphile Worker", async () => {
@@ -44,6 +45,21 @@ describe("Telegram platform client runtime", () => {
     expect(menu).toContain("resolveTelegramCapabilities");
     expect(menu).not.toContain("GitHub والمستودعات");
     expect(menu).not.toContain("مهام المتصفح");
+  });
+
+  it("uses real team runtime services and queues team runs", async () => {
+    const flow = await readFile("src/lib/telegram/team-flows.ts", "utf8");
+    const processor = await readFile("src/lib/telegram/update-processor.ts", "utf8");
+    const setup = await readFile("scripts/setup-telegram-webhook.mjs", "utf8");
+    expect(flow).toContain("createAgentTeamRun");
+    expect(flow).toContain("cancelAgentTeamRun");
+    expect(flow).toContain("retryAgentTeamRun");
+    expect(flow).toContain("agentTeamRunsRuntime");
+    expect(flow).toContain("agentTeamRunStepsRuntime");
+    expect(processor).toContain("handleTelegramTeamRunText");
+    expect(processor).toContain("team:run:confirm");
+    expect(setup).toContain('{ command: "teams"');
+    expect(setup).toContain('{ command: "runs"');
   });
 
   it("uses the real approval store and resume queues instead of static approval text", async () => {
