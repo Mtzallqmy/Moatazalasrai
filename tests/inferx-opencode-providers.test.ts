@@ -41,7 +41,7 @@ describe("InferX and OpenCode providers", () => {
   it("prefills starter models but still requires server-side generation verification before saving", async () => {
     const form = await readFile("src/components/provider-form.tsx", "utf8");
     expect(form).toContain("setManualModel(next.starterModel ?? \"\")");
-    expect(form).toContain('mode: "verify"');
+    expect(form).toContain('requestValidation(form, "verify", testModel)');
     expect(form).toContain("verified.data.modelTest");
     expect(form).toContain("validationId");
     expect(form).toContain("الحفظ يتطلب طلب توليد حقيقي ناجح");
