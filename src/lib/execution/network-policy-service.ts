@@ -51,9 +51,11 @@ export function normalizeHostname(value: string) {
 export function isPublicAddress(value: string) {
   let address: ipaddr.IPv4 | ipaddr.IPv6;
   try { address = ipaddr.parse(value); } catch { return false; }
-  const normalized = address.kind() === "ipv6" && address.isIPv4MappedAddress()
-    ? address.toIPv4Address()
-    : address;
+  let normalized: ipaddr.IPv4 | ipaddr.IPv6 = address;
+  if (address.kind() === "ipv6") {
+    const ipv6 = address as ipaddr.IPv6;
+    normalized = ipv6.isIPv4MappedAddress() ? ipv6.toIPv4Address() : ipv6;
+  }
   const range = normalized.range();
   return !new Set([
     "unspecified",
