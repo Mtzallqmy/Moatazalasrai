@@ -6,6 +6,7 @@ const ACTIONS: Record<string, string> = {
   "chat.start": "chat:start",
   "agents.list": "agents:list",
   "agents.create": "agents:create",
+  "approvals.list": "approvals:list",
   "account.status": "account:status",
 };
 
@@ -22,6 +23,7 @@ export async function renderTelegramMainMenu(input: {
   });
   const groups = [
     { title: "العمل الذكي", ids: ["chat.start", "agents.list", "agents.create"] },
+    { title: "التشغيل", ids: ["approvals.list"] },
     { title: "الحساب", ids: ["account.status"] },
   ];
   const rows: TelegramInlineButton[][] = [];
