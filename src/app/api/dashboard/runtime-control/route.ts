@@ -16,6 +16,7 @@ import {
   saveRuntimeControl,
   testCurrentRuntimeFeature,
 } from "@/lib/platform/runtime-control";
+import { assertRunnerConnection, testCurrentAuthenticatedRunner } from "@/lib/platform/runner-auth-health";
 import {
   initializeWhatsAppFromEnvironment,
   inspectWhatsAppEnvironment,
@@ -60,6 +61,9 @@ export async function PUT(request: Request) {
         "إعدادات WhatsApp تُدار تلقائيًا من Environment Variables في Railway ولا يمكن استبدالها من الواجهة.",
       );
     }
+    if ((body.feature === "sandbox" || body.feature === "browser") && body.enabled && body.runnerUrl && body.sharedSecret) {
+      await assertRunnerConnection({ feature: body.feature, runnerUrl: body.runnerUrl, sharedSecret: body.sharedSecret });
+    }
     const snapshot = await saveRuntimeControl(body, session.userId);
     await db().insert(auditLogs).values({
       organizationId: session.organizationId,
@@ -102,7 +106,9 @@ export async function POST(request: Request) {
       };
       return apiSuccess(result, requestId, result.status === "healthy" ? 200 : 503);
     }
-    const result = await testCurrentRuntimeFeature(body.feature);
+    const result = body.feature === "sandbox" || body.feature === "browser"
+      ? await testCurrentAuthenticatedRunner(body.feature)
+      : await testCurrentRuntimeFeature(body.feature);
     return apiSuccess(result, requestId, result.status === "healthy" ? 200 : 503);
   } catch (error) {
     return handleApiError(error, requestId, "/api/dashboard/runtime-control");
