@@ -57,17 +57,20 @@ export function requiredChannelFeatures(input: {
     || action === "cc.approvals"
     || action === "cc.repos"
     || action.startsWith("cc.repo:")
+    || action === "cc.connections"
+    || action.startsWith("cc.connection:")
+    || action === "cc.mcp"
+    || action.startsWith("cc.mcp:")
     || action === "cc.browser"
     || action === "cc.sandbox"
     || [
-      "/approvals", "/github", "/repos", "/repositories", "/browser", "/sandbox",
-      "الموافقات", "github", "جيت هب", "المستودعات", "مستودعات", "المتصفح", "ساندبوكس", "sandbox",
+      "/approvals", "/github", "/repos", "/repositories", "/connections", "/sites", "/mcp", "/browser", "/sandbox",
+      "الموافقات", "github", "جيت هب", "المستودعات", "مستودعات", "الاتصالات", "اتصالات المواقع", "الحسابات المتصلة",
+      "mcp", "أدوات mcp", "خوادم mcp", "المتصفح", "ساندبوكس", "sandbox",
     ].includes(normalized);
   if (administrativeOperations) add("admin_commands", "التكاملات وأوامر التشغيل الإدارية");
 
-  const opensFiles = action === "cc.files"
-    || normalized === "/files"
-    || normalized === "الملفات";
+  const opensFiles = action === "cc.files" || normalized === "/files" || normalized === "الملفات";
   if (opensFiles) add("files", "الملفات");
 
   const startsChat = action === "cc.chat"
@@ -84,9 +87,10 @@ export function requiredChannelFeatures(input: {
   const knownNavigation = action.startsWith("cc.")
     || [
       "/start", "/help", "/status", "/agents", "/new", "/files", "/cancel", "/unlink",
-      "/teams", "/runs", "/approvals", "/github", "/repos", "/repositories", "/browser", "/sandbox",
+      "/teams", "/runs", "/approvals", "/github", "/repos", "/repositories", "/connections", "/sites", "/mcp", "/browser", "/sandbox",
       "القائمة", "الرئيسية", "الحالة", "الوكلاء", "الملفات", "إلغاء", "الغاء",
-      "الفرق", "فرق الوكلاء", "التشغيلات", "عمليات التشغيل", "الموافقات", "github", "جيت هب", "المستودعات", "مستودعات", "المتصفح", "ساندبوكس", "sandbox",
+      "الفرق", "فرق الوكلاء", "التشغيلات", "عمليات التشغيل", "الموافقات", "github", "جيت هب", "المستودعات", "مستودعات",
+      "الاتصالات", "اتصالات المواقع", "الحسابات المتصلة", "mcp", "أدوات mcp", "خوادم mcp", "المتصفح", "ساندبوكس", "sandbox",
     ].includes(normalized);
   const ordinaryMessage = !knownNavigation
     && input.session.activeFlow !== "agent.create"
