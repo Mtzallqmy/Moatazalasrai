@@ -4,6 +4,10 @@ import { mcpServers, mcpTools } from "@/db/schema";
 import { assertUserPermission } from "@/lib/auth/user-authorization";
 import { ApiError } from "@/lib/http/api";
 
+type UnavailableMcpCatalogItem = {
+  enabled: boolean;
+};
+
 export async function listOrganizationMcpCatalog(input: {
   organizationId: string;
   userId: string;
@@ -42,13 +46,14 @@ export async function listOrganizationMcpCatalog(input: {
 
   return servers.map((server) => ({
     ...server,
-    tools: tools.filter((item) => item.serverId === server.id),
-    // The current persisted MCP schema exposes synchronized tools only.
-    // Keep these collections explicit and empty until dedicated persisted
-    // resource/prompt/template tables are introduced and migrated.
-    resources: [] as Array<never>,
-    resourceTemplates: [] as Array<never>,
-    prompts: [] as Array<never>,
+    tools: tools
+      .filter((item) => item.serverId === server.id)
+      .map((tool) => ({ ...tool, approvalMode: "حسب ربط الوكيل" })),
+    // Resources, resource templates and prompts are not persisted by the
+    // current schema, so the channel must not invent synchronized entries.
+    resources: [] as UnavailableMcpCatalogItem[],
+    resourceTemplates: [] as UnavailableMcpCatalogItem[],
+    prompts: [] as UnavailableMcpCatalogItem[],
   }));
 }
 
