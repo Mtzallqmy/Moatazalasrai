@@ -15,6 +15,8 @@ export type TelegramCapabilityId =
   | "approvals.list"
   | "files.receive"
   | "repositories.list"
+  | "site_connections.list"
+  | "mcp.list"
   | "browser.list"
   | "sandbox.list"
   | "account.status";
@@ -32,6 +34,8 @@ export const TELEGRAM_CAPABILITIES: readonly TelegramCapability[] = CHANNEL_CAPA
     "approvals.list",
     "files.receive",
     "repositories.list",
+    "site_connections.list",
+    "mcp.list",
     "browser.list",
     "sandbox.list",
     "account.status",
