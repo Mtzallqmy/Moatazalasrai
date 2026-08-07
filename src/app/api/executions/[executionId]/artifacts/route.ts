@@ -30,11 +30,11 @@ export async function GET(request: Request, context: { params: Promise<{ executi
       });
       if (result.url) return Response.redirect(result.url, 302);
       if (!result.body) throw new ApiError(404, "EXECUTION_ARTIFACT_NOT_FOUND", "Artifact غير موجود.");
-      return new Response(result.body, {
+      return new Response(result.body.body, {
         status: 200,
         headers: {
           "content-type": result.artifact.mediaType,
-          "content-length": String(result.body.byteLength),
+          "content-length": String(result.body.sizeBytes),
           "content-disposition": contentDisposition(result.artifact.filename),
           "cache-control": "private, no-store",
           "x-content-type-options": "nosniff",
