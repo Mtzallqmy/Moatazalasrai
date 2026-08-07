@@ -14,9 +14,22 @@ RUN apt-get update \
     coreutils \
     git \
     python3 \
+    python3-pip \
     python3-venv \
     util-linux \
-  && rm -rf /var/lib/apt/lists/* \
+  && python3 -m venv /opt/moataz-data \
+  && /opt/moataz-data/bin/pip install --no-cache-dir \
+    numpy==2.3.2 \
+    pandas==2.3.1 \
+    duckdb==1.3.2 \
+    pyarrow==21.0.0 \
+    openpyxl==3.1.5 \
+    matplotlib==3.10.5 \
+    pillow==11.3.0 \
+    scipy==1.16.1 \
+    jupyter-core==5.8.1 \
+  && /opt/moataz-data/bin/python -c "import pandas,numpy,duckdb,pyarrow,openpyxl,matplotlib,PIL,scipy,jupyter_core" \
+  && rm -rf /root/.cache /var/lib/apt/lists/* \
   && groupadd --system --gid 10001 sandbox \
   && useradd --system --uid 10001 --gid sandbox --home-dir /home/sandbox --create-home sandbox \
   && mkdir -p /app /data/workspaces \
