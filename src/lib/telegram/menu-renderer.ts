@@ -6,6 +6,8 @@ const ACTIONS: Record<string, string> = {
   "chat.start": "chat:start",
   "agents.list": "agents:list",
   "agents.create": "agents:create",
+  "teams.list": "teams:page:1",
+  "runs.list": "runs:page:1",
   "approvals.list": "approvals:list",
   "account.status": "account:status",
 };
@@ -22,7 +24,7 @@ export async function renderTelegramMainMenu(input: {
     organizationId: input.organizationId,
   });
   const groups = [
-    { title: "العمل الذكي", ids: ["chat.start", "agents.list", "agents.create"] },
+    { title: "العمل الذكي", ids: ["chat.start", "agents.list", "agents.create", "teams.list", "runs.list"] },
     { title: "التشغيل", ids: ["approvals.list"] },
     { title: "الحساب", ids: ["account.status"] },
   ];
@@ -39,9 +41,7 @@ export async function renderTelegramMainMenu(input: {
       })));
     }
   }
-  if (!rows.length) {
-    rows.push([{ id: "account:status", title: "حالة الحساب" }]);
-  }
+  if (!rows.length) rows.push([{ id: "account:status", title: "حالة الحساب" }]);
   await sendTelegramMenu({
     token: input.token,
     chatId: input.chatId,
