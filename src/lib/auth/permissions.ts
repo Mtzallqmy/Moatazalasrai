@@ -21,6 +21,7 @@ export const ALL_PERMISSIONS = [
   "site_connections:read", "site_connections:manage", "site_connections:use", "site_connections:approve",
   "browser_tasks:read", "browser_tasks:run", "browser_tasks:manage", "browser_tasks:approve",
   "sandbox:read", "sandbox:use", "sandbox:manage", "sandbox:approve",
+  "tools:read", "tools:run", "tools:manage", "tools:approve",
 ] as const;
 
 export type Permission = typeof ALL_PERMISSIONS[number];
@@ -38,6 +39,7 @@ const permissions: Record<Role, ReadonlySet<Permission>> = {
     "site_connections:read", "site_connections:manage", "site_connections:use",
     "browser_tasks:read", "browser_tasks:run",
     "sandbox:read", "sandbox:use", "sandbox:manage",
+    "tools:read", "tools:run", "tools:manage",
   ]),
   operator: new Set([
     "providers:read", "agents:read", "agents:run", "runs:read", "integrations:read",
@@ -47,17 +49,18 @@ const permissions: Record<Role, ReadonlySet<Permission>> = {
     "site_connections:read", "site_connections:use", "site_connections:approve",
     "browser_tasks:read", "browser_tasks:run", "browser_tasks:approve",
     "sandbox:read", "sandbox:use", "sandbox:approve",
+    "tools:read", "tools:run", "tools:approve",
   ]),
   viewer: new Set([
     "providers:read", "agents:read", "runs:read", "integrations:read", "channels:read",
     "notifications:read", "platform:read", "analytics:read", "content:read", "services:read", "menus:read",
-    "files:read", "site_connections:read", "browser_tasks:read", "sandbox:read",
+    "files:read", "site_connections:read", "browser_tasks:read", "sandbox:read", "tools:read",
   ]),
   member: new Set([
     "agents:read", "agents:run", "channels:read", "channels:use", "notifications:read",
     "content:read", "services:read", "menus:read", "files:read", "files:upload",
     "site_connections:read", "site_connections:use", "browser_tasks:read", "browser_tasks:run",
-    "sandbox:read", "sandbox:use", "security:read",
+    "sandbox:read", "sandbox:use", "security:read", "tools:read", "tools:run",
   ]),
 };
 
