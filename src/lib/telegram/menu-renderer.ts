@@ -9,6 +9,8 @@ const ACTIONS: Record<string, string> = {
   "teams.list": "teams:page:1",
   "runs.list": "runs:page:1",
   "approvals.list": "approvals:list",
+  "browser.list": "browser:list",
+  "sandbox.list": "sandbox:list",
   "account.status": "account:status",
 };
 
@@ -25,7 +27,7 @@ export async function renderTelegramMainMenu(input: {
   });
   const groups = [
     { title: "العمل الذكي", ids: ["chat.start", "agents.list", "agents.create", "teams.list", "runs.list"] },
-    { title: "التشغيل", ids: ["approvals.list"] },
+    { title: "التشغيل", ids: ["approvals.list", "browser.list", "sandbox.list"] },
     { title: "الحساب", ids: ["account.status"] },
   ];
   const rows: TelegramInlineButton[][] = [];
