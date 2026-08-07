@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "test:integration": "vitest run tests/integration",
+    "execution:kernel:check": "node scripts/check-execution-kernel-readiness.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node scripts/migrate.mjs",
     "worker:migrate": "node scripts/migrate-worker.mjs",
