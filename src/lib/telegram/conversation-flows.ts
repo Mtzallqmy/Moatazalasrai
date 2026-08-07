@@ -8,6 +8,7 @@ import { sendTelegramChatAction } from "@/lib/integrations/telegram";
 import { assertTelegramCapability } from "./capability-registry";
 import { listTelegramAgents } from "./agent-flows";
 import { sendTelegramError, sendTelegramMenu, sendTelegramText } from "./message-renderer";
+import { listTelegramBrowserTasks, listTelegramSandboxRuntime } from "./runtime-flows";
 import { getTelegramSession, setTelegramConversation } from "./session-service";
 
 type ConversationContext = {
@@ -80,6 +81,14 @@ export async function createAndSelectConversation(input: ConversationContext, ag
 }
 
 export async function handleTelegramConversationCallback(input: ConversationContext & { action: string }) {
+  if (input.action === "browser:list") {
+    await listTelegramBrowserTasks(input);
+    return true;
+  }
+  if (input.action === "sandbox:list") {
+    await listTelegramSandboxRuntime(input);
+    return true;
+  }
   if (input.action === "chat:continue") {
     const { agent } = await selectedPublishedAgent(input);
     if (!agent) {
@@ -158,8 +167,8 @@ export async function sendTelegramConversationMessage(input: ConversationContext
       await sendTelegramMenu({
         token: input.token,
         chatId: input.chatId,
-        title: "توقف التشغيل لأن أداة تحتاج إلى موافقة حقيقية. افتح صفحة الموافقات لمراجعة الطلب.",
-        buttonRows: [[{ url: "https://moatazalalqami.online/dashboard/approvals", title: "فتح الموافقات" }], [{ id: "nav:home", title: "الرئيسية" }]],
+        title: "توقف التشغيل لأن أداة تحتاج إلى موافقة حقيقية. افتح قسم الموافقات لمراجعة الطلب.",
+        buttonRows: [[{ id: "approvals:list", title: "فتح الموافقات" }], [{ id: "nav:home", title: "الرئيسية" }]],
       });
       return;
     }
