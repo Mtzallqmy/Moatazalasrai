@@ -12,7 +12,7 @@ import {
   showTelegramAgent,
   startCreateAgentFlow,
 } from "./agent-flows";
-import { createAndSelectConversation, handleTelegramConversationCallback, sendTelegramConversationMessage, startTelegramConversation } from "./conversation-flows";
+import { handleTelegramConversationCallback, sendTelegramConversationMessage, startTelegramConversation } from "./conversation-flows";
 import { presentTelegramError } from "./error-presenter";
 import { renderTelegramMainMenu } from "./menu-renderer";
 import { sendTelegramError, sendTelegramMenu, sendTelegramText } from "./message-renderer";
