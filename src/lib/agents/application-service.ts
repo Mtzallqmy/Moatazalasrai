@@ -1,7 +1,14 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
-import { agentVersions, agents, auditLogs, providerCredentials } from "@/db/schema";
+import {
+  agentVersions,
+  agents,
+  auditLogs,
+  providerCredentials,
+} from "@/db/schema";
+import { assertUserPermission } from "@/lib/auth/user-authorization";
 import { ApiError } from "@/lib/http/api";
+import { agentCreateSchema } from "@/lib/http/contracts";
 
 export type AgentCreateInput = {
   name: string;
@@ -20,72 +27,273 @@ export type AgentActor = {
   requestId?: string;
 };
 
+export type AgentReadinessCode =
+  | "ready"
+  | "draft"
+  | "archived"
+  | "provider_missing"
+  | "provider_disabled"
+  | "provider_unverified"
+  | "model_unavailable";
+
+export type ChannelAgentSummary = {
+  id: string;
+  name: string;
+  description: string | null;
+  status: "draft" | "published" | "archived";
+  providerCredentialId: string;
+  providerName: string | null;
+  model: string;
+  updatedAt: Date;
+  readiness: AgentReadinessCode;
+};
+
+function providerModels(row: {
+  defaultModel: string | null;
+  allowedModels: string[];
+  discoveredModels: string[];
+}) {
+  return new Set([
+    ...(row.defaultModel ? [row.defaultModel] : []),
+    ...row.allowedModels,
+    ...row.discoveredModels,
+  ].map((value) => value.trim()).filter(Boolean));
+}
+
+function readiness(row: {
+  status: "draft" | "published" | "archived";
+  providerCredentialId: string | null;
+  providerEnabled: boolean | null;
+  validationStatus: "pending" | "verified" | "failed" | null;
+  deletedAt: Date | null;
+  defaultModel: string | null;
+  allowedModels: string[] | null;
+  discoveredModels: string[] | null;
+  model: string;
+}): AgentReadinessCode {
+  if (row.status === "draft") return "draft";
+  if (row.status === "archived") return "archived";
+  if (!row.providerCredentialId || row.deletedAt) return "provider_missing";
+  if (!row.providerEnabled) return "provider_disabled";
+  if (row.validationStatus !== "verified") return "provider_unverified";
+  const models = providerModels({
+    defaultModel: row.defaultModel,
+    allowedModels: row.allowedModels ?? [],
+    discoveredModels: row.discoveredModels ?? [],
+  });
+  return models.has(row.model) ? "ready" : "model_unavailable";
+}
+
+async function agentRows(organizationId: string) {
+  return db().select({
+    id: agents.id,
+    name: agents.name,
+    description: agents.description,
+    status: agents.status,
+    updatedAt: agents.updatedAt,
+    providerCredentialId: agentVersions.providerCredentialId,
+    model: agentVersions.model,
+    providerName: providerCredentials.name,
+    providerEnabled: providerCredentials.enabled,
+    validationStatus: providerCredentials.validationStatus,
+    deletedAt: providerCredentials.deletedAt,
+    defaultModel: providerCredentials.defaultModel,
+    allowedModels: providerCredentials.allowedModels,
+    discoveredModels: providerCredentials.discoveredModels,
+  }).from(agents)
+    .innerJoin(agentVersions, and(
+      eq(agentVersions.agentId, agents.id),
+      eq(agentVersions.version, agents.currentVersion),
+    ))
+    .leftJoin(providerCredentials, and(
+      eq(providerCredentials.id, agentVersions.providerCredentialId),
+      eq(providerCredentials.organizationId, organizationId),
+    ))
+    .where(eq(agents.organizationId, organizationId))
+    .orderBy(desc(agents.updatedAt));
+}
+
+export async function listAccessibleChannelAgents(input: {
+  organizationId: string;
+  userId: string;
+  includeUnavailable?: boolean;
+}) {
+  const role = await assertUserPermission({ ...input, permission: "agents:read" });
+  const rows = await agentRows(input.organizationId);
+  return rows
+    .filter((row) => role !== "member" || row.status === "published")
+    .map((row): ChannelAgentSummary => ({
+      id: row.id,
+      name: row.name,
+      description: row.description,
+      status: row.status,
+      providerCredentialId: row.providerCredentialId,
+      providerName: row.providerName,
+      model: row.model,
+      updatedAt: row.updatedAt,
+      readiness: readiness(row),
+    }))
+    .filter((row) => input.includeUnavailable || row.readiness === "ready");
+}
+
+export async function getUsableChannelAgent(input: {
+  organizationId: string;
+  userId: string;
+  agentId: string;
+}) {
+  const agentsForUser = await listAccessibleChannelAgents({
+    organizationId: input.organizationId,
+    userId: input.userId,
+    includeUnavailable: true,
+  });
+  const agent = agentsForUser.find((item) => item.id === input.agentId);
+  if (!agent) throw new ApiError(404, "AGENT_NOT_FOUND", "الوكيل غير موجود أو غير متاح لهذا المستخدم.");
+  if (agent.readiness !== "ready") {
+    const messages: Record<AgentReadinessCode, string> = {
+      ready: "",
+      draft: "الوكيل ما زال مسودة ولا يمكن تشغيله.",
+      archived: "الوكيل مؤرشف ولا يمكن تشغيله.",
+      provider_missing: "مزود الوكيل غير موجود.",
+      provider_disabled: "مزود الوكيل معطل.",
+      provider_unverified: "مزود الوكيل غير متحقق.",
+      model_unavailable: "نموذج الوكيل غير متاح لدى المزود.",
+    };
+    throw new ApiError(422, `AGENT_${agent.readiness.toUpperCase()}`, messages[agent.readiness]);
+  }
+  return agent;
+}
+
+export type VerifiedProviderOption = {
+  id: string;
+  name: string;
+  providerTypeId: string;
+  models: string[];
+  defaultModel: string | null;
+};
+
+export async function listVerifiedProviderOptions(input: {
+  organizationId: string;
+  userId: string;
+}) {
+  await assertUserPermission({ ...input, permission: "providers:read" });
+  const rows = await db().select({
+    id: providerCredentials.id,
+    name: providerCredentials.name,
+    providerTypeId: providerCredentials.providerTypeId,
+    defaultModel: providerCredentials.defaultModel,
+    allowedModels: providerCredentials.allowedModels,
+    discoveredModels: providerCredentials.discoveredModels,
+  }).from(providerCredentials).where(and(
+    eq(providerCredentials.organizationId, input.organizationId),
+    eq(providerCredentials.enabled, true),
+    eq(providerCredentials.validationStatus, "verified"),
+    isNull(providerCredentials.deletedAt),
+  )).orderBy(desc(providerCredentials.isDefault), desc(providerCredentials.updatedAt));
+  return rows.map((row): VerifiedProviderOption => ({
+    id: row.id,
+    name: row.name,
+    providerTypeId: row.providerTypeId,
+    defaultModel: row.defaultModel,
+    models: [...providerModels(row)],
+  })).filter((row) => row.models.length > 0);
+}
+
 export async function listVerifiedProviderModels(organizationId: string) {
-  const credentials = await db().select({
+  const rows = await db().select({
     id: providerCredentials.id,
     name: providerCredentials.name,
     provider: providerCredentials.provider,
-    models: providerCredentials.discoveredModels,
     defaultModel: providerCredentials.defaultModel,
+    allowedModels: providerCredentials.allowedModels,
+    discoveredModels: providerCredentials.discoveredModels,
   }).from(providerCredentials).where(and(
     eq(providerCredentials.organizationId, organizationId),
     eq(providerCredentials.enabled, true),
     eq(providerCredentials.validationStatus, "verified"),
-  )).orderBy(desc(providerCredentials.updatedAt));
-  return credentials.map((credential) => ({
-    ...credential,
-    models: [...new Set([credential.defaultModel, ...credential.models].filter((value): value is string => Boolean(value)))],
-  })).filter((credential) => credential.models.length > 0);
+    isNull(providerCredentials.deletedAt),
+  )).orderBy(desc(providerCredentials.isDefault), desc(providerCredentials.updatedAt));
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    provider: row.provider,
+    defaultModel: row.defaultModel,
+    models: [...providerModels(row)],
+  })).filter((row) => row.models.length > 0);
 }
 
 export async function assertVerifiedAgentModel(organizationId: string, credentialId: string, model: string) {
   const [credential] = await db().select({
     id: providerCredentials.id,
-    models: providerCredentials.discoveredModels,
     defaultModel: providerCredentials.defaultModel,
+    allowedModels: providerCredentials.allowedModels,
+    discoveredModels: providerCredentials.discoveredModels,
   }).from(providerCredentials).where(and(
     eq(providerCredentials.id, credentialId),
     eq(providerCredentials.organizationId, organizationId),
     eq(providerCredentials.enabled, true),
     eq(providerCredentials.validationStatus, "verified"),
+    isNull(providerCredentials.deletedAt),
   )).limit(1);
-  const models = credential ? new Set([credential.defaultModel, ...credential.models].filter(Boolean)) : new Set<string>();
-  if (!credential || !models.has(model)) {
+  if (!credential || !providerModels(credential).has(model)) {
     throw new ApiError(422, "MODEL_UNAVAILABLE", "المزود غير متاح أو النموذج لم يعد ضمن النماذج المكتشفة.");
   }
   return credential;
 }
 
-export async function createAgent(actor: AgentActor, input: AgentCreateInput) {
-  await assertVerifiedAgentModel(actor.organizationId, input.providerCredentialId, input.model);
+export async function createAgentApplication(input: {
+  organizationId: string;
+  userId: string;
+  data: unknown;
+  requestId?: string;
+  source?: "dashboard" | "telegram" | "whatsapp" | "api";
+}) {
+  await assertUserPermission({ ...input, permission: "agents:manage" });
+  const body = agentCreateSchema.parse(input.data);
+  await assertVerifiedAgentModel(input.organizationId, body.providerCredentialId, body.model);
+
   return db().transaction(async (tx) => {
     const [agent] = await tx.insert(agents).values({
-      organizationId: actor.organizationId,
-      name: input.name,
-      description: input.description?.trim() || null,
-      status: input.publish ? "published" : "draft",
+      organizationId: input.organizationId,
+      name: body.name,
+      description: body.description || null,
+      status: body.publish ? "published" : "draft",
       currentVersion: 1,
     }).returning();
     if (!agent) throw new Error("AGENT_CREATE_FAILED");
     const [version] = await tx.insert(agentVersions).values({
       agentId: agent.id,
       version: 1,
-      providerCredentialId: input.providerCredentialId,
-      model: input.model,
-      instructions: input.instructions,
-      temperatureMilli: Math.round(input.temperature * 1000),
-      maxOutputTokens: input.maxOutputTokens,
+      providerCredentialId: body.providerCredentialId,
+      model: body.model,
+      instructions: body.instructions,
+      temperatureMilli: Math.round(body.temperature * 1000),
+      maxOutputTokens: body.maxOutputTokens,
     }).returning();
     if (!version) throw new Error("AGENT_VERSION_CREATE_FAILED");
     await tx.insert(auditLogs).values({
-      organizationId: actor.organizationId,
+      organizationId: input.organizationId,
       actorType: "user",
-      actorId: actor.userId,
-      action: input.publish ? "agent.created_and_published" : "agent.created",
+      actorId: input.userId,
+      action: body.publish ? "agent.created_and_published" : "agent.created",
       resourceType: "agent",
       resourceId: agent.id,
-      metadata: { version: 1, model: input.model, requestId: actor.requestId ?? null, source: "application-service" },
+      metadata: {
+        source: input.source ?? "api",
+        version: 1,
+        model: body.model,
+        requestId: input.requestId ?? null,
+      },
     });
     return { agent, version };
+  });
+}
+
+export function createAgent(actor: AgentActor, input: AgentCreateInput) {
+  return createAgentApplication({
+    organizationId: actor.organizationId,
+    userId: actor.userId,
+    data: input,
+    requestId: actor.requestId,
+    source: "telegram",
   });
 }
