@@ -116,7 +116,7 @@ export async function processChannelIntegrations(input: ChannelClientRuntimeInpu
         await sendChannelClientView(input.transport, channelEmptyState({
           title: "GitHub غير متصل",
           reason: "لا يوجد تكامل GitHub مفعّل ومتحقق لهذه المؤسسة. لا تُدخل أي Token داخل القناة؛ اربطه من لوحة الموقع.",
-          action: { url: "/dashboard/integrations", title: "فتح التكاملات" },
+          action: { id: "open-integrations", url: "/dashboard/integrations", title: "فتح التكاملات" },
           path: ["الرئيسية", "GitHub والمستودعات"],
         }));
         return { handled: true, session: input.session };
@@ -147,7 +147,7 @@ export async function processChannelIntegrations(input: ChannelClientRuntimeInpu
     ].join("\n"),
     actions: [[
       { id: "cc.repos", title: "رجوع" },
-      { url: "/dashboard/repositories", title: "فتح في الموقع" },
+      { id: "open-repositories", url: "/dashboard/repositories", title: "فتح في الموقع" },
     ]],
     editCurrent: Boolean(input.actionId),
   });
