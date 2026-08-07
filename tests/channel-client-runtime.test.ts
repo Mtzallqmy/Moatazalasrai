@@ -51,37 +51,29 @@ describe("shared channel client runtime", () => {
     });
   });
 
-  it("requires agent features for real team runs and admin features for approvals and runtimes", () => {
-    const team = requiredChannelFeatures({
-      channel: "whatsapp",
-      session: { activeFlow: "team.run" } as never,
-      incoming: { attachments: [] } as never,
-      actionId: "cc.teamrun.confirm",
-      text: "",
-    });
-    expect(team).toContainEqual({
-      key: "whatsapp.agents",
-      labelAr: "فرق الوكلاء وعمليات التشغيل",
-    });
-
-    const approval = requiredChannelFeatures({
-      channel: "whatsapp",
-      session: { activeFlow: null } as never,
-      incoming: { attachments: [] } as never,
-      actionId: "cc.approvals",
-      text: "",
-    });
-    expect(approval).toContainEqual({
-      key: "whatsapp.admin_commands",
-      labelAr: "أوامر التشغيل الإدارية",
-    });
+  it("requires admin channel features for approvals runtimes and GitHub", () => {
+    for (const actionId of ["cc.approvals", "cc.browser", "cc.sandbox", "cc.repos", "cc.repo:123"]) {
+      const requirements = requiredChannelFeatures({
+        channel: "whatsapp",
+        session: { activeFlow: null } as never,
+        incoming: { attachments: [] } as never,
+        actionId,
+        text: "",
+      });
+      expect(requirements).toContainEqual({
+        key: "whatsapp.admin_commands",
+        labelAr: "التكاملات وأوامر التشغيل الإدارية",
+      });
+    }
   });
 
   it("contains only capabilities backed by implemented shared handlers", async () => {
     const registry = await readFile("src/lib/channel-client/capability-registry.ts", "utf8");
     const runtime = await readFile("src/lib/channel-client/runtime.ts", "utf8");
     const operations = await readFile("src/lib/channel-client/operations-runtime.ts", "utf8");
+    const integrationsRuntime = await readFile("src/lib/channel-client/integration-runtime.ts", "utf8");
     const services = await readFile("src/lib/channel-client/operations-service.ts", "utf8");
+    const githubService = await readFile("src/lib/repositories/github-application-service.ts", "utf8");
     for (const capability of [
       "chat.start",
       "agents.list",
@@ -91,12 +83,12 @@ describe("shared channel client runtime", () => {
       "runs.list",
       "approvals.list",
       "files.receive",
+      "repositories.list",
       "browser.list",
       "sandbox.list",
     ]) {
       expect(registry).toContain(`id: "${capability}"`);
     }
-    expect(registry).not.toContain('id: "repositories.list"');
     expect(runtime).toContain("listAccessibleChannelAgents");
     expect(runtime).toContain("listVerifiedProviderOptions");
     expect(runtime).toContain("createAgentApplication");
@@ -105,10 +97,51 @@ describe("shared channel client runtime", () => {
     expect(operations).toContain("decideChannelApproval");
     expect(operations).toContain("channelBrowserDiagnostics");
     expect(operations).toContain("channelSandboxDiagnostics");
-    expect(services).toContain("createAgentTeamRun");
-    expect(services).toContain("listPendingToolApprovals");
-    expect(services).toContain("listBrowserTasks");
-    expect(services).toContain("listSandboxExecutions");
+    expect(integrationsRuntime).toContain("listOrganizationGitHubRepositories");
+    expect(integrationsRuntime).toContain("findOrganizationGitHubRepository");
+    expect(githubService).toContain("decryptSecret");
+    expect(githubService).toContain('permission: "integrations:read"');
+    expect(services).toContain("testCurrentAuthenticatedRunner");
+  });
+
+  it("routes every visible Telegram runtime and integration button to a real handler", async () => {
+    const menu = await readFile("src/lib/telegram/menu-renderer.ts", "utf8");
+    const processor = await readFile("src/lib/telegram/update-processor.ts", "utf8");
+    const runtime = await readFile("src/lib/telegram/runtime-flows.ts", "utf8");
+    const repositories = await readFile("src/lib/telegram/repository-flows.ts", "utf8");
+    for (const [capability, action] of [
+      ["files.receive", "files:help"],
+      ["repositories.list", "repositories:list"],
+      ["browser.list", "browser:list"],
+      ["sandbox.list", "sandbox:list"],
+    ]) {
+      expect(menu).toContain(`"${capability}": "${action}"`);
+      expect(processor).toContain(`input.action === "${action}"`);
+    }
+    expect(processor).toContain("showTelegramRepository");
+    expect(processor).toContain('new ApiError(403, "TELEGRAM_FILES_CAPABILITY_DENIED"');
+    expect(runtime).toContain("channelBrowserDiagnostics");
+    expect(runtime).toContain("channelSandboxDiagnostics");
+    expect(repositories).toContain("listOrganizationGitHubRepositories");
+    expect(repositories).toContain("findOrganizationGitHubRepository");
+    expect(repositories).toContain("telegramPlatformConfig");
+    expect(repositories).not.toContain("https://moatazalalqami.online");
+  });
+
+  it("uses one capability registry for Telegram and WhatsApp", async () => {
+    const telegramRegistry = await readFile("src/lib/telegram/capability-registry.ts", "utf8");
+    expect(telegramRegistry).toContain("CHANNEL_CAPABILITY_REGISTRY");
+    expect(telegramRegistry).toContain("resolveChannelCapabilities");
+    expect(telegramRegistry).not.toContain("platformModules");
+    expect(telegramRegistry).not.toContain("loadCustomPermissions");
+  });
+
+  it("makes the dashboard repository API use the same application service as channels", async () => {
+    const route = await readFile("src/app/api/dashboard/repositories/route.ts", "utf8");
+    expect(route).toContain("listOrganizationGitHubRepositories");
+    expect(route).toContain("readOrganizationGitHubContents");
+    expect(route).not.toContain("decryptSecret");
+    expect(route).not.toContain("listGitHubRepositories");
   });
 
   it("persists agent selection and never mutates the shared channel connection", async () => {
@@ -127,12 +160,11 @@ describe("shared channel client runtime", () => {
     expect(whatsapp).not.toContain("routeIncomingChannelMessage");
   });
 
-  it("routes WhatsApp operational commands through the shared real runtime", async () => {
+  it("routes WhatsApp integrations and operations through real shared runtimes", async () => {
     const processor = await readFile("src/lib/whatsapp/update-processor.ts", "utf8");
+    expect(processor).toContain("processChannelIntegrations");
     expect(processor).toContain("processChannelOperations");
-    expect(processor).toContain('actionId: "cc.home"');
-    expect(processor).toContain('"runs.manage"');
-    expect(processor).toContain('"approvals.manage"');
+    expect(processor).toContain('"integrations.read"');
     expect(processor).toContain('"browser.read"');
     expect(processor).toContain('"sandbox.read"');
   });

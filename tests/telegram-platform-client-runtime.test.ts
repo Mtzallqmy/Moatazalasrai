@@ -36,29 +36,38 @@ describe("Telegram platform client runtime", () => {
     expect(conversationFlow).toContain("createConversationForAgent(");
   });
 
-  it("hides unsupported capabilities and builds menus from the registry", async () => {
-    const registry = await readFile("src/lib/telegram/capability-registry.ts", "utf8");
+  it("builds Telegram menus from the shared fail-closed capability registry", async () => {
+    const telegramRegistry = await readFile("src/lib/telegram/capability-registry.ts", "utf8");
+    const sharedRegistry = await readFile("src/lib/channel-client/capability-registry.ts", "utf8");
     const menu = await readFile("src/lib/telegram/menu-renderer.ts", "utf8");
-    expect(registry).toContain("requiredPermission");
-    expect(registry).toContain("telegramFeatureKey");
-    expect(registry).toContain("requiredPlatformModule");
-    expect(registry).toContain("requiredRuntime");
+    expect(telegramRegistry).toContain("CHANNEL_CAPABILITY_REGISTRY");
+    expect(telegramRegistry).toContain("resolveChannelCapabilities");
+    expect(sharedRegistry).toContain("requiredPermission");
+    expect(sharedRegistry).toContain("telegramFeatureKey");
+    expect(sharedRegistry).toContain("requiredPlatformModule");
+    expect(sharedRegistry).toContain("requiredRuntime");
     expect(menu).toContain("resolveTelegramCapabilities");
-    expect(menu).not.toContain("GitHub والمستودعات");
+    expect(menu).toContain('"repositories.list": "repositories:list"');
+    expect(sharedRegistry).not.toContain('id: "memory.list"');
+    expect(sharedRegistry).not.toContain('id: "workflow.list"');
   });
 
-  it("uses real browser and sandbox services for runtime diagnostics", async () => {
+  it("uses shared real browser and sandbox services plus signed runner health", async () => {
     const flow = await readFile("src/lib/telegram/runtime-flows.ts", "utf8");
-    const registry = await readFile("src/lib/telegram/capability-registry.ts", "utf8");
-    const conversation = await readFile("src/lib/telegram/conversation-flows.ts", "utf8");
-    expect(flow).toContain("listBrowserTasks");
-    expect(flow).toContain("listSandboxWorkspaces");
-    expect(flow).toContain("listSandboxExecutions");
+    const services = await readFile("src/lib/channel-client/operations-service.ts", "utf8");
+    const registry = await readFile("src/lib/channel-client/capability-registry.ts", "utf8");
+    const processor = await readFile("src/lib/telegram/update-processor.ts", "utf8");
+    expect(flow).toContain("channelBrowserDiagnostics");
+    expect(flow).toContain("channelSandboxDiagnostics");
+    expect(services).toContain("listBrowserTasks");
+    expect(services).toContain("listSandboxWorkspaces");
+    expect(services).toContain("listSandboxExecutions");
+    expect(services).toContain("testCurrentAuthenticatedRunner");
     expect(flow).not.toContain("sandboxWorkspaces).where");
     expect(registry).toContain('requiredRuntime: "browser"');
     expect(registry).toContain('requiredRuntime: "sandbox"');
-    expect(conversation).toContain('input.action === "browser:list"');
-    expect(conversation).toContain('input.action === "sandbox:list"');
+    expect(processor).toContain('input.action === "browser:list"');
+    expect(processor).toContain('input.action === "sandbox:list"');
   });
 
   it("uses real team runtime services and queues team runs", async () => {
