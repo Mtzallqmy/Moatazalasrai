@@ -11,6 +11,8 @@ const ACTIONS: Record<string, string> = {
   "approvals.list": "approvals:list",
   "files.receive": "files:help",
   "repositories.list": "repositories:list",
+  "site_connections.list": "connections:list",
+  "mcp.list": "mcp:list",
   "browser.list": "browser:list",
   "sandbox.list": "sandbox:list",
   "account.status": "account:status",
@@ -30,7 +32,7 @@ export async function renderTelegramMainMenu(input: {
   const groups = [
     { title: "العمل الذكي", ids: ["chat.start", "agents.list", "agents.create", "teams.list", "runs.list"] },
     { title: "المحتوى والمعرفة", ids: ["files.receive"] },
-    { title: "القنوات والتكاملات", ids: ["repositories.list"] },
+    { title: "القنوات والتكاملات", ids: ["repositories.list", "site_connections.list", "mcp.list"] },
     { title: "التشغيل", ids: ["approvals.list", "browser.list", "sandbox.list"] },
     { title: "الحساب", ids: ["account.status"] },
   ];
