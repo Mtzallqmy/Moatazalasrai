@@ -154,7 +154,7 @@ export async function sendTelegramConversationMessage(input: ConversationContext
       conversationId: conversation.id,
       requestId: input.requestId,
     });
-    if (result.approvalId) {
+    if ("approvalId" in result && result.approvalId) {
       await sendTelegramMenu({
         token: input.token,
         chatId: input.chatId,
