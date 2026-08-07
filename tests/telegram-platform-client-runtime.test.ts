@@ -46,13 +46,30 @@ describe("Telegram platform client runtime", () => {
     expect(menu).not.toContain("مهام المتصفح");
   });
 
-  it("rejects empty Telegram messages and splits long output", async () => {
+  it("uses the real approval store and resume queues instead of static approval text", async () => {
+    const flow = await readFile("src/lib/telegram/approval-flows.ts", "utf8");
+    const processor = await readFile("src/lib/telegram/update-processor.ts", "utf8");
+    const setup = await readFile("scripts/setup-telegram-webhook.mjs", "utf8");
+    expect(flow).toContain("listPendingToolApprovals");
+    expect(flow).toContain("getToolApproval");
+    expect(flow).toContain("decideToolApproval");
+    expect(flow).toContain("enqueueAgentRunResume");
+    expect(flow).toContain("enqueueBrowserResume");
+    expect(flow).toContain("enqueueSandboxResume");
+    expect(processor).toContain('input.action === "approvals:list"');
+    expect(processor).toContain("approval:decide:");
+    expect(setup).toContain('{ command: "approvals"');
+  });
+
+  it("rejects empty Telegram messages, restores file downloads and splits long output", async () => {
     const renderer = await readFile("src/lib/telegram/message-renderer.ts", "utf8");
     const client = await readFile("src/lib/integrations/telegram.ts", "utf8");
     expect(renderer).toContain("splitText");
     expect(renderer).toContain("filter(Boolean)");
     expect(client).toContain("TELEGRAM_EMPTY_MESSAGE");
     expect(client).toContain("if (!text)");
+    expect(client).toContain("downloadTelegramFile");
+    expect(client).toContain("20 * 1024 * 1024");
   });
 
   it("does not cancel agent creation when a normal name is received", async () => {
