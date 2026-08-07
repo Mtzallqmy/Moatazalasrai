@@ -23,6 +23,12 @@ import { assertTelegramCapability } from "./capability-registry";
 import { handleTelegramConversationCallback, sendTelegramConversationMessage, startTelegramConversation } from "./conversation-flows";
 import { presentTelegramError } from "./error-presenter";
 import { handleTelegramMedia } from "./file-flows";
+import {
+  listTelegramMcp,
+  listTelegramSiteConnections,
+  showTelegramMcpServer,
+  showTelegramSiteConnection,
+} from "./integration-flows";
 import { renderTelegramMainMenu } from "./menu-renderer";
 import { sendTelegramError, sendTelegramMenu, sendTelegramText } from "./message-renderer";
 import { listTelegramRepositories, showTelegramRepository } from "./repository-flows";
@@ -178,10 +184,7 @@ async function handleCallback(input: {
     return;
   }
   if (input.action === "team:run:confirm") {
-    await confirmTelegramTeamRun({
-      ...base,
-      requestId: `telegram:team:${input.context.updateId}:${input.context.message.message_id ?? 0}`,
-    });
+    await confirmTelegramTeamRun({ ...base, requestId: `telegram:team:${input.context.updateId}:${input.context.message.message_id ?? 0}` });
     return;
   }
   const runsPage = /^runs:page:(\d+)$/.exec(input.action);
@@ -265,6 +268,24 @@ async function handleCallback(input: {
     await showTelegramRepository({ ...base, repositoryId: Number(repositoryView[1]) });
     return;
   }
+  if (input.action === "connections:list") {
+    await listTelegramSiteConnections(base);
+    return;
+  }
+  const connectionView = /^connection:view:([0-9a-f-]{36})$/i.exec(input.action);
+  if (connectionView) {
+    await showTelegramSiteConnection({ ...base, connectionId: connectionView[1] });
+    return;
+  }
+  if (input.action === "mcp:list") {
+    await listTelegramMcp(base);
+    return;
+  }
+  const mcpView = /^mcp:view:([0-9a-f-]{36})$/i.exec(input.action);
+  if (mcpView) {
+    await showTelegramMcpServer({ ...base, serverId: mcpView[1] });
+    return;
+  }
   if (input.action === "browser:list") {
     await listTelegramBrowserTasks(base);
     return;
@@ -292,21 +313,13 @@ async function handleCallback(input: {
     return;
   }
   if (input.action === "account:unlink:confirm") {
-    await unlinkTelegramAccount({
-      userId: input.account.userId,
-      organizationId: input.account.organizationId,
-      actorUserId: input.account.userId,
-    });
+    await unlinkTelegramAccount({ userId: input.account.userId, organizationId: input.account.organizationId, actorUserId: input.account.userId });
     await sendTelegramText({ token: input.token, chatId: input.context.chatId, text: "تم فصل حساب Telegram عن المنصة." });
     return;
   }
   if (input.action === "flow:cancel") {
     const cancelled = await cancelTelegramFlow(input.context.telegramUserId);
-    await sendTelegramText({
-      token: input.token,
-      chatId: input.context.chatId,
-      text: cancelled?.activeFlow ? "تم إلغاء العملية الحالية." : "لا توجد عملية نشطة لإلغائها.",
-    });
+    await sendTelegramText({ token: input.token, chatId: input.context.chatId, text: cancelled?.activeFlow ? "تم إلغاء العملية الحالية." : "لا توجد عملية نشطة لإلغائها." });
     return;
   }
   await renderTelegramMainMenu({ ...base, title: "الإجراء غير متاح أو انتهت صلاحيته. اختر من القائمة الحالية." });
@@ -347,49 +360,19 @@ async function handleLinkedText(input: {
     });
     return;
   }
-  if (cmd === "agents") {
-    await listTelegramAgents({ ...base, mode: "browse" });
-    return;
-  }
-  if (cmd === "teams") {
-    await listTelegramTeams({ ...base, page: 1 });
-    return;
-  }
-  if (cmd === "runs") {
-    await listTelegramRuns({ ...base, page: 1 });
-    return;
-  }
-  if (cmd === "approvals") {
-    await listTelegramApprovals(base);
-    return;
-  }
-  if (cmd === "new") {
-    await startTelegramConversation(base);
-    return;
-  }
-  if (cmd === "files") {
-    await showTelegramFileHelp(base);
-    return;
-  }
-  if (cmd === "github" || cmd === "repos" || cmd === "repositories") {
-    await listTelegramRepositories(base);
-    return;
-  }
-  if (cmd === "browser") {
-    await listTelegramBrowserTasks(base);
-    return;
-  }
-  if (cmd === "sandbox") {
-    await listTelegramSandboxRuntime(base);
-    return;
-  }
+  if (cmd === "agents") { await listTelegramAgents({ ...base, mode: "browse" }); return; }
+  if (cmd === "teams") { await listTelegramTeams({ ...base, page: 1 }); return; }
+  if (cmd === "runs") { await listTelegramRuns({ ...base, page: 1 }); return; }
+  if (cmd === "approvals") { await listTelegramApprovals(base); return; }
+  if (cmd === "new") { await startTelegramConversation(base); return; }
+  if (cmd === "files") { await showTelegramFileHelp(base); return; }
+  if (cmd === "github" || cmd === "repos" || cmd === "repositories") { await listTelegramRepositories(base); return; }
+  if (cmd === "connections" || cmd === "sites") { await listTelegramSiteConnections(base); return; }
+  if (cmd === "mcp") { await listTelegramMcp(base); return; }
+  if (cmd === "browser") { await listTelegramBrowserTasks(base); return; }
+  if (cmd === "sandbox") { await listTelegramSandboxRuntime(base); return; }
   if (cmd === "status") {
-    await showTelegramAccountStatus({
-      ...base,
-      telegramUsername: input.account.telegramUsername,
-      linkedAt: input.account.linkedAt,
-      lastSeenAt: input.account.lastSeenAt,
-    });
+    await showTelegramAccountStatus({ ...base, telegramUsername: input.account.telegramUsername, linkedAt: input.account.linkedAt, lastSeenAt: input.account.lastSeenAt });
     return;
   }
   if (cmd === "unlink") {
@@ -402,11 +385,7 @@ async function handleLinkedText(input: {
     return;
   }
 
-  if (await handleTelegramMedia({
-    ...base,
-    update: input.update,
-    requestId: `telegram:media:${input.context.updateId}:${input.context.message.message_id}`,
-  })) return;
+  if (await handleTelegramMedia({ ...base, update: input.update, requestId: `telegram:media:${input.context.updateId}:${input.context.message.message_id}` })) return;
   if (await handleTelegramTeamRunText({ ...base, text: input.context.text })) return;
   if (await handleAgentCreateText({ ...base, text: input.context.text })) return;
 
@@ -433,7 +412,6 @@ export async function processTelegramUpdate(input: { updateRowId: string; update
       await handleLink({ updateRowId: input.updateRowId, update, code, token: config.botToken, context });
       return;
     }
-
     const account = await resolveTelegramAccount(context.telegramUserId);
     if (!account) {
       await sendTelegramMenu({
@@ -445,19 +423,14 @@ export async function processTelegramUpdate(input: { updateRowId: string; update
       await markUpdate(input.updateRowId, "ignored", "TELEGRAM_ACCOUNT_NOT_LINKED");
       return;
     }
-
     await ensureTelegramSession({
       userId: account.userId,
       organizationId: account.organizationId,
       telegramUserId: context.telegramUserId,
       telegramChatId: context.chatId,
     });
-
-    if (context.callbackData) {
-      await handleCallback({ token: config.botToken, context, account, action: context.callbackData });
-    } else {
-      await handleLinkedText({ token: config.botToken, updateRowId: input.updateRowId, update, context, account });
-    }
+    if (context.callbackData) await handleCallback({ token: config.botToken, context, account, action: context.callbackData });
+    else await handleLinkedText({ token: config.botToken, updateRowId: input.updateRowId, update, context, account });
     await markUpdate(input.updateRowId, "completed");
     safeLog("info", "telegram.command.handled", { updateRowId: input.updateRowId, updateId: context.updateId });
   } catch (error) {
@@ -471,10 +444,6 @@ export async function processTelegramUpdate(input: { updateRowId: string; update
       buttonRows: [[{ id: "nav:home", title: "الرئيسية" }]],
     }).catch(() => undefined);
     await markUpdate(input.updateRowId, "failed", presented.code);
-    safeLog("error", "telegram.update.failed", {
-      updateRowId: input.updateRowId,
-      errorCode: presented.code,
-      referenceId,
-    });
+    safeLog("error", "telegram.update.failed", { updateRowId: input.updateRowId, errorCode: presented.code, referenceId });
   }
 }
