@@ -26,6 +26,8 @@ export const CENTRAL_TELEGRAM_COMMANDS = [
   { command: "help", description: "عرض المساعدة" },
   { command: "status", description: "حالة الحساب والجلسة" },
   { command: "agents", description: "عرض الوكلاء المتاحين" },
+  { command: "teams", description: "عرض فرق الوكلاء" },
+  { command: "runs", description: "عرض عمليات تشغيل الفرق" },
   { command: "new", description: "بدء محادثة حقيقية" },
   { command: "approvals", description: "عرض الموافقات المعلقة" },
   { command: "cancel", description: "إلغاء العملية الحالية" },
