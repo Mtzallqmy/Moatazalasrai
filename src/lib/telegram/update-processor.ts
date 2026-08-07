@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { telegramUpdates } from "@/db/schema";
+import { ApiError } from "@/lib/http/api";
 import { consumeTelegramLinkCode, resolveTelegramAccount, telegramPlatformConfig, unlinkTelegramAccount } from "@/lib/integrations/telegram-platform";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
 import { showTelegramAccountStatus } from "./account-flows";
@@ -78,7 +79,9 @@ async function showTelegramFileHelp(input: {
     organizationId: input.organizationId,
     capabilityId: "files.receive",
   });
-  if (!capability) throw new Error("TELEGRAM_FILES_CAPABILITY_DENIED");
+  if (!capability) {
+    throw new ApiError(403, "TELEGRAM_FILES_CAPABILITY_DENIED", "إرسال الملفات غير مفعّل لحسابك.");
+  }
   await sendTelegramMenu({
     token: input.token,
     chatId: input.chatId,
