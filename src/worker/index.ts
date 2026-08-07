@@ -4,10 +4,12 @@ import { db } from "@/db";
 import { closePostgresPool, getPostgresPool } from "@/db/pool";
 import { workerHeartbeats } from "@/db/agent-runtime-schema";
 import { recoverPendingDomainEvents } from "@/lib/events/recover";
+import { executionKernelEnabled } from "@/lib/execution/runner-registry";
 import { hydrateRuntimeControlPlane } from "@/lib/platform/runtime-control";
 import { initializeWhatsAppFromEnvironment } from "@/lib/platform/whatsapp-environment";
 import { startNodeTelemetry } from "@/ai/observability/node-otel";
 import { safeTelemetry } from "@/ai/observability/telemetry";
+import { enqueueExecutionExpire, enqueueExecutionReconcile } from "@/worker/queue";
 import { taskList } from "@/worker/task-list";
 
 function workerConcurrency() {
@@ -16,12 +18,19 @@ function workerConcurrency() {
   return Math.min(16, Math.max(1, Math.floor(configured)));
 }
 
+function executionMaintenanceInterval() {
+  const configured = Number(process.env.EXECUTION_RECONCILE_INTERVAL_SECONDS ?? 60);
+  const seconds = Number.isSafeInteger(configured) ? Math.min(Math.max(configured, 30), 900) : 60;
+  return seconds * 1_000;
+}
+
 const workerId = `moataz-${randomUUID()}`;
 let runner: Runner | undefined;
 let stopping = false;
 let heartbeatTimer: NodeJS.Timeout | undefined;
 let runtimeControlTimer: NodeJS.Timeout | undefined;
 let outboxRecoveryTimer: NodeJS.Timeout | undefined;
+let executionMaintenanceTimer: NodeJS.Timeout | undefined;
 let telemetryShutdown: (() => Promise<void>) | undefined;
 
 async function heartbeat(stoppingAt?: Date) {
@@ -64,12 +73,22 @@ async function recoverOutbox() {
   }
 }
 
+async function scheduleExecutionMaintenance() {
+  if (!executionKernelEnabled()) return;
+  const requestedAt = new Date().toISOString();
+  await Promise.all([
+    enqueueExecutionReconcile({ requestedAt }),
+    enqueueExecutionExpire({ requestedAt }),
+  ]);
+}
+
 async function shutdown(signal: string) {
   if (stopping) return;
   stopping = true;
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   if (runtimeControlTimer) clearInterval(runtimeControlTimer);
   if (outboxRecoveryTimer) clearInterval(outboxRecoveryTimer);
+  if (executionMaintenanceTimer) clearInterval(executionMaintenanceTimer);
   console.info(JSON.stringify(safeTelemetry({ event: "worker.stopping", workerId, signal })));
   await heartbeat(new Date()).catch(() => undefined);
   await runner?.stop();
@@ -89,6 +108,9 @@ async function main() {
   await recoverOutbox().catch((error) => {
     console.error(JSON.stringify(safeTelemetry({ event: "worker.notification_outbox.recovery_failed", workerId, errorCode: error instanceof Error ? error.name : "UNKNOWN" })));
   });
+  await scheduleExecutionMaintenance().catch((error) => {
+    console.error(JSON.stringify(safeTelemetry({ event: "worker.execution_maintenance.enqueue_failed", workerId, errorCode: error instanceof Error ? error.name : "UNKNOWN" })));
+  });
   heartbeatTimer = setInterval(() => {
     void heartbeat().catch((error) => {
       console.error(JSON.stringify(safeTelemetry({
@@ -107,6 +129,12 @@ async function main() {
     });
   }, 60_000);
   outboxRecoveryTimer.unref();
+  executionMaintenanceTimer = setInterval(() => {
+    void scheduleExecutionMaintenance().catch((error) => {
+      console.error(JSON.stringify(safeTelemetry({ event: "worker.execution_maintenance.enqueue_failed", workerId, errorCode: error instanceof Error ? error.name : "UNKNOWN" })));
+    });
+  }, executionMaintenanceInterval());
+  executionMaintenanceTimer.unref();
 
   process.once("SIGTERM", () => { void shutdown("SIGTERM"); });
   process.once("SIGINT", () => { void shutdown("SIGINT"); });
@@ -116,6 +144,7 @@ async function main() {
     workerId,
     concurrency: workerConcurrency(),
     tasks: Object.keys(taskList),
+    executionKernelEnabled: executionKernelEnabled(),
   })));
   runner = await run({
     pgPool: getPostgresPool(),

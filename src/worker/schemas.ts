@@ -2,67 +2,27 @@ import { z } from "zod";
 
 const uuid = z.string().uuid();
 
-export const agentTeamRunPayloadSchema = z.object({
-  organizationId: uuid,
-  teamRunId: uuid,
-}).strict();
-
-export const documentParsePayloadSchema = z.object({
-  organizationId: uuid,
-  documentId: uuid,
-}).strict();
-
-export const agentRunResumePayloadSchema = z.object({
-  organizationId: uuid,
-  approvalId: z.string().min(1).max(200),
-}).strict();
-
-export const sandboxWorkspacePayloadSchema = z.object({
-  organizationId: uuid,
-  workspaceId: uuid,
-}).strict();
-
-export const sandboxExecutionPayloadSchema = z.object({
-  organizationId: uuid,
-  executionId: uuid,
-}).strict();
-
-export const sandboxResumePayloadSchema = z.object({
-  organizationId: uuid,
-  approvalId: z.string().uuid(),
-  executionId: uuid,
-}).strict();
-
-export const sandboxCleanupPayloadSchema = z.object({
-  organizationId: uuid.optional(),
-}).strict();
-
-export const browserTaskPayloadSchema = z.object({
-  organizationId: uuid,
-  browserTaskId: uuid,
-}).strict();
-
-export const browserResumePayloadSchema = z.object({
-  organizationId: uuid,
-  approvalId: z.string().uuid(),
-  browserTaskId: uuid,
-}).strict();
-
-export const notificationDispatchPayloadSchema = z.object({
-  organizationId: uuid,
-  eventId: uuid,
-}).strict();
-
+export const agentTeamRunPayloadSchema = z.object({ organizationId: uuid, teamRunId: uuid }).strict();
+export const documentParsePayloadSchema = z.object({ organizationId: uuid, documentId: uuid }).strict();
+export const agentRunResumePayloadSchema = z.object({ organizationId: uuid, approvalId: z.string().min(1).max(200) }).strict();
+export const sandboxWorkspacePayloadSchema = z.object({ organizationId: uuid, workspaceId: uuid }).strict();
+export const sandboxExecutionPayloadSchema = z.object({ organizationId: uuid, executionId: uuid }).strict();
+export const sandboxResumePayloadSchema = z.object({ organizationId: uuid, approvalId: z.string().uuid(), executionId: uuid }).strict();
+export const sandboxCleanupPayloadSchema = z.object({ organizationId: uuid.optional() }).strict();
+export const browserTaskPayloadSchema = z.object({ organizationId: uuid, browserTaskId: uuid }).strict();
+export const browserResumePayloadSchema = z.object({ organizationId: uuid, approvalId: z.string().uuid(), browserTaskId: uuid }).strict();
+export const notificationDispatchPayloadSchema = z.object({ organizationId: uuid, eventId: uuid }).strict();
 export const telegramUpdatePayloadSchema = z.object({
   updateRowId: uuid,
   updateId: z.number().int().safe(),
   update: z.record(z.string(), z.unknown()),
 }).strict();
-
 export const whatsappChannelUpdatePayloadSchema = z.object({
   eventRowId: uuid,
   message: z.record(z.string(), z.unknown()),
 }).strict();
+export const executionTaskPayloadSchema = z.object({ organizationId: uuid, jobId: uuid }).strict();
+export const executionMaintenancePayloadSchema = z.object({ requestedAt: z.string().datetime() }).strict();
 
 export type AgentTeamRunPayload = z.infer<typeof agentTeamRunPayloadSchema>;
 export type DocumentParsePayload = z.infer<typeof documentParsePayloadSchema>;
@@ -76,6 +36,8 @@ export type BrowserResumePayload = z.infer<typeof browserResumePayloadSchema>;
 export type NotificationDispatchPayload = z.infer<typeof notificationDispatchPayloadSchema>;
 export type TelegramUpdatePayload = z.infer<typeof telegramUpdatePayloadSchema>;
 export type WhatsAppChannelUpdatePayload = z.infer<typeof whatsappChannelUpdatePayloadSchema>;
+export type ExecutionTaskPayload = z.infer<typeof executionTaskPayloadSchema>;
+export type ExecutionMaintenancePayload = z.infer<typeof executionMaintenancePayloadSchema>;
 
 export const supportedWorkerTasks = [
   "agent-team-run",
@@ -97,5 +59,12 @@ export const supportedWorkerTasks = [
   "browser-artifact-cleanup",
   "site-connection-health-check",
   "oauth-token-refresh",
+  "execution-provision",
+  "execution-run-step",
+  "execution-collect-artifacts",
+  "execution-cancel",
+  "execution-cleanup",
+  "execution-reconcile",
+  "execution-expire",
 ] as const;
 export type SupportedWorkerTask = typeof supportedWorkerTasks[number];

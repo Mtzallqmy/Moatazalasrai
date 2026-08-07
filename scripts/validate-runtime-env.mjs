@@ -17,6 +17,63 @@ function publicAppUrl(feature) {
   return value;
 }
 
+function integer(name, fallback, minimum, maximum) {
+  const value = Number(process.env[name] ?? fallback);
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`${name} must be an integer between ${minimum} and ${maximum}.`);
+  }
+  return value;
+}
+
+function validateExecutionKernel() {
+  if (!enabled("EXECUTION_KERNEL_ENABLED")) return;
+  const runner = process.env.EXECUTION_RUNNER?.trim() || "existing";
+  if (!new Set(["existing", "gvisor", "e2b", "daytona"]).has(runner)) {
+    throw new Error("EXECUTION_RUNNER must be existing, gvisor, e2b or daytona.");
+  }
+  const network = process.env.EXECUTION_DEFAULT_NETWORK_MODE?.trim() || "deny_all";
+  if (!new Set(["deny_all", "allowlist"]).has(network)) {
+    throw new Error("EXECUTION_DEFAULT_NETWORK_MODE must be deny_all or allowlist.");
+  }
+  integer("EXECUTION_DEFAULT_TIMEOUT_MS", 300000, 1000, 1800000);
+  integer("EXECUTION_DEFAULT_MEMORY_BYTES", 536870912, 67108864, 8589934592);
+  integer("EXECUTION_DEFAULT_DISK_BYTES", 1073741824, 16777216, 21474836480);
+  integer("EXECUTION_DEFAULT_MAX_PROCESSES", 64, 1, 512);
+  integer("EXECUTION_DEFAULT_MAX_OUTPUT_BYTES", 5242880, 1024, 52428800);
+  integer("EXECUTION_DEFAULT_MAX_ARTIFACT_BYTES", 104857600, 1024, 2147483648);
+  integer("EXECUTION_WORKSPACE_TTL_SECONDS", 1800, 60, 86400);
+  integer("EXECUTION_HEARTBEAT_INTERVAL_SECONDS", 15, 5, 300);
+  integer("EXECUTION_LEASE_TTL_SECONDS", 60, 30, 300);
+  integer("EXECUTION_RECONCILE_INTERVAL_SECONDS", 60, 30, 900);
+  integer("EXECUTION_CREDENTIAL_GRANT_TTL_SECONDS", 300, 30, 900);
+
+  if (runner === "existing") {
+    requireAll("Execution Kernel existing runner", ["SANDBOX_RUNNER_URL", "SANDBOX_RUNNER_SHARED_SECRET"]);
+  }
+  if (runner === "e2b") {
+    if (!enabled("EXECUTION_E2B_ENABLED")) throw new Error("EXECUTION_RUNNER=e2b requires EXECUTION_E2B_ENABLED=true.");
+    requireAll("E2B execution adapter", ["E2B_API_KEY"]);
+  }
+  if (runner === "daytona") {
+    if (!enabled("EXECUTION_DAYTONA_ENABLED")) throw new Error("EXECUTION_RUNNER=daytona requires EXECUTION_DAYTONA_ENABLED=true.");
+    requireAll("Daytona execution adapter", ["DAYTONA_API_KEY"]);
+  }
+  if (runner === "gvisor") {
+    if (!enabled("EXECUTION_GVISOR_ENABLED")) throw new Error("EXECUTION_RUNNER=gvisor requires EXECUTION_GVISOR_ENABLED=true.");
+    if (process.env.RAILWAY_ENVIRONMENT?.trim()) throw new Error("gVisor/runsc requires a dedicated host and is not supported inside Railway.");
+    requireAll("gVisor execution adapter", ["EXECUTION_GVISOR_RUNTIME"]);
+  }
+  if (enabled("EXECUTION_CREDENTIAL_BROKER_ENABLED") || process.env.EXECUTION_CREDENTIAL_BROKER_ENABLED === undefined) {
+    requireAll("Execution Credential Broker", ["EXECUTION_PROXY_SHARED_SECRET"]);
+    if (process.env.EXECUTION_PROXY_SHARED_SECRET.trim().length < 32) {
+      throw new Error("EXECUTION_PROXY_SHARED_SECRET must contain at least 32 characters.");
+    }
+  }
+  if (process.env.SANDBOX_RUNNER_SHARED_SECRET && process.env.SANDBOX_RUNNER_SHARED_SECRET.trim().length < 32) {
+    throw new Error("SANDBOX_RUNNER_SHARED_SECRET must contain at least 32 characters.");
+  }
+}
+
 export function validateOptionalRuntimeEnvironment() {
   if (enabled("TURNSTILE_ENABLED")) {
     requireAll("Turnstile", ["NEXT_PUBLIC_TURNSTILE_SITE_KEY", "TURNSTILE_SECRET_KEY"]);
@@ -39,6 +96,8 @@ export function validateOptionalRuntimeEnvironment() {
   if (enabled("AI_PROVIDER_DIRECT_FALLBACK_ENABLED") && !enabled("AI_PROVIDER_FALLBACK_ENABLED")) {
     throw new Error("AI_PROVIDER_DIRECT_FALLBACK_ENABLED requires AI_PROVIDER_FALLBACK_ENABLED=true.");
   }
+
+  validateExecutionKernel();
 
   if (enabled("TELEGRAM_INTEGRATION_ENABLED")) {
     requireAll("Telegram central bot", [
