@@ -10,6 +10,7 @@ export type TelegramCapabilityId =
   | "chat.start"
   | "agents.list"
   | "agents.create"
+  | "approvals.list"
   | "account.status";
 
 export type TelegramCapability = {
@@ -67,6 +68,19 @@ export const TELEGRAM_CAPABILITIES: readonly TelegramCapability[] = [
     adminOnly: true,
   },
   {
+    id: "approvals.list",
+    labelAr: "الموافقات",
+    descriptionAr: "مراجعة طلبات الأدوات المعلقة واتخاذ قرار حقيقي.",
+    icon: "✅",
+    requiredPermission: "runs:read",
+    telegramFeatureKey: "telegram.admin_commands",
+    requiredPlatformModule: "security",
+    fallbackDashboardUrl: "/dashboard/approvals",
+    supportsPagination: false,
+    destructive: true,
+    adminOnly: true,
+  },
+  {
     id: "account.status",
     labelAr: "الحساب والحالة",
     descriptionAr: "عرض المؤسسة والدور والجلسة والميزات المسموحة.",
@@ -112,7 +126,7 @@ export async function resolveTelegramCapabilities(input: {
     const permissionAllowed = can(membership.role, capability.requiredPermission)
       || membership.custom.has(capability.requiredPermission);
     if (!permissionAllowed) continue;
-    if (capability.adminOnly && !new Set<Role>(["owner", "admin", "developer"]).has(membership.role)) continue;
+    if (capability.adminOnly && !new Set<Role>(["owner", "admin", "developer", "operator"]).has(membership.role)) continue;
     if (!await moduleEnabled(input.organizationId, capability.requiredPlatformModule)) continue;
     if (!await telegramFeatureAllowed(input.userId, input.organizationId, capability.telegramFeatureKey)) continue;
     visible.push(capability);
