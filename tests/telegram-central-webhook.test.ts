@@ -2,21 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   execute: vi.fn(),
-  updateWhere: vi.fn(async () => []),
+  enqueue: vi.fn(async () => ({ jobId: "job-1" })),
+  answerCallback: vi.fn(async () => true),
 }));
 
 vi.mock("@/db", () => ({
-  db: () => ({
-    execute: mocks.execute,
-    update: () => ({ set: () => ({ where: mocks.updateWhere }) }),
-    insert: () => ({ values: () => ({ onConflictDoUpdate: () => Promise.resolve([]) }) }),
-  }),
+  db: () => ({ execute: mocks.execute }),
 }));
-vi.mock("next/server", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("next/server")>();
-  return { ...actual, after: (callback: () => unknown) => { void callback(); } };
-});
-vi.mock("@/lib/security/rate-limit", () => ({ enforceRateLimit: vi.fn(async () => undefined) }));
+vi.mock("@/worker/queue", () => ({ enqueueTelegramUpdate: mocks.enqueue }));
+vi.mock("@/lib/telegram/message-renderer", () => ({ answerTelegramCallback: mocks.answerCallback }));
 
 const keys = [
   "NODE_ENV", "APP_URL", "TELEGRAM_INTEGRATION_ENABLED", "TELEGRAM_BOT_TOKEN",
@@ -25,6 +19,7 @@ const keys = [
 const original = new Map<string, string | undefined>();
 
 beforeEach(() => {
+  vi.resetModules();
   for (const key of keys) original.set(key, process.env[key]);
   Object.assign(process.env, {
     NODE_ENV: "test",
@@ -36,7 +31,8 @@ beforeEach(() => {
     TELEGRAM_UPDATE_MODE: "webhook",
   });
   mocks.execute.mockReset();
-  mocks.updateWhere.mockClear();
+  mocks.enqueue.mockClear();
+  mocks.answerCallback.mockClear();
   mocks.execute.mockResolvedValue({ rows: [{ id: "00000000-0000-4000-8000-000000000001" }] });
 });
 
@@ -49,14 +45,17 @@ afterEach(() => {
   original.clear();
 });
 
-function request(secret?: string) {
+function request(secret?: string, update: Record<string, unknown> = {
+  update_id: 12345,
+  message: { message_id: 1, text: "/start", chat: { id: 10 }, from: { id: 20 } },
+}) {
   return new Request("https://app.example/api/webhooks/telegram", {
     method: "POST",
     headers: {
       "content-type": "application/json",
       ...(secret ? { "x-telegram-bot-api-secret-token": secret } : {}),
     },
-    body: JSON.stringify({ update_id: 12345 }),
+    body: JSON.stringify(update),
   });
 }
 
@@ -75,19 +74,40 @@ describe("central Telegram webhook", () => {
     expect(mocks.execute).not.toHaveBeenCalled();
   });
 
-  it("accepts a webhook with the configured secret", async () => {
+  it("persists and queues a valid update with the configured secret", async () => {
     const { POST } = await import("@/app/api/webhooks/telegram/route");
     const response = await POST(request("telegram-webhook-secret"));
     expect(response.status).toBe(200);
-    expect((await response.json()).data).toMatchObject({ accepted: true });
+    expect((await response.json()).data).toMatchObject({ accepted: true, queued: true });
     expect(mocks.execute).toHaveBeenCalledTimes(1);
+    expect(mocks.enqueue).toHaveBeenCalledWith(expect.objectContaining({ updateId: 12345 }));
   });
 
-  it("acknowledges a duplicate update without processing it twice", async () => {
+  it("answers callback queries before queueing the heavy processor", async () => {
+    const { POST } = await import("@/app/api/webhooks/telegram/route");
+    const response = await POST(request("telegram-webhook-secret", {
+      update_id: 12346,
+      callback_query: {
+        id: "callback-1",
+        data: "nav:home",
+        from: { id: 20 },
+        message: { message_id: 2, chat: { id: 10 } },
+      },
+    }));
+    expect(response.status).toBe(200);
+    expect(mocks.answerCallback).toHaveBeenCalledWith({
+      token: "123456789:test-token",
+      callbackQueryId: "callback-1",
+    });
+    expect(mocks.enqueue).toHaveBeenCalledTimes(1);
+  });
+
+  it("acknowledges a duplicate update without queueing it twice", async () => {
     mocks.execute.mockRejectedValueOnce(Object.assign(new Error("duplicate"), { code: "23505" }));
     const { POST } = await import("@/app/api/webhooks/telegram/route");
     const response = await POST(request("telegram-webhook-secret"));
     expect(response.status).toBe(200);
     expect((await response.json()).data).toMatchObject({ accepted: true, duplicate: true });
+    expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 });
