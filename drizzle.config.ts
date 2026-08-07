@@ -14,6 +14,7 @@ export default defineConfig({
     "./src/db/sandbox-schema.ts",
     "./src/db/orchestration-schema.ts",
     "./src/db/execution-schema.ts",
+    "./src/db/tool-run-schema.ts",
     "./src/db/tool-registry-schema.ts",
     "./src/db/whatsapp-platform-schema.ts",
     "./src/db/telegram-platform-schema.ts",
