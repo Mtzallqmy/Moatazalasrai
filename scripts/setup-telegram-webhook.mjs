@@ -19,16 +19,15 @@ if (!publicUrl.startsWith("https://")) throw new Error("Telegram webhook URL mus
 if (secret.length < 16) throw new Error("TELEGRAM_WEBHOOK_SECRET must contain at least 16 characters.");
 
 const commands = [
-  { command: "start", description: "بدء البوت وعرض الحالة" },
-  { command: "help", description: "عرض جميع الأوامر" },
-  { command: "status", description: "حالة الربط والميزات" },
+  { command: "start", description: "بدء البوت وعرض القائمة" },
+  { command: "help", description: "عرض المساعدة" },
+  { command: "status", description: "حالة الحساب والجلسة" },
   { command: "agents", description: "عرض الوكلاء المتاحين" },
-  { command: "new", description: "بدء محادثة جديدة" },
-  { command: "files", description: "تعليمات إرسال الملفات" },
-  { command: "unlink", description: "فصل حساب Telegram" },
+  { command: "new", description: "بدء محادثة حقيقية" },
   { command: "cancel", description: "إلغاء العملية الحالية" },
+  { command: "unlink", description: "فصل حساب Telegram" },
 ];
-const allowedUpdates = ["message", "edited_message", "callback_query"];
+const allowedUpdates = ["message", "edited_message", "callback_query", "my_chat_member"];
 
 async function call(method, body = {}) {
   let lastError;
