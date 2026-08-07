@@ -26,7 +26,11 @@ const commands = [
   { command: "teams", description: "عرض فرق الوكلاء" },
   { command: "runs", description: "عرض عمليات تشغيل الفرق" },
   { command: "new", description: "بدء محادثة حقيقية" },
+  { command: "files", description: "إرسال الملفات والوسائط" },
+  { command: "github", description: "عرض مستودعات GitHub المتصلة" },
   { command: "approvals", description: "عرض الموافقات المعلقة" },
+  { command: "browser", description: "تشخيص مهام Browser" },
+  { command: "sandbox", description: "تشخيص Sandbox" },
   { command: "cancel", description: "إلغاء العملية الحالية" },
   { command: "unlink", description: "فصل حساب Telegram" },
 ];
