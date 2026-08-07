@@ -15,6 +15,7 @@ import {
 import { assertUserPermission, userOrganizationRole } from "@/lib/auth/user-authorization";
 import { listBrowserTasks } from "@/lib/browser/task-service";
 import { ApiError } from "@/lib/http/api";
+import { testCurrentAuthenticatedRunner } from "@/lib/platform/runner-auth-health";
 import { listSandboxExecutions, listSandboxWorkspaces } from "@/lib/sandbox/service";
 import {
   enqueueAgentRunResume,
@@ -252,21 +253,26 @@ export async function decideChannelApproval(input: {
 
 export async function channelBrowserDiagnostics(input: { organizationId: string; userId: string }) {
   const role = await assertUserPermission({ ...input, permission: "browser_tasks:read" });
-  return listBrowserTasks({
-    organizationId: input.organizationId,
-    userId: input.userId,
-    role,
-    limit: 12,
-  });
+  const [health, tasks] = await Promise.all([
+    testCurrentAuthenticatedRunner("browser"),
+    listBrowserTasks({
+      organizationId: input.organizationId,
+      userId: input.userId,
+      role,
+      limit: 12,
+    }),
+  ]);
+  return { health, tasks };
 }
 
 export async function channelSandboxDiagnostics(input: { organizationId: string; userId: string }) {
   await assertUserPermission({ ...input, permission: "sandbox:read" });
   const role = await userOrganizationRole(input.userId, input.organizationId);
   const actor = { organizationId: input.organizationId, userId: input.userId, role };
-  const [workspaces, executions] = await Promise.all([
+  const [health, workspaces, executions] = await Promise.all([
+    testCurrentAuthenticatedRunner("sandbox"),
     listSandboxWorkspaces({ actor }),
     listSandboxExecutions({ actor, limit: 12 }),
   ]);
-  return { workspaces, executions };
+  return { health, workspaces, executions };
 }
