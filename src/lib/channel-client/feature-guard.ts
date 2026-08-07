@@ -45,6 +45,21 @@ export function requiredChannelFeatures(input: {
     || normalized === "الوكلاء";
   if (listingAgents) add("agents", "الوكلاء");
 
+  const teamOperations = input.session.activeFlow === "team.run"
+    || action.startsWith("cc.teams:")
+    || action.startsWith("cc.team:")
+    || action.startsWith("cc.runs:")
+    || action.startsWith("cc.run:")
+    || ["/teams", "/runs", "الفرق", "فرق الوكلاء", "التشغيلات", "عمليات التشغيل"].includes(normalized);
+  if (teamOperations) add("agents", "فرق الوكلاء وعمليات التشغيل");
+
+  const administrativeOperations = action.startsWith("cc.approval")
+    || action === "cc.approvals"
+    || action === "cc.browser"
+    || action === "cc.sandbox"
+    || ["/approvals", "/browser", "/sandbox", "الموافقات", "المتصفح", "ساندبوكس", "sandbox"].includes(normalized);
+  if (administrativeOperations) add("admin_commands", "أوامر التشغيل الإدارية");
+
   const opensFiles = action === "cc.files"
     || normalized === "/files"
     || normalized === "الملفات";
@@ -62,9 +77,15 @@ export function requiredChannelFeatures(input: {
   }
 
   const knownNavigation = action.startsWith("cc.")
-    || ["/start", "/help", "/status", "/agents", "/new", "/files", "/cancel", "/unlink", "القائمة", "الرئيسية", "الحالة", "الوكلاء", "الملفات", "إلغاء", "الغاء"].includes(normalized);
+    || [
+      "/start", "/help", "/status", "/agents", "/new", "/files", "/cancel", "/unlink",
+      "/teams", "/runs", "/approvals", "/browser", "/sandbox",
+      "القائمة", "الرئيسية", "الحالة", "الوكلاء", "الملفات", "إلغاء", "الغاء",
+      "الفرق", "فرق الوكلاء", "التشغيلات", "عمليات التشغيل", "الموافقات", "المتصفح", "ساندبوكس", "sandbox",
+    ].includes(normalized);
   const ordinaryMessage = !knownNavigation
     && input.session.activeFlow !== "agent.create"
+    && input.session.activeFlow !== "team.run"
     && (input.text.trim().length > 0 || input.incoming.attachments.length > 0);
   if (ordinaryMessage || input.session.activeFlow === "chat") add("chat", "الدردشة");
   if (ordinaryMessage && !input.session.selectedAgentId) add("agents", "الوكلاء");
