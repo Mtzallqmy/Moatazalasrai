@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { executionArtifacts, executionJobs, executionUsage, executionWorkspaces } from "@/db/execution-schema";
+import { attachments } from "@/db/schema";
 import { storeAttachment } from "@/lib/storage/attachments";
 import { getExecutionRunner } from "@/lib/execution/runner-registry";
 import { ApiError } from "@/lib/http/api";
@@ -18,6 +19,13 @@ function storageFilename(filename: string, mimeType: string) {
   if (supported.some((ext) => lower.endsWith(ext))) return filename;
   if (mimeType.startsWith("text/") || mimeType === "application/json") return `${filename}.txt`;
   return filename;
+}
+
+async function addArtifactUsage(organizationId: string, executionJobId: string, sizeBytes: number) {
+  await db().update(executionUsage).set({
+    artifactBytes: sql`${executionUsage.artifactBytes} + ${sizeBytes}`,
+    updatedAt: new Date(),
+  }).where(and(eq(executionUsage.executionJobId, executionJobId), eq(executionUsage.organizationId, organizationId)));
 }
 
 export class ArtifactRegistry {
@@ -41,12 +49,12 @@ export class ArtifactRegistry {
     if (input.content.byteLength > job.limits.maxArtifactBytes) throw new ApiError(413, "EXECUTION_ARTIFACT_TOO_LARGE", "الملف الناتج تجاوز الحد المسموح.");
     const filename = safeFilename(input.filename);
     const sha256 = createHash("sha256").update(input.content).digest("hex");
-    const existing = await db().select().from(executionArtifacts).where(and(
+    const [existing] = await db().select().from(executionArtifacts).where(and(
       eq(executionArtifacts.executionJobId, input.executionJobId),
       eq(executionArtifacts.sha256, sha256),
       eq(executionArtifacts.filename, filename),
     )).limit(1);
-    if (existing[0]) return existing[0];
+    if (existing) return existing;
     const attachment = await storeAttachment({
       organizationId: input.organizationId,
       uploadedByUserId: input.userId,
@@ -70,10 +78,47 @@ export class ArtifactRegistry {
       metadata: input.metadata ?? {},
     }).returning();
     if (!created) throw new Error("EXECUTION_ARTIFACT_CREATE_FAILED");
-    await db().update(executionUsage).set({
-      artifactBytes: input.content.byteLength,
-      updatedAt: new Date(),
-    }).where(and(eq(executionUsage.executionJobId, input.executionJobId), eq(executionUsage.organizationId, input.organizationId)));
+    await addArtifactUsage(input.organizationId, input.executionJobId, input.content.byteLength);
+    return created;
+  }
+
+  async registerAttachment(input: {
+    organizationId: string;
+    executionJobId: string;
+    executionStepId?: string;
+    attachmentId: string;
+    kind: string;
+    metadata?: Record<string, unknown>;
+  }) {
+    const [[job], [attachment]] = await Promise.all([
+      db().select({ id: executionJobs.id, limits: executionJobs.limits }).from(executionJobs).where(and(
+        eq(executionJobs.id, input.executionJobId), eq(executionJobs.organizationId, input.organizationId),
+      )).limit(1),
+      db().select({ id: attachments.id, filename: attachments.filename, mimeType: attachments.mimeType, sizeBytes: attachments.sizeBytes, sha256: attachments.sha256 })
+        .from(attachments).where(and(eq(attachments.id, input.attachmentId), eq(attachments.organizationId, input.organizationId))).limit(1),
+    ]);
+    if (!job) throw new ApiError(404, "EXECUTION_JOB_NOT_FOUND", "مهمة التنفيذ غير موجودة.");
+    if (!attachment) throw new ApiError(404, "EXECUTION_ARTIFACT_SOURCE_MISSING", "الملف الناتج غير موجود.");
+    if (attachment.sizeBytes <= 0 || attachment.sizeBytes > job.limits.maxArtifactBytes) throw new ApiError(413, "EXECUTION_ARTIFACT_TOO_LARGE", "الملف الناتج تجاوز الحد المسموح.");
+    const [existing] = await db().select().from(executionArtifacts).where(and(
+      eq(executionArtifacts.executionJobId, input.executionJobId), eq(executionArtifacts.attachmentId, attachment.id),
+    )).limit(1);
+    if (existing) return existing;
+    const [created] = await db().insert(executionArtifacts).values({
+      organizationId: input.organizationId,
+      executionJobId: input.executionJobId,
+      executionStepId: input.executionStepId,
+      attachmentId: attachment.id,
+      kind: input.kind,
+      filename: safeFilename(attachment.filename),
+      mimeType: attachment.mimeType,
+      sizeBytes: attachment.sizeBytes,
+      sha256: attachment.sha256,
+      status: "ready",
+      metadata: input.metadata ?? {},
+    }).returning();
+    if (!created) throw new Error("EXECUTION_ARTIFACT_CREATE_FAILED");
+    await addArtifactUsage(input.organizationId, input.executionJobId, attachment.sizeBytes);
     return created;
   }
 
