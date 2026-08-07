@@ -144,7 +144,7 @@ describeDatabase("persistent channel client sessions", () => {
         l.metadata->>'source' AS audit_source
       FROM agents a
       JOIN agent_versions v ON v.agent_id = a.id AND v.version = a.current_version
-      JOIN audit_logs l ON l.resource_type = 'agent' AND l.resource_id = a.id
+      JOIN audit_logs l ON l.resource_type = 'agent' AND l.resource_id = a.id::text
       WHERE a.id = ${result.agent.id}
       LIMIT 1
     `;
