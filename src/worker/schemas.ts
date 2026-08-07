@@ -64,6 +64,15 @@ export const whatsappChannelUpdatePayloadSchema = z.object({
   message: z.record(z.string(), z.unknown()),
 }).strict();
 
+export const executionJobPayloadSchema = z.object({
+  organizationId: uuid,
+  executionJobId: uuid,
+}).strict();
+
+export const executionMaintenancePayloadSchema = z.object({
+  organizationId: uuid.optional(),
+}).strict();
+
 export type AgentTeamRunPayload = z.infer<typeof agentTeamRunPayloadSchema>;
 export type DocumentParsePayload = z.infer<typeof documentParsePayloadSchema>;
 export type AgentRunResumePayload = z.infer<typeof agentRunResumePayloadSchema>;
@@ -76,6 +85,8 @@ export type BrowserResumePayload = z.infer<typeof browserResumePayloadSchema>;
 export type NotificationDispatchPayload = z.infer<typeof notificationDispatchPayloadSchema>;
 export type TelegramUpdatePayload = z.infer<typeof telegramUpdatePayloadSchema>;
 export type WhatsAppChannelUpdatePayload = z.infer<typeof whatsappChannelUpdatePayloadSchema>;
+export type ExecutionJobPayload = z.infer<typeof executionJobPayloadSchema>;
+export type ExecutionMaintenancePayload = z.infer<typeof executionMaintenancePayloadSchema>;
 
 export const supportedWorkerTasks = [
   "agent-team-run",
@@ -97,5 +108,9 @@ export const supportedWorkerTasks = [
   "browser-artifact-cleanup",
   "site-connection-health-check",
   "oauth-token-refresh",
+  "execution-run",
+  "execution-cancel",
+  "execution-cleanup",
+  "execution-reconcile",
 ] as const;
 export type SupportedWorkerTask = typeof supportedWorkerTasks[number];
