@@ -67,14 +67,7 @@ function unlinkAction(message: WhatsAppIncomingMessage) {
 
 function syntheticPayload(message: WhatsAppIncomingMessage, phoneNumberId: string) {
   return {
-    entry: [{
-      changes: [{
-        value: {
-          metadata: { phone_number_id: phoneNumberId },
-          messages: [message],
-        },
-      }],
-    }],
+    entry: [{ changes: [{ value: { metadata: { phone_number_id: phoneNumberId }, messages: [message] } }] }],
   };
 }
 
@@ -91,7 +84,19 @@ function safeLog(level: "info" | "warn" | "error", event: string, metadata: Reco
 }
 
 function policyFeatureResolver(policy: Awaited<ReturnType<typeof resolveEffectiveWhatsAppPolicy>>) {
+  const recognizedAdministrativeActions = new Set([
+    "admin.commands",
+    "agents.manage",
+    "runs.manage",
+    "approvals.manage",
+    "integrations.read",
+    "site_connections.read",
+    "mcp.read",
+    "browser.read",
+    "sandbox.read",
+  ]);
   return async (key: string) => {
+    if (key.startsWith("action:")) return policy.allowedActions.includes(key.slice("action:".length));
     if (key === "whatsapp.chat") {
       return policy.status === "active"
         && policy.autoReplyEnabled
@@ -103,16 +108,7 @@ function policyFeatureResolver(policy: Awaited<ReturnType<typeof resolveEffectiv
       return policy.filesEnabled && policy.permissions.includes("files.use");
     }
     if (key === "whatsapp.admin_commands") {
-      const explicitlyAllowed = new Set([
-        "admin.commands",
-        "agents.manage",
-        "runs.manage",
-        "approvals.manage",
-        "integrations.read",
-        "browser.read",
-        "sandbox.read",
-      ]);
-      return policy.allowedActions.some((action) => explicitlyAllowed.has(action));
+      return policy.allowedActions.some((action) => recognizedAdministrativeActions.has(action));
     }
     return false;
   };
@@ -129,20 +125,13 @@ export async function processWhatsAppChannelUpdate(input: {
   message: WhatsAppIncomingMessage;
 }) {
   const config = requireWhatsAppConfig();
-  const transport = createWhatsAppChannelClientTransport({
-    to: input.message.from,
-    publicAppUrl: config.publicAppUrl,
-  });
+  const transport = createWhatsAppChannelClientTransport({ to: input.message.from, publicAppUrl: config.publicAppUrl });
   await markMessageAsRead({ messageId: input.message.id }).catch(() => undefined);
 
   try {
     const token = parseConnectToken(messageText(input.message));
     if (token) {
-      const linked = await consumeWhatsAppConnectToken({
-        token,
-        waId: input.message.from,
-        messageId: input.message.id,
-      });
+      const linked = await consumeWhatsAppConnectToken({ token, waId: input.message.from, messageId: input.message.id });
       if (!linked.ok || !linked.organizationId) {
         await sendChannelClientView(transport, {
           text: linked.ok
@@ -154,11 +143,8 @@ export async function processWhatsAppChannelUpdate(input: {
         return;
       }
       const session = await ensureChannelClientSession({
-        channel: "whatsapp",
-        userId: linked.userId,
-        organizationId: linked.organizationId,
-        externalUserId: input.message.from,
-        externalChatId: input.message.from,
+        channel: "whatsapp", userId: linked.userId, organizationId: linked.organizationId,
+        externalUserId: input.message.from, externalChatId: input.message.from,
       });
       const policy = await resolveEffectiveWhatsAppPolicy({ organizationId: linked.organizationId, userId: linked.userId });
       const projection = await ensureOrganizationWhatsAppProjection(linked.organizationId);
@@ -175,11 +161,8 @@ export async function processWhatsAppChannelUpdate(input: {
         routingPolicy: channelPolicyForWhatsApp(connection.id, policy),
       }, async () => executeRuntime({
         identity: {
-          channel: "whatsapp" as const,
-          userId: linked.userId,
-          organizationId: linked.organizationId!,
-          externalUserId: input.message.from,
-          externalChatId: input.message.from,
+          channel: "whatsapp" as const, userId: linked.userId, organizationId: linked.organizationId!,
+          externalUserId: input.message.from, externalChatId: input.message.from,
         },
         session,
         connection,
@@ -217,11 +200,8 @@ export async function processWhatsAppChannelUpdate(input: {
     }
 
     let session = await ensureChannelClientSession({
-      channel: "whatsapp",
-      userId: user.userId,
-      organizationId: user.organizationId,
-      externalUserId: input.message.from,
-      externalChatId: input.message.from,
+      channel: "whatsapp", userId: user.userId, organizationId: user.organizationId,
+      externalUserId: input.message.from, externalChatId: input.message.from,
     });
     const projection = await ensureOrganizationWhatsAppProjection(user.organizationId);
     const connection = connectionForWhatsAppPolicy(projection, policy);
@@ -235,10 +215,7 @@ export async function processWhatsAppChannelUpdate(input: {
       await sendChannelClientView(transport, {
         path: ["الرئيسية", "فصل الحساب"],
         text: "سيؤدي الفصل إلى إيقاف وصول WhatsApp إلى حساب المنصة. هل تريد المتابعة؟",
-        actions: [[
-          { id: "cc.unlink.confirm", title: "تأكيد الفصل" },
-          { id: "cc.unlink.cancel", title: "إلغاء" },
-        ]],
+        actions: [[{ id: "cc.unlink.confirm", title: "تأكيد الفصل" }, { id: "cc.unlink.cancel", title: "إلغاء" }]],
       });
       await markEvent(input.eventRowId, "completed");
       return;
@@ -260,11 +237,7 @@ export async function processWhatsAppChannelUpdate(input: {
     const currentActionId = runtimeActionId(input.message);
     const denied = await deniedChannelFeature({
       requirements: requiredChannelFeatures({
-        channel: "whatsapp",
-        session,
-        incoming,
-        actionId: currentActionId,
-        text: incoming.text,
+        channel: "whatsapp", session, incoming, actionId: currentActionId, text: incoming.text,
       }),
       featureAllowed,
     });
@@ -283,12 +256,8 @@ export async function processWhatsAppChannelUpdate(input: {
       routingPolicy: channelPolicyForWhatsApp(connection.id, policy),
     }, async () => executeRuntime({
       identity: {
-        channel: "whatsapp" as const,
-        userId: user.userId,
-        organizationId: user.organizationId!,
-        externalUserId: input.message.from,
-        externalChatId: input.message.from,
-        displayName: user.name,
+        channel: "whatsapp" as const, userId: user.userId, organizationId: user.organizationId!,
+        externalUserId: input.message.from, externalChatId: input.message.from, displayName: user.name,
       },
       session,
       connection,
@@ -299,10 +268,8 @@ export async function processWhatsAppChannelUpdate(input: {
       featureAllowed,
     }));
     safeLog("info", "whatsapp.command.handled", {
-      eventRowId: input.eventRowId,
-      handled: result.handled,
-      conversationId: result.conversationId ?? null,
-      runId: result.runId ?? null,
+      eventRowId: input.eventRowId, handled: result.handled,
+      conversationId: result.conversationId ?? null, runId: result.runId ?? null,
     });
     await markEvent(input.eventRowId, "completed");
   } catch (error) {
