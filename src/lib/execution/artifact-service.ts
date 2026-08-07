@@ -156,5 +156,6 @@ export async function executionArtifactDownload(input: {
   if (storage.driver === "r2") {
     return { artifact, url: await storage.createSignedDownloadUrl(artifact.storageKey, 300), body: null };
   }
-  return { artifact, url: null, body: await storage.get(artifact.storageKey) };
+  const bytes = await storage.get(artifact.storageKey);
+  return { artifact, url: null, body: { body: bytes, sizeBytes: bytes.byteLength } };
 }
