@@ -3,6 +3,10 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createTestSqlClient, type Sql } from "../helpers/pg-sql";
 import { createAgentApplication } from "@/lib/agents/application-service";
 import {
+  createChannelTeamRun,
+  listChannelTeams,
+} from "@/lib/channel-client/operations-service";
+import {
   advanceChannelFlow,
   ensureChannelClientSession,
   finishChannelFlow,
@@ -154,5 +158,90 @@ describeDatabase("persistent channel client sessions", () => {
       version_model: model,
       audit_source: "telegram",
     });
+  });
+
+  test("recognizes a published supervisor plus one published worker and queues a real team run", async () => {
+    const providerId = randomUUID();
+    const model = "channel-team-model";
+    await sql`
+      INSERT INTO provider_credentials (
+        id, organization_id, provider, name, base_url, provider_type_id,
+        default_model, allowed_models, discovered_models, validation_status,
+        health_status, enabled, is_default
+      ) VALUES (
+        ${providerId}, ${organizationId}, 'openai_compatible', 'Channel Team Provider',
+        'https://provider.example/v1', 'openai-compatible', ${model},
+        ${sql.json([model])}, ${sql.json([model])}, 'verified', 'healthy', true, false
+      )
+    `;
+    const supervisor = await createAgentApplication({
+      organizationId,
+      userId,
+      requestId: "channel-team-supervisor",
+      source: "whatsapp",
+      data: {
+        name: "مشرف الفريق",
+        description: "مشرف اختبار",
+        instructions: "ادمج النتائج.",
+        providerCredentialId: providerId,
+        model,
+        temperature: 0.2,
+        maxOutputTokens: 1024,
+        publish: true,
+      },
+    });
+    const worker = await createAgentApplication({
+      organizationId,
+      userId,
+      requestId: "channel-team-worker",
+      source: "whatsapp",
+      data: {
+        name: "عامل الفريق",
+        description: "عامل اختبار",
+        instructions: "حلل المهمة.",
+        providerCredentialId: providerId,
+        model,
+        temperature: 0.2,
+        maxOutputTokens: 1024,
+        publish: true,
+      },
+    });
+    const teamId = randomUUID();
+    await sql`
+      INSERT INTO agent_teams (id, organization_id, name, supervisor_agent_id, enabled, max_parallel_workers)
+      VALUES (${teamId}, ${organizationId}, 'فريق قناة الاختبار', ${supervisor.agent.id}, true, 2)
+    `;
+    await sql`
+      INSERT INTO agent_team_members (organization_id, team_id, agent_id, role, position)
+      VALUES (${organizationId}, ${teamId}, ${worker.agent.id}, 'worker', 0)
+    `;
+
+    const teams = await listChannelTeams({ organizationId, userId, page: 1 });
+    const team = teams.rows.find((row) => row.id === teamId);
+    expect(team).toMatchObject({
+      id: teamId,
+      ready: true,
+      supervisor: { id: supervisor.agent.id, status: "published" },
+    });
+    expect(team?.members).toHaveLength(1);
+    expect(team?.members[0]).toMatchObject({ agentId: worker.agent.id, agentStatus: "published" });
+
+    const run = await createChannelTeamRun({
+      organizationId,
+      userId,
+      teamId,
+      prompt: "حلل حالة الاختبار دون تنفيذ المزود داخل اختبار قاعدة البيانات.",
+      requestId: `channel-team-run-${teamId}`,
+    });
+    expect(run.status).toBe("queued");
+    expect(run.teamId).toBe(teamId);
+
+    const [storedRun] = await sql<{ id: string; status: string; graphile_job_id: string | null }[]>`
+      SELECT id, status, graphile_job_id
+      FROM agent_team_runs
+      WHERE id = ${run.id}
+    `;
+    expect(storedRun?.status).toBe("queued");
+    expect(storedRun?.graphile_job_id).toBeTruthy();
   });
 });
