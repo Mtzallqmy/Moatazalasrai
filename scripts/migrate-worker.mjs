@@ -25,6 +25,24 @@ try {
       AND to_regnamespace('app_security') IS NOT NULL AS enabled
   `);
   if (hardening.rows[0]?.enabled) {
+    await pool.query(`GRANT USAGE ON SCHEMA graphile_worker TO moataz_app, moataz_platform, moataz_worker`);
+    await pool.query(`
+      DO $$
+      DECLARE target record;
+      BEGIN
+        FOR target IN
+          SELECT p.oid::regprocedure AS signature
+          FROM pg_proc p
+          JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'graphile_worker' AND p.proname = 'add_job'
+        LOOP
+          EXECUTE format('ALTER FUNCTION %s SECURITY DEFINER', target.signature);
+          EXECUTE format('ALTER FUNCTION %s SET search_path = pg_catalog, graphile_worker', target.signature);
+          EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC', target.signature);
+          EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO moataz_app, moataz_platform, moataz_worker', target.signature);
+        END LOOP;
+      END $$
+    `);
     await pool.query(`
       CREATE OR REPLACE FUNCTION app_security.enqueue_job(
         identifier text,
