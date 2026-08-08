@@ -32,6 +32,12 @@ const ALLOWED_APPLICATION_MIMES = new Set([
   "application/vnd.oasis.opendocument.text", "application/vnd.oasis.opendocument.spreadsheet", "application/vnd.oasis.opendocument.presentation",
   "application/rtf", "application/epub+zip", "application/msword", "application/vnd.ms-excel", "application/vnd.ms-powerpoint",
 ]);
+export const ALLOWED_ATTACHMENT_TYPES = new Set([
+  ...ALLOWED_APPLICATION_MIMES,
+  "image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp", "image/tiff", "image/svg+xml", "image/heic", "image/heif",
+  "audio/mpeg", "audio/wav", "audio/ogg", "audio/mp4", "video/mp4", "video/webm", "video/quicktime",
+  "text/plain", "text/markdown", "text/csv", "text/tab-separated-values", "text/html", "text/css", "text/xml",
+]);
 
 function cleanFilename(value: string) {
   return value.replace(/[^\p{L}\p{N}._ -]/gu, "_").slice(0, 180) || "file";
@@ -39,6 +45,24 @@ function cleanFilename(value: string) {
 function filenameExtension(filename: string) {
   return filename.toLowerCase() === "dockerfile" ? ".dockerfile" : path.extname(filename).toLowerCase();
 }
+function isOctet(mime: string) { return mime === "application/octet-stream"; }
+function familyMatches(ext: string, mime: string) {
+  if (!ext || ext === ".dockerfile") return mime.startsWith("text/") || mime === "application/octet-stream";
+  if ([".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".svg", ".heic", ".heif"].includes(ext)) return mime.startsWith("image/") || isOctet(mime);
+  if (ext === ".pdf") return mime === "application/pdf" || isOctet(mime);
+  if ([".mp3", ".wav", ".ogg", ".m4a"].includes(ext)) return mime.startsWith("audio/") || isOctet(mime);
+  if ([".mp4", ".webm", ".mov"].includes(ext)) return mime.startsWith("video/") || isOctet(mime);
+  if ([".zip", ".rar", ".7z", ".tar", ".gz", ".tgz"].includes(ext)) return ["application/zip", "application/x-zip-compressed", "application/vnd.rar", "application/x-rar-compressed", "application/x-7z-compressed", "application/gzip", "application/x-gzip", "application/x-tar", "application/octet-stream"].includes(mime);
+  if ([".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".epub", ".doc", ".xls", ".ppt", ".rtf"].includes(ext)) return mime.startsWith("application/") && !["application/pdf", "application/x-msdownload"].includes(mime);
+  if (TEXT_EXT_MIME_FAMILY.has(ext)) return mime.startsWith("text/") || ["application/json", "application/xml", "application/octet-stream"].includes(mime);
+  return true;
+}
+const TEXT_EXT_MIME_FAMILY = new Set([
+  ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".xml", ".yaml", ".yml", ".log", ".ini", ".conf", ".env", ".sql",
+  ".js", ".jsx", ".ts", ".tsx", ".py", ".java", ".c", ".h", ".cpp", ".hpp", ".cs", ".go", ".rs", ".php", ".rb", ".swift",
+  ".kt", ".kts", ".dart", ".vue", ".svelte", ".sh", ".bash", ".ps1", ".toml", ".gradle", ".html", ".htm", ".css", ".scss",
+]);
+
 export function validateDeclaredMime(filename: string, mimeType: string) {
   const normalized = (mimeType || "application/octet-stream").split(";", 1)[0]!.trim().toLowerCase() || "application/octet-stream";
   const ext = filenameExtension(filename);
@@ -46,6 +70,7 @@ export function validateDeclaredMime(filename: string, mimeType: string) {
   const mimeAllowed = ALLOWED_APPLICATION_MIMES.has(normalized) || ALLOWED_MIME_PREFIXES.some((prefix) => normalized.startsWith(prefix));
   if (!extensionAllowed) throw new ApiError(415, "UNSUPPORTED_FILE_TYPE", "امتداد الملف غير مدعوم للتحليل الآمن.");
   if (!mimeAllowed) throw new ApiError(415, "UNSUPPORTED_FILE_TYPE", "نوع الملف المعلن غير مدعوم.");
+  if (!familyMatches(ext, normalized)) throw new ApiError(415, "FILE_TYPE_MISMATCH", "نوع الملف المعلن لا يطابق امتداده.");
   return normalized;
 }
 
@@ -113,22 +138,17 @@ export async function storeAttachment(input: {
     });
     if (!created) throw new Error("ATTACHMENT_CREATE_FAILED");
 
-    const indexed = await indexProcessedAttachment({
-      attachmentId: id,
-      organizationId: input.organizationId,
-      conversationId: input.conversationId,
-      processed,
-    });
-    const legacyStatus = indexed.status === "unsupported" || indexed.status === "failed" ? "failed" : "ready";
-    const [finalized] = await db().update(attachments).set({
+    const indexed = await indexProcessedAttachment({ attachmentId: id, organizationId: input.organizationId, conversationId: input.conversationId, processed });
+    const legacyStatus = indexed.status === "unsupported" ? "failed" : "ready";
+    await db().update(attachments).set({
       processingStatus: legacyStatus,
       processingErrorCode: indexed.status === "unsupported" ? processed.warnings[0] ?? "UNSUPPORTED_FILE_TYPE" : null,
       updatedAt: new Date(),
-    }).where(and(eq(attachments.id, id), eq(attachments.organizationId, input.organizationId))).returning({ processingStatus: attachments.processingStatus });
+    }).where(and(eq(attachments.id, id), eq(attachments.organizationId, input.organizationId)));
 
     return {
       ...created,
-      processingStatus: finalized?.processingStatus ?? legacyStatus,
+      processingStatus: indexed.status,
       intelligenceStatus: indexed.status,
       chunkCount: indexed.chunkCount,
       indexedAt: indexed.indexedAt,
@@ -161,25 +181,14 @@ export async function deleteAttachmentContent(file: { content: Buffer | null; st
 export async function attachmentContext(organizationId: string, conversationId: string, ids: string[]) {
   if (ids.length === 0) return { text: "", rows: [] };
   const rows = await db().select({
-    id: attachments.id,
-    filename: attachments.filename,
-    mimeType: attachments.mimeType,
-    sizeBytes: attachments.sizeBytes,
-    content: attachments.content,
-    storageDriver: attachments.storageDriver,
-    objectKey: attachments.objectKey,
-    extractedText: attachments.extractedText,
-    processingStatus: attachments.processingStatus,
-    intelligenceStatus: attachmentIntelligence.status,
+    id: attachments.id, filename: attachments.filename, mimeType: attachments.mimeType, sizeBytes: attachments.sizeBytes,
+    content: attachments.content, storageDriver: attachments.storageDriver, objectKey: attachments.objectKey,
+    extractedText: attachments.extractedText, processingStatus: attachments.processingStatus, intelligenceStatus: attachmentIntelligence.status,
   }).from(attachments).leftJoin(attachmentIntelligence, eq(attachmentIntelligence.attachmentId, attachments.id)).where(and(
-    eq(attachments.organizationId, organizationId),
-    eq(attachments.conversationId, conversationId),
-    inArray(attachments.id, ids),
-    isNull(attachments.deletedAt),
+    eq(attachments.organizationId, organizationId), eq(attachments.conversationId, conversationId), inArray(attachments.id, ids), isNull(attachments.deletedAt),
   ));
   if (rows.length !== ids.length) throw new ApiError(404, "FILE_NOT_FOUND", "أحد الملفات غير موجود.");
-  const hydrated = await Promise.all(rows.map(async (row) => ({
-    ...row,
+  const hydrated = await Promise.all(rows.map(async (row) => ({ ...row,
     content: ["image/jpeg", "image/png", "image/webp", "image/gif"].includes(row.mimeType) ? Buffer.from(await readAttachmentContent(row)) : Buffer.alloc(0),
   })));
   const parts = hydrated.map((row) => row.extractedText ? `\n\n[File: ${row.filename}]\n${row.extractedText.slice(0, 40_000)}` : `\n\n[File: ${row.filename}; status=${row.intelligenceStatus ?? row.processingStatus}]`);
