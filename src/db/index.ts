@@ -6,8 +6,9 @@ import * as controlPlaneSchema from "./control-plane-schema";
 import * as adminSchema from "./admin-schema";
 import * as executionSchema from "./execution-schema";
 import * as fileIntelligenceSchema from "./file-intelligence-schema";
+import * as toolRunSchema from "./tool-run-schema";
 
-const schema = { ...coreSchema, ...channelSchema, ...controlPlaneSchema, ...adminSchema, ...executionSchema, ...fileIntelligenceSchema };
+const schema = { ...coreSchema, ...channelSchema, ...controlPlaneSchema, ...adminSchema, ...executionSchema, ...fileIntelligenceSchema, ...toolRunSchema };
 type DatabaseSchema = typeof schema;
 let database: ReturnType<typeof drizzle<DatabaseSchema>> | null = null;
 
@@ -109,6 +110,15 @@ const requiredTables = [
   "execution_leases",
   "execution_credential_grants",
   "execution_usage",
+  "tool_runs",
+  "tool_run_messages",
+  "tool_run_inputs",
+  "tool_run_approvals",
+  "data_interpreter_sessions",
+  "coding_projects",
+  "coding_agent_runs",
+  "browser_agent_sessions",
+  "voice_generation_jobs",
 ] as const;
 
 export async function checkDatabase(): Promise<{
