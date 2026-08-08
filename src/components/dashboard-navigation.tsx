@@ -235,6 +235,7 @@ export function DashboardNavigation({ session, activePath }: { session: Dashboar
     ? allowedNavigation.slice(0, 8)
     : allowedNavigation.filter((item) => [item.label, ...(item.keywords ?? [])].join(" ").toLocaleLowerCase("ar").includes(normalizedQuery.toLocaleLowerCase("ar"))).slice(0, 5);
   const entityCount = Object.values(entityResults).reduce((sum, items) => sum + items.length, 0);
+  const effectiveSearchState = normalizedQuery.length < 2 ? "idle" : searchState;
 
   useEffect(() => {
     if (!open) return;
@@ -270,11 +271,7 @@ export function DashboardNavigation({ session, activePath }: { session: Dashboar
   }, [searchOpen]);
 
   useEffect(() => {
-    if (!searchOpen || normalizedQuery.length < 2) {
-      setSearchState("idle");
-      setEntityResults({ conversations: [], agents: [], files: [], runs: [], knowledge: [] });
-      return;
-    }
+    if (!searchOpen || normalizedQuery.length < 2) return;
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       setSearchState("loading");
@@ -284,7 +281,7 @@ export function DashboardNavigation({ session, activePath }: { session: Dashboar
         if (!response.ok || !payload?.success || !payload.data) throw new Error(payload?.error?.message ?? "تعذر البحث.");
         setEntityResults(payload.data.groups);
         setSearchState("ready");
-      } catch (error) {
+      } catch {
         if (controller.signal.aborted) return;
         setSearchState("error");
       }
@@ -386,9 +383,9 @@ export function DashboardNavigation({ session, activePath }: { session: Dashboar
               <button type="button" onClick={() => setSearchOpen(false)} aria-label="إغلاق"><X size={18} /></button>
             </div>
             <div className="command-results">
-              {searchState === "loading" ? <div className="search-loading" aria-live="polite">جارٍ البحث…</div> : null}
-              {searchState === "error" ? <div className="search-error" role="alert">تعذر البحث الآن. حاول مجددًا.</div> : null}
-              {normalizedQuery.length >= 2 ? searchGroupLabels.map(({ key, label, icon: Icon }) => {
+              {effectiveSearchState === "loading" ? <div className="search-loading" aria-live="polite">جارٍ البحث…</div> : null}
+              {effectiveSearchState === "error" ? <div className="search-error" role="alert">تعذر البحث الآن. حاول مجددًا.</div> : null}
+              {normalizedQuery.length >= 2 && effectiveSearchState === "ready" ? searchGroupLabels.map(({ key, label, icon: Icon }) => {
                 const items = entityResults[key];
                 if (!items.length) return null;
                 return (
@@ -411,7 +408,7 @@ export function DashboardNavigation({ session, activePath }: { session: Dashboar
                   })}
                 </section>
               ) : null}
-              {normalizedQuery.length >= 2 && searchState === "ready" && entityCount === 0 && navigationResults.length === 0 ? <p>لا توجد نتائج مطابقة.</p> : null}
+              {normalizedQuery.length >= 2 && effectiveSearchState === "ready" && entityCount === 0 && navigationResults.length === 0 ? <p>لا توجد نتائج مطابقة.</p> : null}
             </div>
           </section>
         </div>
