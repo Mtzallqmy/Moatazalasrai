@@ -6,6 +6,7 @@ import { SiteFooter } from "@/components/site-footer";
 import { db } from "@/db";
 import { platformModules } from "@/db/control-plane-schema";
 import { loadCustomPermissions } from "@/lib/auth/custom-permissions";
+import { SessionExpiryGuard } from "@/components/session-expiry-guard";
 
 export async function DashboardShell({ session, activePath, title, description, actions, children }: {
   session: DashboardSession;
@@ -29,6 +30,7 @@ export async function DashboardShell({ session, activePath, title, description, 
 
   return (
     <main className="dashboard-root">
+      <SessionExpiryGuard expiresAt={session.accessExpiresAt} />
       <DashboardNavigation session={navigationSession} activePath={activePath} />
       <section className="dashboard-main" id="main-content">
         <header className="dashboard-header">

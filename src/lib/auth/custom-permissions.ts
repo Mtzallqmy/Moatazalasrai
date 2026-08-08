@@ -7,7 +7,15 @@ import { ALL_PERMISSIONS, type Permission } from "@/lib/auth/permissions";
 const knownPermissions = new Set<string>(ALL_PERMISSIONS);
 
 export async function loadCustomPermissions(organizationId: string, userId: string): Promise<Permission[]> {
-  const rows = await db()
+  const [membership, rows] = await Promise.all([
+    db().select({ permissions: organizationMembers.customPermissions })
+      .from(organizationMembers)
+      .where(and(
+        eq(organizationMembers.organizationId, organizationId),
+        eq(organizationMembers.userId, userId),
+      ))
+      .limit(1),
+    db()
     .select({ permission: customRolePermissions.permission })
     .from(organizationMembers)
     .innerJoin(memberCustomRoles, eq(memberCustomRoles.organizationMemberId, organizationMembers.id))
@@ -21,9 +29,12 @@ export async function loadCustomPermissions(organizationId: string, userId: stri
       eq(customRoles.enabled, true),
       isNull(customRoles.deletedAt),
       eq(customRolePermissions.allowed, true),
-    ));
+    )),
+  ]);
 
-  return [...new Set(rows
-    .map((row) => row.permission)
+  return [...new Set([
+    ...(membership[0]?.permissions ?? []),
+    ...rows.map((row) => row.permission),
+  ]
     .filter((permission): permission is Permission => knownPermissions.has(permission)))];
 }

@@ -4,6 +4,7 @@ import { enterTenantDatabaseContext, runWithSystemDatabaseContext } from "@/db/t
 import { mobileSessions, organizationMembers, platformApiKeys } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
 import { hashApiKey, secureHashEquals } from "@/lib/security/encryption";
+import { activeMembership } from "@/lib/auth/membership-access";
 
 export type ApiScope =
   | "agents:read" | "agents:write"
@@ -78,6 +79,7 @@ async function resolveApiPrincipal(request: Request): Promise<ApiPrincipal | nul
       eq(mobileSessions.accessTokenHash, tokenHash),
       isNull(mobileSessions.revokedAt),
       gt(mobileSessions.accessExpiresAt, new Date()),
+      activeMembership(),
     )).limit(1);
   if (!mobile) return null;
   const mobileScopes = mobile.role === "owner" || mobile.role === "admin"
