@@ -6,10 +6,14 @@ import { DashboardShell } from "@/components/dashboard-shell";
 import { db } from "@/db";
 import { agents, runs } from "@/db/schema";
 import { getRunEvents } from "@/lib/agents/runtime";
+import { loadCustomPermissions } from "@/lib/auth/custom-permissions";
+import { can } from "@/lib/auth/permissions";
 import { currentSession } from "@/lib/auth/session";
 import { requireConversationAccess } from "@/lib/chat/access";
 import { detailedDateTime, formatCompactNumber, formatDurationMs, friendlyModelName, runStatusPresentation } from "@/lib/ui/presentation";
 import "../runs-workspace.css";
+
+const SENSITIVE_KEY = /(token|secret|authorization|api.?key|password|cookie|credential)/i;
 
 function durationMs(startedAt: Date | null, completedAt: Date | null) {
   if (!startedAt) return null;
@@ -28,17 +32,31 @@ function eventLabel(type: string) {
   return "حدث تشغيلي";
 }
 
+function redactValue(value: unknown, depth = 0): unknown {
+  if (depth > 4) return "[truncated]";
+  if (typeof value === "string") return value.slice(0, 180);
+  if (Array.isArray(value)) return value.slice(0, 20).map((item) => redactValue(item, depth + 1));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 20).map(([key, nested]) => [
+      key,
+      SENSITIVE_KEY.test(key) ? "[redacted]" : redactValue(nested, depth + 1),
+    ]));
+  }
+  return value;
+}
+
 function safePayload(payload: Record<string, unknown>) {
-  return Object.entries(payload)
-    .filter(([key]) => !/(token|secret|authorization|api.?key|password)/i.test(key))
+  return Object.entries(redactValue(payload) as Record<string, unknown>)
     .slice(0, 10)
-    .map(([key, value]) => `${key}: ${typeof value === "string" ? value.slice(0, 180) : JSON.stringify(value).slice(0, 180)}`);
+    .map(([key, value]) => `${key}: ${typeof value === "string" ? value : JSON.stringify(value).slice(0, 180)}`);
 }
 
 export default async function RunDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await currentSession();
   if (!session) redirect("/login");
   if (!session.organizationId || !session.role) redirect("/select-organization");
+  const customPermissions = await loadCustomPermissions(session.organizationId, session.userId);
+  if (!can(session.role, "runs:read") && !customPermissions.includes("runs:read")) redirect("/forbidden");
   const { id } = await params;
   const [run] = await db().select({
     id: runs.id,
