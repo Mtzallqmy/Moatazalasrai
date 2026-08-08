@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, isNull, ne, or } from "drizzle-orm";
+import { and, count, desc, eq, gte, isNull, ne, or, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { agents, conversations, integrations, mcpServers, providerCredentials, runs } from "@/db/schema";
 import type { Role } from "@/lib/auth/permissions";
@@ -17,7 +17,7 @@ export async function loadDashboardSummary(session: DashboardSummarySession) {
   const isMember = session.role === "member";
 
   const runBase = () => db().select({ value: count() }).from(runs);
-  const runCountWhere = (extra?: ReturnType<typeof eq> | ReturnType<typeof and>) => isMember
+  const runCountWhere = (extra?: SQL) => isMember
     ? runBase().innerJoin(conversations, eq(conversations.id, runs.conversationId)).where(and(
         eq(runs.organizationId, session.organizationId),
         memberRunFilter,
@@ -34,16 +34,19 @@ export async function loadDashboardSummary(session: DashboardSummarySession) {
     runCountWhere(and(gte(runs.createdAt, today), eq(runs.status, "failed"))),
     db().select({ value: count() }).from(integrations).where(and(
       eq(integrations.organizationId, session.organizationId),
-      or(eq(integrations.enabled, false), ne(integrations.status, "verified")),
+      eq(integrations.enabled, true),
+      ne(integrations.status, "verified"),
     )),
     db().select({ value: count() }).from(providerCredentials).where(and(
       eq(providerCredentials.organizationId, session.organizationId),
-      or(eq(providerCredentials.enabled, false), ne(providerCredentials.validationStatus, "verified"), ne(providerCredentials.healthStatus, "healthy")),
+      eq(providerCredentials.enabled, true),
       isNull(providerCredentials.deletedAt),
+      or(ne(providerCredentials.validationStatus, "verified"), ne(providerCredentials.healthStatus, "healthy")),
     )),
     db().select({ value: count() }).from(mcpServers).where(and(
       eq(mcpServers.organizationId, session.organizationId),
-      or(eq(mcpServers.enabled, false), ne(mcpServers.status, "connected")),
+      eq(mcpServers.enabled, true),
+      ne(mcpServers.status, "connected"),
     )),
     db().select({
       id: conversations.id,
