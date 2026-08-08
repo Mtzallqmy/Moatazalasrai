@@ -4,7 +4,9 @@ import { agents, attachments, conversations, knowledgeBases, runs } from "@/db/s
 import { can } from "@/lib/auth/permissions";
 import { requireSession } from "@/lib/auth/authorization";
 import { loadCustomPermissions } from "@/lib/auth/custom-permissions";
+import { conversationAccessFilter } from "@/lib/chat/access";
 import { apiSuccess, getRequestId, handleApiError } from "@/lib/http/api";
+import { runStatusPresentation } from "@/lib/ui/presentation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,6 +36,7 @@ export async function GET(request: Request) {
     const customPermissions = await loadCustomPermissions(session.organizationId, session.userId);
     const allowed = (permission: Parameters<typeof can>[1]) => can(session.role, permission) || customPermissions.includes(permission);
     const pattern = `%${query.replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
+    const readableConversation = conversationAccessFilter({ role: session.role, userId: session.userId, access: "read" });
 
     const [conversationRows, agentRows, fileRows, runRows, knowledgeRows] = await Promise.all([
       allowed("agents:run")
@@ -44,6 +47,7 @@ export async function GET(request: Request) {
             updatedAt: conversations.updatedAt,
           }).from(conversations).where(and(
             eq(conversations.organizationId, session.organizationId),
+            readableConversation,
             isNull(conversations.deletedAt),
             or(ilike(conversations.title, pattern), ilike(conversations.summary, pattern)),
           )).orderBy(desc(conversations.updatedAt)).limit(5)
@@ -67,6 +71,7 @@ export async function GET(request: Request) {
             updatedAt: attachments.updatedAt,
           }).from(attachments).where(and(
             eq(attachments.organizationId, session.organizationId),
+            session.role === "member" ? eq(attachments.uploadedByUserId, session.userId) : undefined,
             isNull(attachments.deletedAt),
             ilike(attachments.filename, pattern),
           )).orderBy(desc(attachments.updatedAt)).limit(5)
@@ -77,10 +82,13 @@ export async function GET(request: Request) {
             model: runs.model,
             status: runs.status,
             createdAt: runs.createdAt,
-          }).from(runs).where(and(
-            eq(runs.organizationId, session.organizationId),
-            or(ilike(runs.model, pattern), ilike(runs.requestId, pattern)),
-          )).orderBy(desc(runs.createdAt)).limit(5)
+          }).from(runs)
+            .innerJoin(conversations, eq(conversations.id, runs.conversationId))
+            .where(and(
+              eq(runs.organizationId, session.organizationId),
+              readableConversation,
+              or(ilike(runs.model, pattern), ilike(runs.requestId, pattern)),
+            )).orderBy(desc(runs.createdAt)).limit(5)
         : Promise.resolve([]),
       allowed("files:read")
         ? db().select({
@@ -100,35 +108,35 @@ export async function GET(request: Request) {
         id: row.id,
         title: row.title?.trim() || "محادثة بدون عنوان",
         subtitle: row.summary?.trim() || null,
-        href: `/dashboard/chat?conversation=${row.id}`,
+        href: `/dashboard/chat?conversationId=${encodeURIComponent(row.id)}`,
         updatedAt: row.updatedAt,
       })),
       agents: agentRows.map((row) => ({
         id: row.id,
         title: row.name,
         subtitle: row.description?.trim() || null,
-        href: `/dashboard/agents/${row.id}`,
+        href: `/dashboard/agents#agent-${encodeURIComponent(row.id)}`,
         updatedAt: row.updatedAt,
       })),
       files: fileRows.map((row) => ({
         id: row.id,
         title: row.filename,
         subtitle: row.mimeType,
-        href: `/dashboard/files?file=${row.id}`,
+        href: `/dashboard/files?file=${encodeURIComponent(row.id)}`,
         updatedAt: row.updatedAt,
       })),
       runs: runRows.map((row) => ({
         id: row.id,
         title: `تشغيل ${row.id.slice(0, 8)}`,
-        subtitle: `${row.model} · ${row.status}`,
-        href: `/dashboard/runs/${row.id}`,
+        subtitle: `${row.model} · ${runStatusPresentation[row.status].label}`,
+        href: `/dashboard/runs/${encodeURIComponent(row.id)}`,
         updatedAt: row.createdAt,
       })),
       knowledge: knowledgeRows.map((row) => ({
         id: row.id,
         title: row.name,
         subtitle: row.description?.trim() || null,
-        href: `/dashboard/knowledge?knowledgeBase=${row.id}`,
+        href: `/dashboard/knowledge?knowledgeBase=${encodeURIComponent(row.id)}`,
         updatedAt: row.updatedAt,
       })),
     };
