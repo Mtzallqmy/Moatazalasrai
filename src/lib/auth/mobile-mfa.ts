@@ -82,6 +82,27 @@ export async function verifyMobileMfaChallenge(input: {
       throw error;
     }
 
+    const membership = await client.query<{ id: string }>(`
+      SELECT id
+      FROM organization_members
+      WHERE user_id = $1 AND organization_id = $2
+      FOR KEY SHARE
+    `, [challenge.user_id, challenge.organization_id]);
+    if (membership.rowCount !== 1) {
+      await client.query(`UPDATE mobile_mfa_challenges SET used_at = now() WHERE id = $1 AND used_at IS NULL`, [challenge.id]);
+      await client.query("COMMIT");
+      committed = true;
+      throw new ApiError(403, "MOBILE_MEMBERSHIP_REVOKED", "تعذر إكمال تسجيل الدخول لهذه المساحة.");
+    }
+
+    const tokens = await issueMobileSession({
+      userId: challenge.user_id,
+      organizationId: challenge.organization_id,
+      deviceId: challenge.device_id,
+      deviceName: challenge.device_name ?? undefined,
+      rememberSession: challenge.remember_session,
+    });
+
     const consumed = await client.query(`
       UPDATE mobile_mfa_challenges
       SET used_at = now()
@@ -92,13 +113,6 @@ export async function verifyMobileMfaChallenge(input: {
     await client.query("COMMIT");
     committed = true;
 
-    const tokens = await issueMobileSession({
-      userId: challenge.user_id,
-      organizationId: challenge.organization_id,
-      deviceId: challenge.device_id,
-      deviceName: challenge.device_name ?? undefined,
-      rememberSession: challenge.remember_session,
-    });
     return {
       tokens,
       userId: challenge.user_id,
