@@ -24,6 +24,8 @@ export const codingAgentRunSchema = z.object({
   ])).min(1).max(100),
 }).strict();
 
+const browserReadOnlyActions = new Set(["navigate", "read", "extract"]);
+
 export const browserAgentRunSchema = z.object({
   title: z.string().trim().min(1).max(300),
   idempotencyKey: z.string().trim().min(8).max(200).regex(/^[A-Za-z0-9:_-]+$/),
@@ -35,6 +37,15 @@ export const browserAgentRunSchema = z.object({
   if (!value.allowedDomains.map((item) => item.toLowerCase()).includes(host)) {
     context.addIssue({ code: "custom", path: ["startUrl"], message: "startUrl must be inside allowedDomains" });
   }
+  value.plan.steps.forEach((step, index) => {
+    if (!browserReadOnlyActions.has(step.action) || step.risk !== "low") {
+      context.addIssue({
+        code: "custom",
+        path: ["plan", "steps", index],
+        message: "Browser write/external actions remain disabled until the approval flow is attached to Operational Tool Runs.",
+      });
+    }
+  });
 });
 
 export const voiceStudioRunSchema = z.object({
