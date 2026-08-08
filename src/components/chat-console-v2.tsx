@@ -33,6 +33,8 @@ import {
   type ChatWallpaperId,
 } from "@/lib/chat/appearance";
 import { groupConversations } from "@/lib/chat/conversation-groups";
+import { splitServerEvents } from "@/lib/chat/sse";
+import { acceptedFileInput, humanFileSize, validateClientFile } from "@/lib/files/validation";
 import { apiErrorMessage, apiRequest } from "@/lib/http/client";
 import { getPuterClient } from "@/lib/puter/client";
 import { streamPuterChat } from "@/lib/puter/chat";
@@ -101,6 +103,11 @@ type UploadTask = {
   message?: string | null;
   attachment?: Attachment | null;
 };
+type ActionDialog =
+  | { kind: "rename-conversation"; row: Conversation; value: string }
+  | { kind: "delete-conversation"; row: Conversation }
+  | { kind: "edit-message"; message: Message; value: string }
+  | { kind: "delete-message"; message: Message };
 type ModelOption = {
   providerCredentialId: string;
   providerName: string;
@@ -211,6 +218,9 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
   const [uploadTasks, setUploadTasks] = useState<UploadTask[]>([]);
   const [mobileListOpen, setMobileListOpen] = useState(!conversationId);
   const [showLatest, setShowLatest] = useState(false);
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [actionDialog, setActionDialog] = useState<ActionDialog | null>(null);
+  const [dialogBusy, setDialogBusy] = useState(false);
 
   const streamController = useRef<AbortController | null>(null);
   const puterExecutionRef = useRef<{ executionId: string; userMessageId: string; model: string } | null>(null);
@@ -220,6 +230,7 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
   const scrollAnchor = useRef<HTMLDivElement | null>(null);
   const nearBottom = useRef(true);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const dialogInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const draftReadyRef = useRef(false);
 
   const conversationGroups = useMemo(() => groupConversations(conversations), [conversations]);
@@ -293,6 +304,19 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
       .then(setModels)
       .catch((cause) => setComposerError(apiErrorMessage(cause, "تعذر تحميل النماذج المتاحة.")));
   }, []);
+
+  useEffect(() => {
+    if (!actionDialog) return;
+    const frame = window.requestAnimationFrame(() => dialogInputRef.current?.focus());
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !dialogBusy) setActionDialog(null);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [actionDialog, dialogBusy]);
 
   useEffect(() => {
     if (!conversationId) return;
@@ -398,6 +422,7 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
       const agentName = agents.find((agent) => agent.id === agentId)?.name ?? "وكيل";
       const row: Conversation = { ...created, agentName, status: "active", pinnedAt: null, archivedAt: null, lastMessageAt: null, canWrite: true, canManage: true, updatedAt: new Date(created.updatedAt).toISOString() };
       setConversations((current) => [row, ...current]);
+      setArchivedMode(false);
       setMessages([]);
       setConversationId(row.id);
       setMobileListOpen(false);
@@ -409,13 +434,16 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
     }
   }
 
-  async function renameConversation(row: Conversation) {
-    const title = window.prompt("العنوان الجديد", row.title ?? "");
-    if (!title?.trim()) return;
+  async function renameConversation(row: Conversation, title: string) {
+    if (!title.trim()) return false;
     try {
-      const updated = await conversationAction({ action: "rename", conversationId: row.id, title });
+      const updated = await conversationAction({ action: "rename", conversationId: row.id, title: title.trim() });
       setConversations((items) => items.map((item) => item.id === row.id ? { ...item, title: updated.title } : item));
-    } catch (cause) { setConversationError(apiErrorMessage(cause, "تعذر تغيير الاسم.")); }
+      return true;
+    } catch (cause) {
+      setConversationError(apiErrorMessage(cause, "تعذر تغيير الاسم."));
+      return false;
+    }
   }
 
   async function archiveConversation(row: Conversation) {
@@ -434,7 +462,14 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
   async function restoreConversation(row: Conversation) {
     try {
       await conversationAction({ action: "archive", conversationId: row.id, archived: false });
-      setConversations((items) => items.filter((item) => item.id !== row.id));
+      const remaining = conversations.filter((item) => item.id !== row.id);
+      setConversations(remaining);
+      if (conversationId === row.id) {
+        const next = remaining[0]?.id ?? "";
+        setConversationId(next);
+        setMessages([]);
+        updateUrl(next || null, "archived");
+      }
     } catch (cause) { setConversationError(apiErrorMessage(cause, "تعذر استعادة المحادثة.")); }
   }
 
@@ -450,7 +485,6 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
   }
 
   async function deleteConversation(row: Conversation) {
-    if (!window.confirm("نقل المحادثة إلى المحذوفات؟")) return;
     try {
       await conversationAction({ action: "delete", conversationId: row.id });
       const remaining = conversations.filter((item) => item.id !== row.id);
@@ -460,7 +494,11 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
         setConversationId(next);
         updateUrl(next || null);
       }
-    } catch (cause) { setConversationError(apiErrorMessage(cause, "تعذر حذف المحادثة.")); }
+      return true;
+    } catch (cause) {
+      setConversationError(apiErrorMessage(cause, "تعذر حذف المحادثة."));
+      return false;
+    }
   }
 
   function setArchivedView(next: boolean) {
@@ -504,36 +542,35 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
     let buffer = "";
     let assistantId = `stream-${Date.now()}`;
     let sawServerMessage = false;
+    const applyEvent = (event: string, dataText: string) => {
+      if (dataText === "[DONE]") return;
+      const data = JSON.parse(dataText) as Record<string, unknown>;
+      if (event === "message" && data.userMessage) {
+        sawServerMessage = true;
+        setMessages((items) => items.map((item) => item.id === optimisticId ? data.userMessage as Message : item));
+      } else if (event === "run" && typeof data.runId === "string") {
+        setRunId(data.runId);
+        assistantId = `stream-${data.runId}`;
+        setMessages((items) => [...items, { id: assistantId, role: "assistant", content: "", status: "streaming", createdAt: new Date().toISOString(), metadata: { runId: data.runId } }]);
+      } else if (event === "delta" && typeof data.text === "string") {
+        setMessages((items) => items.map((item) => item.id === assistantId ? { ...item, content: item.content + data.text } : item));
+      } else if (event === "complete" && typeof data.messageId === "string") {
+        const fallbackUsed = data.fallbackUsed === true;
+        setMessages((items) => items.map((item) => item.id === assistantId ? { ...item, id: String(data.messageId), status: "completed", metadata: { ...(item.metadata ?? {}), fallbackUsed } } : item));
+        setNotice(fallbackUsed ? "استخدم النظام مزوّدًا بديلًا لإكمال الرد وفق سياسة الاستمرارية المفعّلة." : null);
+        setRetryText(null);
+      } else if (event === "error") {
+        setMessages((items) => items.map((item) => item.id === assistantId ? { ...item, status: item.content.trim() ? "interrupted" : "failed", errorCode: typeof data.code === "string" ? data.code : "PROVIDER_REQUEST_FAILED" } : item));
+        throw new Error(typeof data.message === "string" ? data.message : "تعذر تشغيل الوكيل.");
+      }
+    };
     while (true) {
       const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const parsed = splitServerEvents(buffer, done);
+      buffer = parsed.remainder;
+      for (const item of parsed.events) applyEvent(item.event, item.data);
       if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const blocks = buffer.split(/\r?\n\r?\n/);
-      buffer = blocks.pop() ?? "";
-      for (const block of blocks) {
-        const event = block.split(/\r?\n/).find((line) => line.startsWith("event:"))?.slice(6).trim() ?? "message";
-        const dataText = block.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).join("\n");
-        if (!dataText) continue;
-        const data = JSON.parse(dataText) as Record<string, unknown>;
-        if (event === "message" && data.userMessage) {
-          sawServerMessage = true;
-          setMessages((items) => items.map((item) => item.id === optimisticId ? data.userMessage as Message : item));
-        } else if (event === "run" && typeof data.runId === "string") {
-          setRunId(data.runId);
-          assistantId = `stream-${data.runId}`;
-          setMessages((items) => [...items, { id: assistantId, role: "assistant", content: "", status: "streaming", createdAt: new Date().toISOString(), metadata: { runId: data.runId } }]);
-        } else if (event === "delta" && typeof data.text === "string") {
-          setMessages((items) => items.map((item) => item.id === assistantId ? { ...item, content: item.content + data.text } : item));
-        } else if (event === "complete" && typeof data.messageId === "string") {
-          const fallbackUsed = data.fallbackUsed === true;
-          setMessages((items) => items.map((item) => item.id === assistantId ? { ...item, id: String(data.messageId), status: "completed", metadata: { ...(item.metadata ?? {}), fallbackUsed } } : item));
-          setNotice(fallbackUsed ? "استخدم النظام مزوّدًا بديلًا لإكمال الرد وفق سياسة الاستمرارية المفعّلة." : null);
-          setRetryText(null);
-        } else if (event === "error") {
-          setMessages((items) => items.map((item) => item.id === assistantId ? { ...item, status: item.content.trim() ? "interrupted" : "failed", errorCode: typeof data.code === "string" ? data.code : "PROVIDER_REQUEST_FAILED" } : item));
-          throw new Error(typeof data.message === "string" ? data.message : "تعذر تشغيل الوكيل.");
-        }
-      }
     }
     if (!sawServerMessage) {
       const refreshed = await apiRequest<Message[]>(`/api/dashboard/chat?conversationId=${encodeURIComponent(conversationId)}&limit=${MESSAGE_PAGE_SIZE}&page=1`);
@@ -580,8 +617,9 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
   async function processUpload(taskId: string, file: File) {
     cancelledUploads.current.delete(taskId);
     patchUpload(taskId, { state: "VALIDATING", progress: 0, message: null, attachment: null });
-    if (file.size === 0) {
-      patchUpload(taskId, { state: "FAILED", progress: null, message: "الملف فارغ." });
+    const validation = validateClientFile(file);
+    if (!validation.valid) {
+      patchUpload(taskId, { state: "FAILED", progress: null, message: validation.message });
       return;
     }
     patchUpload(taskId, { state: "UPLOADING", progress: 0 });
@@ -698,10 +736,10 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
       setDraft("");
     } catch (cause) {
       if (cause instanceof DOMException && cause.name === "AbortError") {
-        setMessages((items) => items.map((item) => item.status === "streaming" ? { ...item, status: "cancelled" } : item));
+        setMessages((items) => items.map((item) => item.id === optimisticId && item.status === "sending" ? { ...item, status: "cancelled" } : item.status === "streaming" ? { ...item, status: "cancelled" } : item));
         setComposerError("تم إيقاف التوليد.");
       } else {
-        setMessages((items) => items.map((item) => item.status === "streaming" ? { ...item, status: item.content.trim() ? "interrupted" : "failed" } : item));
+        setMessages((items) => items.map((item) => item.id === optimisticId && item.status === "sending" ? { ...item, status: "failed" } : item.status === "streaming" ? { ...item, status: item.content.trim() ? "interrupted" : "failed" } : item));
         setComposerError(cause instanceof Error ? cause.message : "تعذر تشغيل الوكيل.");
         setRetryText(text.trim());
       }
@@ -788,10 +826,9 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
     if (executionMode === "server" && runId) await apiRequest("/api/dashboard/runs", { method: "DELETE", body: { runId } }).catch(() => undefined);
   }
 
-  async function mutateMessage(message: Message, action: "edit" | "delete") {
-    if (action === "delete" && !window.confirm("حذف هذه الرسالة؟")) return;
-    const content = action === "edit" ? window.prompt("عدّل الرسالة ثم أعد توليد الرد", message.content)?.trim() : undefined;
-    if (action === "edit" && !content) return;
+  async function mutateMessage(message: Message, action: "edit" | "delete", nextContent?: string) {
+    const content = action === "edit" ? nextContent?.trim() : undefined;
+    if (action === "edit" && !content) return false;
     try {
       await apiRequest<Message>("/api/dashboard/messages", { method: "PATCH", body: { action, messageId: message.id, ...(content ? { content } : {}) } });
       if (action === "delete") setMessages((items) => items.filter((item) => item.id !== message.id));
@@ -799,7 +836,11 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
         setMessages((items) => items.map((item) => item.id === message.id ? { ...item, content: content ?? item.content, editedAt: new Date().toISOString() } : item));
         await sendText(content!);
       }
-    } catch (cause) { setMessageError(apiErrorMessage(cause, "تعذر تحديث الرسالة.")); }
+      return true;
+    } catch (cause) {
+      setMessageError(apiErrorMessage(cause, "تعذر تحديث الرسالة."));
+      return false;
+    }
   }
 
   async function saveAppearance(next: ChatAppearance) {
@@ -829,6 +870,32 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
     nearBottom.current = true;
     setShowLatest(false);
     scrollAnchor.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }
+
+  async function copyMessage(message: Message) {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopiedMessageId(message.id);
+      window.setTimeout(() => setCopiedMessageId((current) => current === message.id ? null : current), 1_500);
+    } catch {
+      setMessageError("تعذر نسخ الرسالة. اسمح للمتصفح بالوصول إلى الحافظة ثم حاول مجددًا.");
+    }
+  }
+
+  async function submitActionDialog(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!actionDialog || dialogBusy) return;
+    setDialogBusy(true);
+    try {
+      let succeeded = false;
+      if (actionDialog.kind === "rename-conversation") succeeded = await renameConversation(actionDialog.row, actionDialog.value);
+      if (actionDialog.kind === "delete-conversation") succeeded = await deleteConversation(actionDialog.row);
+      if (actionDialog.kind === "edit-message") succeeded = await mutateMessage(actionDialog.message, "edit", actionDialog.value);
+      if (actionDialog.kind === "delete-message") succeeded = await mutateMessage(actionDialog.message, "delete");
+      if (succeeded) setActionDialog(null);
+    } finally {
+      setDialogBusy(false);
+    }
   }
 
   const sendDisabled = !conversationId || activeConversation?.canWrite === false || !draft.trim() || uploadsBusy
@@ -875,10 +942,10 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
                       <summary aria-label={`إجراءات ${row.title || "المحادثة"}`}><MoreHorizontal size={18} /></summary>
                       <div>
                         <button type="button" onClick={() => selectConversation(row.id)}>فتح</button>
-                        <button type="button" onClick={() => void renameConversation(row)}><Pencil size={14} /> إعادة تسمية</button>
+                        <button type="button" onClick={() => setActionDialog({ kind: "rename-conversation", row, value: row.title ?? "" })}><Pencil size={14} /> إعادة تسمية</button>
                         {!archivedMode ? <button type="button" onClick={() => void pinConversation(row)}><Pin size={14} /> {row.pinnedAt ? "إلغاء التثبيت" : "تثبيت"}</button> : null}
                         {archivedMode ? <button type="button" onClick={() => void restoreConversation(row)}><RotateCcw size={14} /> استعادة</button> : <button type="button" onClick={() => void archiveConversation(row)}><Archive size={14} /> أرشفة</button>}
-                        <button type="button" className="danger-menu-action" onClick={() => void deleteConversation(row)}><Trash2 size={14} /> حذف</button>
+                        <button type="button" className="danger-menu-action" onClick={() => setActionDialog({ kind: "delete-conversation", row })}><Trash2 size={14} /> حذف</button>
                       </div>
                     </details>
                   ) : null}
@@ -920,8 +987,8 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
                 {message.attachments?.length ? <div className="message-attachments">{message.attachments.map((file) => <a key={file.id} href={`/api/dashboard/files?id=${encodeURIComponent(file.id)}`}><FileText size={14} /><span>{file.filename}</span><small>{file.processingStatus === "ready" ? "جاهز" : "ملف"}</small></a>)}</div> : null}
                 <footer className="message-footer">
                   <time>{new Date(message.createdAt).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" })}</time>
-                  {message.content ? <button type="button" onClick={() => void navigator.clipboard.writeText(message.content)}><Copy size={13} /> نسخ</button> : null}
-                  {canMutate || message.role === "user" && !message.id.startsWith("local-") ? <details className="message-actions-menu"><summary aria-label="إجراءات الرسالة"><MoreHorizontal size={16} /></summary><div>{message.role === "user" && canMutate ? <button type="button" onClick={() => void mutateMessage(message, "edit")}><Pencil size={13} /> تعديل وإعادة توليد</button> : null}{canMutate ? <button type="button" className="danger-menu-action" onClick={() => void mutateMessage(message, "delete")}><Trash2 size={13} /> حذف</button> : null}</div></details> : null}
+                  {message.content ? <button type="button" onClick={() => void copyMessage(message)} aria-label={copiedMessageId === message.id ? "تم نسخ الرسالة" : "نسخ الرسالة"}>{copiedMessageId === message.id ? <Check size={13} /> : <Copy size={13} />} {copiedMessageId === message.id ? "تم النسخ" : "نسخ"}</button> : null}
+                  {canMutate || message.role === "user" && !message.id.startsWith("local-") ? <details className="message-actions-menu"><summary aria-label="إجراءات الرسالة"><MoreHorizontal size={16} /></summary><div>{message.role === "user" && canMutate ? <button type="button" onClick={() => setActionDialog({ kind: "edit-message", message, value: message.content })}><Pencil size={13} /> تعديل وإعادة توليد</button> : null}{canMutate ? <button type="button" className="danger-menu-action" onClick={() => setActionDialog({ kind: "delete-message", message })}><Trash2 size={13} /> حذف</button> : null}</div></details> : null}
                 </footer>
                 <TechnicalDetails
                   model={message.model}
@@ -962,8 +1029,8 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
 
           {uploadTasks.length ? <div className="composer-attachments" aria-label="المرفقات">{uploadTasks.map((task) => (
             <div key={task.id} className={`attachment-item attachment-state-${task.state.toLowerCase()}`}>
-              <FileText size={18} aria-hidden="true" />
-              <div className="attachment-item-copy"><b>{task.file.name}</b><span>{new Intl.NumberFormat("ar", { style: "unit", unit: "kilobyte", maximumFractionDigits: 1 }).format(task.file.size / 1024)} · {uploadLabels[task.state]}</span>{task.message ? <small>{task.message}</small> : null}{task.state === "UPLOADING" && task.progress !== null ? <progress max="100" value={task.progress}>{task.progress}%</progress> : null}{task.state === "PROCESSING" ? <span className="attachment-processing"><Loader2 size={12} className="animate-spin" /> جارٍ تحليل الملف…</span> : null}{task.attachment?.chunkCount ? <small>{new Intl.NumberFormat("ar").format(task.attachment.chunkCount)} جزءًا مفهرسًا</small> : null}</div>
+                <FileText size={18} aria-hidden="true" />
+              <div className="attachment-item-copy"><b>{task.file.name}</b><span>{humanFileSize(task.file.size)} · {uploadLabels[task.state]}</span>{task.message ? <small>{task.message}</small> : null}{task.state === "UPLOADING" && task.progress !== null ? <progress max="100" value={task.progress}>{task.progress}%</progress> : null}{task.state === "PROCESSING" ? <span className="attachment-processing"><Loader2 size={12} className="animate-spin" /> جارٍ تحليل الملف…</span> : null}{task.attachment?.chunkCount ? <small>{new Intl.NumberFormat("ar").format(task.attachment.chunkCount)} جزءًا مفهرسًا</small> : null}</div>
               <div className="attachment-item-actions">{uploadBusy(task.state) ? <button type="button" aria-label={`إلغاء ${task.file.name}`} onClick={() => cancelUpload(task)}><X size={16} /></button> : null}{task.state === "FAILED" || task.state === "CANCELLED" ? <button type="button" aria-label={`إعادة محاولة ${task.file.name}`} onClick={() => void retryUpload(task)}><RefreshCw size={15} /></button> : null}<button type="button" aria-label={`إزالة ${task.file.name}`} onClick={() => void removeUpload(task)}><Trash2 size={15} /></button></div>
             </div>
           ))}</div> : null}
@@ -990,7 +1057,7 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
               <label className={`composer-icon-action${executionMode === "puter" ? " is-disabled" : ""}`} aria-label="إرفاق ملف">
                 <FilePlus2 size={18} aria-hidden="true" />
                 <span>ملف</span>
-                <input type="file" multiple className="sr-only" disabled={!conversationId || activeConversation?.canWrite === false || loading || executionMode === "puter" || uploadTasks.length >= MAX_COMPOSER_ATTACHMENTS} accept=".jpg,.jpeg,.png,.webp,.gif,.pdf,.docx,.txt,.md,.csv,.json,.xlsx,.pptx,.mp3,.wav,.ogg,.m4a,.mp4,.webm,.mov,.zip,.rar,.7z" onChange={(event) => { uploadFiles(event.target.files); event.target.value = ""; }} />
+                <input type="file" multiple className="sr-only" disabled={!conversationId || activeConversation?.canWrite === false || loading || executionMode === "puter" || uploadTasks.length >= MAX_COMPOSER_ATTACHMENTS} accept={acceptedFileInput} onChange={(event) => { uploadFiles(event.target.files); event.target.value = ""; }} />
               </label>
               {executionMode === "server" ? <select className="composer-model-select" value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} aria-label="النموذج"><option value="auto">النموذج: تلقائي</option>{models.filter((item) => item.available).map((item) => <option key={`${item.providerCredentialId}:${item.model}`} value={`${item.providerCredentialId}:${item.model}`}>{friendlyModelName(item.model)}{item.freeTierEligible ? " · مجاني" : ""}</option>)}</select> : <span className="composer-model-label">{puterModel ? friendlyModelName(puterModel) : "Puter"}</span>}
               <button type="button" className={toolsOpen ? "composer-icon-action is-active" : "composer-icon-action"} onClick={() => setToolsOpen((value) => !value)} aria-expanded={toolsOpen}><Wrench size={17} /><span>أدوات</span></button>
@@ -1005,6 +1072,26 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
       {appearanceOpen ? <div className="mobile-sheet-overlay" role="presentation" onMouseDown={() => setAppearanceOpen(false)}><section className="mobile-sheet appearance-sheet" role="dialog" aria-modal="true" aria-label="مظهر المحادثة" onMouseDown={(event) => event.stopPropagation()}><div className="mobile-sheet-handle" /><header className="mobile-sheet-header"><div><h2>مظهر المحادثة</h2><p>يُحفظ اختيارك في حسابك على الخادم.</p></div><button type="button" className="icon-button" onClick={() => setAppearanceOpen(false)} aria-label="إغلاق"><X size={18} /></button></header><div className="appearance-sheet-grid"><div><h3>الثيم</h3>{chatThemeOptions.map((option) => <button key={option.id} type="button" disabled={savingAppearance} className={appearance.theme === option.id ? "is-selected" : ""} onClick={() => selectTheme(option.id)}><span><b>{option.label}</b><small>{option.description}</small></span>{appearance.theme === option.id ? <Check size={15} /> : null}</button>)}</div><div><h3>الخلفية</h3>{chatWallpaperOptions.map((option) => <button key={option.id} type="button" disabled={savingAppearance} className={appearance.wallpaper === option.id ? "is-selected" : ""} onClick={() => selectWallpaper(option.id)}><span><b>{option.label}</b><small>{option.description}</small></span>{appearance.wallpaper === option.id ? <Check size={15} /> : null}</button>)}</div></div></section></div> : null}
 
       {privacyOpen ? <div className="mobile-sheet-overlay" role="presentation" onMouseDown={() => setPrivacyOpen(false)}><section className="mobile-sheet" role="dialog" aria-modal="true" aria-labelledby="puter-privacy-title" onMouseDown={(event) => event.stopPropagation()}><div className="mobile-sheet-handle" /><header className="mobile-sheet-header"><div><h2 id="puter-privacy-title">قبل استخدام Puter</h2><p>سيُرسل سياق المحادثة الضروري إلى Puter ومزوّد النموذج. لا ترسل أسرارًا أو مفاتيح API.</p></div></header><div className="sheet-actions"><button type="button" className="secondary-button" onClick={() => { setPrivacyOpen(false); setPendingPuterText(null); }}>إلغاء</button><button type="button" className="primary-button" onClick={() => { localStorage.setItem("moataz:puter:privacy-consent", "accepted"); const pending = pendingPuterText; setPrivacyOpen(false); setPendingPuterText(null); if (pending) void sendPuterText(pending); }}>أفهم وأتابع</button></div></section></div> : null}
+
+      {actionDialog ? (
+        <div className="chat-dialog-overlay" role="presentation" onMouseDown={() => { if (!dialogBusy) setActionDialog(null); }}>
+          <form className="chat-action-dialog" role="dialog" aria-modal="true" aria-labelledby="chat-action-dialog-title" onSubmit={submitActionDialog} onMouseDown={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <h2 id="chat-action-dialog-title">{actionDialog.kind === "rename-conversation" ? "إعادة تسمية المحادثة" : actionDialog.kind === "edit-message" ? "تعديل الرسالة" : actionDialog.kind === "delete-conversation" ? "نقل المحادثة إلى المحذوفات" : "حذف الرسالة"}</h2>
+                <p>{actionDialog.kind === "edit-message" ? "سيُحفظ التعديل ثم يُنشأ رد جديد بالرسالة المعدلة." : actionDialog.kind === "delete-conversation" ? "ستختفي المحادثة من مساحة العمل وفق سياسة الاحتفاظ." : actionDialog.kind === "delete-message" ? "سيُحذف محتوى الرسالة من هذه المحادثة." : "اختر عنوانًا واضحًا يسهل العثور عليه لاحقًا."}</p>
+              </div>
+              <button type="button" className="icon-button" disabled={dialogBusy} onClick={() => setActionDialog(null)} aria-label="إغلاق"><X size={18} /></button>
+            </header>
+            {actionDialog.kind === "rename-conversation" ? <input ref={(node) => { dialogInputRef.current = node; }} className="form-control" maxLength={140} required value={actionDialog.value} onChange={(event) => setActionDialog({ ...actionDialog, value: event.target.value })} aria-label="عنوان المحادثة" /> : null}
+            {actionDialog.kind === "edit-message" ? <textarea ref={(node) => { dialogInputRef.current = node; }} className="form-control" maxLength={30000} required rows={6} value={actionDialog.value} onChange={(event) => setActionDialog({ ...actionDialog, value: event.target.value })} aria-label="محتوى الرسالة" /> : null}
+            <div className="sheet-actions">
+              <button type="button" className="secondary-button" disabled={dialogBusy} onClick={() => setActionDialog(null)}>إلغاء</button>
+              <button type="submit" className={actionDialog.kind.startsWith("delete") ? "danger-button" : "primary-button"} disabled={dialogBusy || "value" in actionDialog && !actionDialog.value.trim()}>{dialogBusy ? <Loader2 size={15} className="animate-spin" /> : null}{actionDialog.kind === "rename-conversation" ? "حفظ العنوان" : actionDialog.kind === "edit-message" ? "حفظ وإعادة التوليد" : "تأكيد الحذف"}</button>
+            </div>
+          </form>
+        </div>
+      ) : null}
     </div>
   );
 }

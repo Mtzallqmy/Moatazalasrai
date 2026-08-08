@@ -30,7 +30,7 @@ import {
   showTelegramSiteConnection,
 } from "./integration-flows";
 import { renderTelegramMainMenu } from "./menu-renderer";
-import { sendTelegramError, sendTelegramMenu, sendTelegramText } from "./message-renderer";
+import { answerTelegramCallback, sendTelegramError, sendTelegramMenu, sendTelegramText } from "./message-renderer";
 import { listTelegramRepositories, showTelegramRepository } from "./repository-flows";
 import { listTelegramBrowserTasks, listTelegramSandboxRuntime } from "./runtime-flows";
 import { cancelTelegramFlow, ensureTelegramSession, getTelegramSession } from "./session-service";
@@ -407,6 +407,15 @@ export async function processTelegramUpdate(input: { updateRowId: string; update
   }
 
   try {
+    if (context.callbackId) {
+      await answerTelegramCallback({ token: config.botToken, callbackQueryId: context.callbackId }).catch((error) => {
+        safeLog("warn", "telegram.callback.answer_failed", {
+          updateRowId: input.updateRowId,
+          updateId: context.updateId,
+          errorCode: error instanceof Error ? error.name.slice(0, 80) : "TELEGRAM_CALLBACK_ANSWER_FAILED",
+        });
+      });
+    }
     const code = linkCode(context.text);
     if (code) {
       await handleLink({ updateRowId: input.updateRowId, update, code, token: config.botToken, context });

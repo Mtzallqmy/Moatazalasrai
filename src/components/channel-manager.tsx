@@ -147,7 +147,7 @@ function ConnectionEditor(props: {
     () => props.options.providers.find((provider) => provider.id === providerId) ?? null,
     [providerId, props.options.providers],
   );
-  const providerModels = selectedProvider?.models ?? [];
+  const providerModels = useMemo(() => selectedProvider?.models ?? [], [selectedProvider]);
   const validationError = useMemo(() => {
     if (managedWhatsApp) return null;
     if (autoReplyEnabled && !agentId) return "اختر وكيلًا منشورًا قبل تفعيل الرد الآلي.";

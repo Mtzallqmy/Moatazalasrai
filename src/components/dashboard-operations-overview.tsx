@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Activity,
   Bot,
@@ -53,7 +53,7 @@ export function DashboardOperationsOverview() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true); setError("");
     try {
       const response = await fetch(`/api/dashboard/operations-overview?days=${days}`, { cache: "no-store" });
@@ -62,13 +62,13 @@ export function DashboardOperationsOverview() {
       setData(payload.data);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "تعذر تحميل مؤشرات التشغيل."); }
     finally { setLoading(false); }
-  }
+  }, [days]);
 
   useEffect(() => {
     if (pathname !== "/dashboard") return;
     const timer = window.setTimeout(() => { void load(); }, 0);
     return () => window.clearTimeout(timer);
-  }, [pathname, days]);
+  }, [pathname, load]);
   if (pathname !== "/dashboard") return null;
 
   const maxRuns = Math.max(1, data?.runs.total ?? 1);

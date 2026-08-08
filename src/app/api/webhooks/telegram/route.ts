@@ -2,7 +2,6 @@ import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { databaseRows } from "@/db/result";
 import { apiSuccess, getRequestId } from "@/lib/http/api";
-import { answerTelegramCallback } from "@/lib/telegram/message-renderer";
 import { parseTelegramUpdate } from "@/lib/telegram/update-parser";
 import { telegramPlatformConfig, verifyTelegramWebhookSecret } from "@/lib/integrations/telegram-platform";
 import { enqueueTelegramUpdate } from "@/worker/queue";
@@ -62,15 +61,6 @@ export async function POST(request: Request) {
     updateId: update.update_id,
     updateType: update.callback_query ? "callback_query" : update.edited_message ? "edited_message" : "message",
   });
-
-  if (update.callback_query?.id) {
-    await answerTelegramCallback({ token: config.botToken, callbackQueryId: update.callback_query.id }).catch((error) => {
-      safeLog("warn", "telegram.callback.answer_failed", {
-        updateId: update.update_id,
-        errorCode: error instanceof Error ? error.name.slice(0, 80) : "TELEGRAM_CALLBACK_ANSWER_FAILED",
-      });
-    });
-  }
 
   let persisted: Awaited<ReturnType<typeof persistCentralUpdate>>;
   try {

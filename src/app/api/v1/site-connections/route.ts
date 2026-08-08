@@ -1,4 +1,3 @@
-import { z } from "zod";
 import { authenticateApiKey, requireApiScope } from "@/lib/auth/api-key";
 import { apiFailure, apiSuccess, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { siteConnectionCreateSchema } from "@/lib/site-connections/contracts";

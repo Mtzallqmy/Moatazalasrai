@@ -85,7 +85,7 @@ describe("central Telegram webhook", () => {
     expect(mocks.execute.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("answers callback queries before queueing the heavy processor", async () => {
+  it("queues callback queries without blocking the webhook on an outbound Telegram call", async () => {
     const { POST } = await import("@/app/api/webhooks/telegram/route");
     const response = await POST(request("telegram-webhook-secret", {
       update_id: 12346,
@@ -97,10 +97,7 @@ describe("central Telegram webhook", () => {
       },
     }));
     expect(response.status).toBe(200);
-    expect(mocks.answerCallback).toHaveBeenCalledWith({
-      token: "123456789:test-token",
-      callbackQueryId: "callback-1",
-    });
+    expect(mocks.answerCallback).not.toHaveBeenCalled();
     expect(mocks.enqueue).toHaveBeenCalledTimes(1);
   });
 

@@ -10,7 +10,6 @@ import {
   realpath,
   rename,
   rm,
-  stat,
   writeFile,
 } from "node:fs/promises";
 import { createServer } from "node:http";

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CircleAlert,
   Copy,
@@ -70,6 +70,7 @@ export function SandboxConsole({ conversationId, compact = false }: { conversati
   const [confirmAction, setConfirmAction] = useState<"reset" | "terminate" | "delete-file" | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const terminalRef = useRef<HTMLPreElement | null>(null);
+  const workspaceIdRef = useRef("");
 
   const workspace = workspaces.find((item) => item.id === workspaceId);
   const selectedExecution = executions.find((item) => item.id === selectedExecutionId);
@@ -79,34 +80,40 @@ export function SandboxConsole({ conversationId, compact = false }: { conversati
     return "";
   }).join(""), [events]);
 
-  async function loadWorkspaces() {
+  useEffect(() => { workspaceIdRef.current = workspaceId; }, [workspaceId]);
+
+  const loadExecutions = useCallback(async (id?: string) => {
+    const targetId = id ?? workspaceIdRef.current;
+    if (!targetId) return;
+    const rows = await api<Execution[]>(`/api/dashboard/sandbox/executions?workspaceId=${encodeURIComponent(targetId)}&limit=100`);
+    setExecutions(rows);
+    setSelectedExecutionId((current) => current && rows.some((row) => row.id === current) ? current : rows[0]?.id ?? "");
+  }, []);
+
+  const loadFiles = useCallback(async (path = ".") => {
+    const targetId = workspaceIdRef.current;
+    if (!targetId) return;
+    try {
+      const rows = await api<FileEntry[]>(`/api/dashboard/sandbox/files?mode=list&workspaceId=${encodeURIComponent(targetId)}&path=${encodeURIComponent(path)}&depth=5`);
+      setFiles(rows);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "تعذر تحميل الملفات."); }
+  }, []);
+
+  const loadWorkspaces = useCallback(async () => {
     setLoading(true); setError("");
     try {
       const query = conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : "";
       const rows = await api<Workspace[]>(`/api/dashboard/sandbox/workspaces${query}`);
       setWorkspaces(rows);
-      const nextId = rows.some((item) => item.id === workspaceId) ? workspaceId : rows[0]?.id ?? "";
+      const currentId = workspaceIdRef.current;
+      const nextId = rows.some((item) => item.id === currentId) ? currentId : rows[0]?.id ?? "";
+      workspaceIdRef.current = nextId;
       setWorkspaceId(nextId);
       if (nextId) await loadExecutions(nextId);
       else setExecutions([]);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "تعذر تحميل Sandbox."); }
     finally { setLoading(false); }
-  }
-
-  async function loadExecutions(id = workspaceId) {
-    if (!id) return;
-    const rows = await api<Execution[]>(`/api/dashboard/sandbox/executions?workspaceId=${encodeURIComponent(id)}&limit=100`);
-    setExecutions(rows);
-    if (!selectedExecutionId && rows[0]) setSelectedExecutionId(rows[0].id);
-  }
-
-  async function loadFiles(path = ".") {
-    if (!workspaceId) return;
-    try {
-      const rows = await api<FileEntry[]>(`/api/dashboard/sandbox/files?mode=list&workspaceId=${encodeURIComponent(workspaceId)}&path=${encodeURIComponent(path)}&depth=5`);
-      setFiles(rows);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "تعذر تحميل الملفات."); }
-  }
+  }, [conversationId, loadExecutions]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void loadWorkspaces(); }, 0);
@@ -114,20 +121,19 @@ export function SandboxConsole({ conversationId, compact = false }: { conversati
       window.clearTimeout(timer);
       eventSourceRef.current?.close();
     };
-  }, [conversationId]);
+  }, [loadWorkspaces]);
   useEffect(() => {
     if (!workspaceId) return;
     const timer = window.setTimeout(() => {
       void loadExecutions(workspaceId);
-      if (activeTab === "files") void loadFiles();
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [workspaceId]);
+  }, [loadExecutions, workspaceId]);
   useEffect(() => {
     if (activeTab !== "files" || !workspaceId) return;
     const timer = window.setTimeout(() => { void loadFiles(); }, 0);
     return () => window.clearTimeout(timer);
-  }, [activeTab]);
+  }, [activeTab, loadFiles, workspaceId]);
   useEffect(() => {
     eventSourceRef.current?.close();
     let source: EventSource | null = null;
@@ -150,7 +156,7 @@ export function SandboxConsole({ conversationId, compact = false }: { conversati
       window.clearTimeout(timer);
       source?.close();
     };
-  }, [selectedExecutionId]);
+  }, [loadExecutions, selectedExecutionId]);
   useEffect(() => { terminalRef.current?.scrollTo({ top: terminalRef.current.scrollHeight }); }, [terminalText]);
 
   async function createWorkspace() {
