@@ -7,7 +7,7 @@ import { env } from "@/lib/config/env";
 export type DatabaseProcessKind = "web" | "worker";
 type RuntimeDatabaseRole = "moataz_app" | "moataz_platform" | "moataz_worker";
 type Release = (release?: Error | boolean) => void;
-type ConnectCallback = (err: Error, client: PoolClient, done: Release) => void;
+type ConnectCallback = (err: Error | undefined, client: PoolClient | undefined, done: Release) => void;
 
 const globalForPostgres = globalThis as typeof globalThis & {
   __moatazPostgresSystemPool?: Pool;
@@ -98,11 +98,11 @@ class RolePool extends Pool {
   override connect(callback?: ConnectCallback): Promise<PoolClient> | void {
     if (callback) {
       super.connect((error, client, done) => {
-        if (error) {
-          callback(error, client, done);
+        if (error || !client) {
+          callback(error ?? new Error("DATABASE_CONNECTION_FAILED"), client, done);
           return;
         }
-        void this.prepare(client).then(() => callback(error, client, done)).catch((prepareError) => {
+        void this.prepare(client).then(() => callback(undefined, client, done)).catch((prepareError) => {
           done(true);
           callback(asError(prepareError), client, done);
         });
