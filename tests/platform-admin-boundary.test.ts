@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
 import { ALL_PERMISSIONS, permissionsFor } from "@/lib/auth/permissions";
 import { controlPlaneOperationSchema } from "@/lib/control-plane/contracts";
+import { whatsappPolicyUpdateSchema } from "@/lib/channels/whatsapp-policy-admin";
 
 const root = process.cwd();
 
@@ -25,6 +26,14 @@ describe("platform operations security boundary", () => {
       permissions: ["platform:manage"],
     });
     expect(parsed.success).toBe(false);
+  });
+
+  test("tenant WhatsApp policy API cannot mutate platform defaults", async () => {
+    expect(whatsappPolicyUpdateSchema.safeParse({ scope: "platform", status: "active" }).success).toBe(false);
+    const manager = await readFile(`${root}/src/components/whatsapp-policy-manager.tsx`, "utf8");
+    const service = await readFile(`${root}/src/lib/channels/whatsapp-policy-admin.ts`, "utf8");
+    expect(manager).not.toContain('option value="platform"');
+    expect(service).not.toContain('input.update.scope === "platform"');
   });
 
   test("global runtime controls are guarded by independent platform authorization", async () => {
