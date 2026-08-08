@@ -10,7 +10,7 @@ import { conversationAccessFilter } from "@/lib/chat/access";
 import { ApiError, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { chatStreamSchema } from "@/lib/http/contracts";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
-import { attachmentContext } from "@/lib/storage/attachments";
+import { resolveAttachmentContext } from "@/lib/storage/attachment-context-resolver";
 import { inputKindForAttachments } from "@/server/files/input-kind";
 
 export const runtime = "nodejs";
@@ -19,7 +19,6 @@ export const dynamic = "force-dynamic";
 function sse(event: string, data: unknown) {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
-
 function base64Bytes(value: string) {
   return Math.floor(value.length * 0.75);
 }
@@ -45,23 +44,23 @@ export async function POST(request: Request) {
     if (!conversation) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة أو الوكيل غير متاح.");
 
     const [attachmentData, mcpContext] = await Promise.all([
-      attachmentContext(session.organizationId, conversation.id, body.attachmentIds),
+      resolveAttachmentContext({
+        organizationId: session.organizationId,
+        conversationId: conversation.id,
+        userId: session.userId,
+        explicitAttachmentIds: body.attachmentIds,
+        userQuery: body.message,
+      }),
       buildMcpChatContext({ organizationId: session.organizationId, userId: session.userId, resources: body.mcpResources, prompt: body.mcpPrompt }),
     ]);
-    const imageRows = attachmentData.rows.filter((file) => ["image/jpeg", "image/png", "image/webp", "image/gif"].includes(file.mimeType));
-    const media = imageRows.map((file) => ({
-      type: "image" as const,
-      mediaType: file.mimeType as "image/jpeg" | "image/png" | "image/webp" | "image/gif",
-      data: Buffer.from(file.content).toString("base64"),
-    }));
-    const combinedMedia = [...media, ...mcpContext.media];
+    const combinedMedia = [...attachmentData.media, ...mcpContext.media];
     if (combinedMedia.reduce((sum, item) => sum + (item.type === "image" ? base64Bytes(item.data) : 0), 0) > 20 * 1024 * 1024) {
-      throw new ApiError(413, "VISION_PAYLOAD_TOO_LARGE", "إجمالي الصور والمصادر المرسلة للنموذج يتجاوز 20 ميجابايت.");
+      throw new ApiError(413, "PROVIDER_ATTACHMENT_UNSUPPORTED", "إجمالي الصور والمصادر المرسلة للنموذج يتجاوز الحد الآمن.");
     }
     const effectiveInputKind = combinedMedia.length > 0
       ? "image"
-      : attachmentData.rows.length > 0
-        ? inputKindForAttachments(attachmentData.rows.map((file) => file.mimeType))
+      : attachmentData.attachments.length > 0
+        ? inputKindForAttachments(attachmentData.attachments.map((file) => file.mimeType))
         : body.inputKind;
     const knowledge = body.knowledgeBaseId && aiFeatureEnabled("RAG")
       ? await retrieveKnowledge({ organizationId: session.organizationId, knowledgeBaseId: body.knowledgeBaseId, query: body.message })
@@ -74,6 +73,7 @@ export async function POST(request: Request) {
       )).limit(10)
       : [];
     const memoryText = memoryRows.length ? `\n\n[ذاكرة مصرح بها]\n${memoryRows.map((row) => row.content).join("\n")}` : "";
+
     const [userMessage] = await db().transaction(async (tx) => {
       const createdAt = new Date();
       const [created] = await tx.insert(messages).values({
@@ -91,7 +91,11 @@ export async function POST(request: Request) {
         metadata: {
           requestId,
           attachmentIds: body.attachmentIds,
-          attachments: attachmentData.rows.map((file) => ({ id: file.id, filename: file.filename, mimeType: file.mimeType, sizeBytes: file.sizeBytes, processingStatus: file.processingStatus })),
+          attachments: attachmentData.attachments.filter((file) => file.explicit).map((file) => ({
+            id: file.id, filename: file.filename, mimeType: file.mimeType, sizeBytes: file.sizeBytes, processingStatus: file.status,
+          })),
+          resolvedAttachmentIds: attachmentData.attachments.map((file) => file.id),
+          retrievedAttachmentChunks: attachmentData.retrievedChunkCount,
           mcpReferences: mcpContext.references,
         },
       }).onConflictDoNothing().returning();
@@ -99,6 +103,7 @@ export async function POST(request: Request) {
       if (body.attachmentIds.length > 0) {
         await tx.update(attachments).set({ messageId: created.id }).where(and(
           eq(attachments.organizationId, session.organizationId),
+          eq(attachments.conversationId, conversation.id),
           inArray(attachments.id, body.attachmentIds),
         ));
       }
@@ -107,24 +112,47 @@ export async function POST(request: Request) {
         model: body.model,
         lastMessageAt: createdAt,
         updatedAt: createdAt,
-      }).where(and(
-        eq(conversations.id, conversation.id),
-        eq(conversations.organizationId, session.organizationId),
-      ));
+      }).where(and(eq(conversations.id, conversation.id), eq(conversations.organizationId, session.organizationId)));
       return [created];
     });
+
+    console.info(JSON.stringify({
+      event: "chat.attachment_context_resolved",
+      requestId,
+      organizationId: session.organizationId,
+      conversationId: conversation.id,
+      messageId: userMessage.id,
+      providerCredentialId: body.providerCredentialId ?? null,
+      model: body.model ?? null,
+      attachmentCount: body.attachmentIds.length,
+      resolvedAttachmentCount: attachmentData.attachments.length,
+      retrievedChunkCount: attachmentData.retrievedChunkCount,
+      attachmentContextTokens: attachmentData.contextTokens,
+      attachmentStatuses: attachmentData.attachments.map((file) => file.status),
+    }));
 
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         controller.enqueue(encoder.encode(sse("message", {
-          userMessage: { ...userMessage, authorName: session.name, authorEmail: session.email, attachments: attachmentData.rows.map((file) => ({
-            id: file.id, filename: file.filename, mimeType: file.mimeType, sizeBytes: file.sizeBytes, processingStatus: file.processingStatus,
-          })) },
+          userMessage: {
+            ...userMessage,
+            authorName: session.name,
+            authorEmail: session.email,
+            attachments: attachmentData.attachments.filter((file) => file.explicit).map((file) => ({
+              id: file.id, filename: file.filename, mimeType: file.mimeType, sizeBytes: file.sizeBytes, processingStatus: file.status,
+            })),
+          },
           requestId,
           mcpReferences: mcpContext.references,
         })));
         if (knowledge.citations.length) controller.enqueue(encoder.encode(sse("citations", { citations: knowledge.citations })));
+        if (attachmentData.citations.length) controller.enqueue(encoder.encode(sse("file-citations", { citations: attachmentData.citations })));
+        if (attachmentData.attachments.length) controller.enqueue(encoder.encode(sse("attachment-context", {
+          resolvedAttachmentCount: attachmentData.attachments.length,
+          retrievedChunkCount: attachmentData.retrievedChunkCount,
+          attachments: attachmentData.attachments.map(({ id, filename, status, warnings, chunkCount }) => ({ id, filename, status, warnings, chunkCount })),
+        })));
         try {
           for await (const event of streamAgentRun({
             organizationId: session.organizationId,
@@ -139,9 +167,7 @@ export async function POST(request: Request) {
             model: body.model,
             inputKind: effectiveInputKind,
             media: combinedMedia,
-          })) {
-            controller.enqueue(encoder.encode(sse(event.type, event)));
-          }
+          })) controller.enqueue(encoder.encode(sse(event.type, event)));
         } catch (error) {
           const response = handleApiError(error, requestId, "/api/dashboard/chat/stream");
           const payload = await response.json();
