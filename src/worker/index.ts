@@ -5,6 +5,7 @@ import { closePostgresPool, configureDatabaseProcessKind, getSystemPostgresPool 
 import { workerHeartbeats } from "@/db/agent-runtime-schema";
 import { recoverPendingDomainEvents } from "@/lib/events/recover";
 import { executionKernelEnabled } from "@/lib/execution/runner-registry";
+import { reconcileCentralTelegramWebhook } from "@/lib/integrations/telegram-webhook-reconciler";
 import { hydrateRuntimeControlPlane } from "@/lib/platform/runtime-control";
 import { initializeWhatsAppFromEnvironment } from "@/lib/platform/whatsapp-environment";
 import { startNodeTelemetry } from "@/ai/observability/node-otel";
@@ -26,6 +27,12 @@ function executionMaintenanceInterval() {
   return seconds * 1_000;
 }
 
+function telegramReconcileInterval() {
+  const configured = Number(process.env.TELEGRAM_WEBHOOK_RECONCILE_SECONDS ?? 300);
+  const seconds = Number.isSafeInteger(configured) ? Math.min(Math.max(configured, 60), 3600) : 300;
+  return seconds * 1_000;
+}
+
 const workerId = `moataz-${randomUUID()}`;
 let runner: Runner | undefined;
 let stopping = false;
@@ -33,6 +40,7 @@ let heartbeatTimer: NodeJS.Timeout | undefined;
 let runtimeControlTimer: NodeJS.Timeout | undefined;
 let outboxRecoveryTimer: NodeJS.Timeout | undefined;
 let executionMaintenanceTimer: NodeJS.Timeout | undefined;
+let telegramReconcileTimer: NodeJS.Timeout | undefined;
 let telemetryShutdown: (() => Promise<void>) | undefined;
 
 async function heartbeat(stoppingAt?: Date) {
@@ -68,6 +76,19 @@ async function refreshRuntimeControl() {
   });
 }
 
+async function reconcileTelegram(force = false) {
+  const result = await reconcileCentralTelegramWebhook({ force });
+  if (result.enabled && result.configured) {
+    console.info(JSON.stringify(safeTelemetry({
+      event: result.repaired ? "worker.telegram_webhook.repaired" : "worker.telegram_webhook.verified",
+      workerId,
+      botUsername: result.botUsername,
+      pendingUpdateCount: result.pendingUpdateCount,
+      lastErrorMessage: result.lastErrorMessage,
+    })));
+  }
+}
+
 async function recoverOutbox() {
   const result = await recoverPendingDomainEvents();
   if (result.scanned || result.failed) {
@@ -91,6 +112,7 @@ async function shutdown(signal: string) {
   if (runtimeControlTimer) clearInterval(runtimeControlTimer);
   if (outboxRecoveryTimer) clearInterval(outboxRecoveryTimer);
   if (executionMaintenanceTimer) clearInterval(executionMaintenanceTimer);
+  if (telegramReconcileTimer) clearInterval(telegramReconcileTimer);
   console.info(JSON.stringify(safeTelemetry({ event: "worker.stopping", workerId, signal })));
   await heartbeat(new Date()).catch(() => undefined);
   await runner?.stop();
@@ -105,6 +127,13 @@ async function main() {
   }
   await initializeWhatsAppFromEnvironment({ force: true });
   await refreshRuntimeControl();
+  await reconcileTelegram(true).catch((error) => {
+    console.error(JSON.stringify(safeTelemetry({
+      event: "worker.telegram_webhook.reconcile_failed",
+      workerId,
+      errorCode: error instanceof Error ? error.name : "UNKNOWN",
+    })));
+  });
   telemetryShutdown = await startNodeTelemetry("moataz-worker");
   await heartbeat();
   await recoverOutbox().catch((error) => {
@@ -137,6 +166,16 @@ async function main() {
     });
   }, executionMaintenanceInterval());
   executionMaintenanceTimer.unref();
+  telegramReconcileTimer = setInterval(() => {
+    void reconcileTelegram().catch((error) => {
+      console.error(JSON.stringify(safeTelemetry({
+        event: "worker.telegram_webhook.reconcile_failed",
+        workerId,
+        errorCode: error instanceof Error ? error.name : "UNKNOWN",
+      })));
+    });
+  }, telegramReconcileInterval());
+  telegramReconcileTimer.unref();
 
   process.once("SIGTERM", () => { void shutdown("SIGTERM"); });
   process.once("SIGINT", () => { void shutdown("SIGINT"); });
