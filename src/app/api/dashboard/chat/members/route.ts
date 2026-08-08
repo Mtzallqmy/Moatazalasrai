@@ -1,7 +1,7 @@
 import { and, asc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { auditLogs, conversationMembers, conversations, organizationMembers, users } from "@/db/schema";
+import { auditLogs, conversationMembers, organizationMembers, users } from "@/db/schema";
 import { requireSession } from "@/lib/auth/authorization";
 import { requireConversationAccess } from "@/lib/chat/access";
 import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";

@@ -5,7 +5,6 @@ import {
   advanceChannelFlow,
   finishChannelFlow,
   startChannelFlow,
-  type ChannelClientSession,
 } from "./session-service";
 import {
   channelBrowserDiagnostics,

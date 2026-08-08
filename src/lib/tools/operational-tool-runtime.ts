@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { executionJobs, executionSteps, executionWorkspaces } from "@/db/execution-schema";
-import { browserAgentSessions, dataInterpreterSessions, toolRuns, voiceGenerationJobs } from "@/db/tool-run-schema";
+import { browserAgentSessions, toolRuns, voiceGenerationJobs } from "@/db/tool-run-schema";
 import { storeExecutionArtifact } from "@/lib/execution/artifact-service";
 import { executionLimitsSchema, networkPolicySchema } from "@/lib/execution/contracts";
 import { appendExecutionEvent, appendOutputEvent } from "@/lib/execution/event-service";

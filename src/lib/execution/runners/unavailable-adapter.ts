@@ -48,7 +48,7 @@ export abstract class UnavailableExecutionAdapter implements ExecutionRunner {
     templateId: string;
     limits: ExecutionLimits;
     networkPolicy: NetworkPolicy;
-  }): Promise<{ externalWorkspaceId: string; state: "ready" }> { return this.unavailable(); }
+  }): Promise<{ externalWorkspaceId: string; state: "ready" }> { void _input; return this.unavailable(); }
   async executeCommand(
     _workspaceId: string,
     _input: CommandRequest,
@@ -57,10 +57,10 @@ export abstract class UnavailableExecutionAdapter implements ExecutionRunner {
       onStderr(chunk: Uint8Array): Promise<void>;
       onState(state: string): Promise<void>;
     },
-  ): Promise<CommandResult> { return this.unavailable(); }
-  async uploadFile(_workspaceId: string, _destination: string, _content: AsyncIterable<Uint8Array>): Promise<void> { return this.unavailable(); }
-  async downloadFile(_workspaceId: string, _source: string): Promise<AsyncIterable<Uint8Array>> { return this.unavailable(); }
-  async listFiles(_workspaceId: string, _root: string): Promise<Array<{ path: string; sizeBytes: number; type: "file" | "directory" }>> { return this.unavailable(); }
-  async terminateProcess(_workspaceId: string, _processId?: string): Promise<void> { return this.unavailable(); }
-  async destroyWorkspace(_workspaceId: string): Promise<void> { return this.unavailable(); }
+  ): Promise<CommandResult> { void _workspaceId; void _input; void _callbacks; return this.unavailable(); }
+  async uploadFile(_workspaceId: string, _destination: string, _content: AsyncIterable<Uint8Array>): Promise<void> { void _workspaceId; void _destination; void _content; return this.unavailable(); }
+  async downloadFile(_workspaceId: string, _source: string): Promise<AsyncIterable<Uint8Array>> { void _workspaceId; void _source; return this.unavailable(); }
+  async listFiles(_workspaceId: string, _root: string): Promise<Array<{ path: string; sizeBytes: number; type: "file" | "directory" }>> { void _workspaceId; void _root; return this.unavailable(); }
+  async terminateProcess(_workspaceId: string, _processId?: string): Promise<void> { void _workspaceId; void _processId; return this.unavailable(); }
+  async destroyWorkspace(_workspaceId: string): Promise<void> { void _workspaceId; return this.unavailable(); }
 }

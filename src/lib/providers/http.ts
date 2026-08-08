@@ -95,51 +95,90 @@ async function readLimitedText(response: Response, maxBytes = MAX_JSON_BYTES): P
   return output + decoder.decode();
 }
 
+const REQUEST_TIMEOUT = Symbol("provider-request-timeout");
+
 function linkedSignal(source: AbortSignal | undefined, timeoutMs: number) {
-  const timeout = AbortSignal.timeout(timeoutMs);
-  return source ? AbortSignal.any([source, timeout]) : timeout;
+  const controller = new AbortController();
+  const abortFromSource = () => controller.abort(source?.reason);
+  source?.addEventListener("abort", abortFromSource, { once: true });
+  const timeout = setTimeout(() => controller.abort(REQUEST_TIMEOUT), timeoutMs);
+  return {
+    signal: controller.signal,
+    clearRequestTimeout: () => clearTimeout(timeout),
+    cleanup: () => {
+      clearTimeout(timeout);
+      source?.removeEventListener("abort", abortFromSource);
+    },
+  };
 }
+
+function retryDelay(ms: number, signal?: AbortSignal) {
+  if (signal?.aborted) return Promise.reject(new ProviderError("PROVIDER_CANCELLED", "تم إلغاء طلب المزود.", 499));
+  return new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    const abort = () => {
+      clearTimeout(timeout);
+      reject(new ProviderError("PROVIDER_CANCELLED", "تم إلغاء طلب المزود.", 499));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+type RequestResult = {
+  response: Response;
+  clearRequestTimeout: () => void;
+  cleanup: () => void;
+};
 
 async function request(
   url: string,
   init: RequestInit,
   options: { timeoutMs?: number; signal?: AbortSignal; retries?: number; fetch?: typeof globalThis.fetch } = {},
-) {
+) : Promise<RequestResult> {
   const attempts = Math.max(1, (options.retries ?? 1) + 1);
   let lastError: unknown;
+  const safe = await validateProviderBaseUrl(url);
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const signal = linkedSignal(options.signal, options.timeoutMs ?? 20_000);
+    const linked = linkedSignal(options.signal, options.timeoutMs ?? 20_000);
     try {
-      await validateProviderBaseUrl(url);
-      const response = await (options.fetch ?? globalThis.fetch)(url, {
+      const response = await (options.fetch ?? globalThis.fetch)(safe.normalizedUrl, {
         ...init,
         cache: "no-store",
         redirect: "error",
-        signal,
+        signal: linked.signal,
       });
       if (!response.ok) {
         const bodyText = await readLimitedText(response, 32 * 1024).catch(() => "");
         const error = providerErrorForHttpStatus(response.status, bodyText, response.headers);
         if (error.retryable && attempt + 1 < attempts) {
           const delay = error.retryAfterMs ?? 200 * (2 ** attempt) + Math.floor(Math.random() * 120);
-          await new Promise((resolve) => setTimeout(resolve, Math.min(delay, 30_000)));
+          linked.cleanup();
+          await retryDelay(Math.min(delay, 30_000), options.signal);
           continue;
         }
         throw error;
       }
-      return response;
+      return { response, clearRequestTimeout: linked.clearRequestTimeout, cleanup: linked.cleanup };
     } catch (error) {
       lastError = error;
+      linked.cleanup();
       if (error instanceof ProviderError) throw error;
       if (options.signal?.aborted) throw new ProviderError("PROVIDER_CANCELLED", "تم إلغاء طلب المزود.", 499);
-      if (error instanceof DOMException && (error.name === "AbortError" || error.name === "TimeoutError")) {
+      if (linked.signal.reason === REQUEST_TIMEOUT || (error instanceof DOMException && error.name === "TimeoutError")) {
         const timeoutError = new ProviderError("PROVIDER_TIMEOUT", "انتهت مهلة الاتصال بالمزود.", 504, 408, true);
-        if (attempt + 1 < attempts) continue;
+        if (attempt + 1 < attempts) {
+          await retryDelay(200 * (2 ** attempt) + Math.floor(Math.random() * 120), options.signal);
+          continue;
+        }
         throw timeoutError;
       }
       if (attempt + 1 >= attempts) {
         throw new ProviderError("PROVIDER_NETWORK_ERROR", "تعذر إنشاء اتصال آمن بالمزود.", 502, undefined, true);
       }
+      await retryDelay(200 * (2 ** attempt) + Math.floor(Math.random() * 120), options.signal);
     }
   }
   throw lastError;
@@ -150,62 +189,134 @@ export async function providerJson<T>(
   init: RequestInit,
   options?: { timeoutMs?: number; signal?: AbortSignal; retries?: number; fetch?: typeof globalThis.fetch },
 ): Promise<{ data: T; headers: Headers }> {
-  const response = await request(url, init, options);
-  const text = await readLimitedText(response);
-  let data: T;
   try {
-    data = JSON.parse(text) as T;
-  } catch {
-    throw new ProviderError("PROVIDER_INVALID_RESPONSE", "أعاد المزود استجابة غير صالحة.", 502);
+    const result = await request(url, init, options);
+    try {
+      const text = await readLimitedText(result.response);
+      let data: T;
+      try {
+        data = JSON.parse(text) as T;
+      } catch {
+        throw new ProviderError("PROVIDER_INVALID_RESPONSE", "أعاد المزود استجابة غير صالحة.", 502);
+      }
+      return { data, headers: result.response.headers };
+    } catch (error) {
+      if (options?.signal?.aborted) throw new ProviderError("PROVIDER_CANCELLED", "تم إلغاء طلب المزود.", 499);
+      if (result.response.body && error instanceof DOMException && error.name === "AbortError") {
+        throw new ProviderError("PROVIDER_TIMEOUT", "انتهت مهلة استجابة المزود.", 504, 408, true);
+      }
+      throw error;
+    } finally {
+      result.cleanup();
+    }
+  } catch (error) {
+    throw error;
   }
-  return { data, headers: response.headers };
 }
+
+const streamCleanup = new WeakMap<Response, () => void>();
 
 export async function providerStream(
   url: string,
   init: RequestInit,
   options?: { timeoutMs?: number; signal?: AbortSignal; fetch?: typeof globalThis.fetch },
 ) {
-  const response = await request(url, init, { ...options, retries: 0 });
-  if (!response.body) throw new ProviderError("PROVIDER_EMPTY_STREAM", "لم يُرجع المزود بثًا صالحًا.", 502);
-  return response;
+  const result = await request(url, init, { ...options, retries: 0 });
+  if (!result.response.body) {
+    result.cleanup();
+    throw new ProviderError("PROVIDER_EMPTY_STREAM", "لم يُرجع المزود بثًا صالحًا.", 502);
+  }
+  // The request timeout protects connection establishment and first headers only.
+  // Long generations remain cancellable by the caller and use an idle timeout below.
+  result.clearRequestTimeout();
+  streamCleanup.set(result.response, result.cleanup);
+  return result.response;
 }
 
-export async function* sseJson(response: Response): AsyncGenerator<Record<string, unknown>> {
+function parseSseBlock(block: string) {
+  return block
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trim())
+    .join("\n");
+}
+
+export async function* sseJson(
+  response: Response,
+  options: { idleTimeoutMs?: number } = {},
+): AsyncGenerator<Record<string, unknown>> {
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
+  const idleTimeoutMs = options.idleTimeoutMs ?? 45_000;
   let buffer = "";
   let received = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    received += value.byteLength;
-    if (received > 8 * 1024 * 1024) {
-      await reader.cancel();
-      throw new ProviderError("PROVIDER_RESPONSE_TOO_LARGE", "تجاوز البث الحد المسموح.", 502);
-    }
-    buffer += decoder.decode(value, { stream: true });
-    const blocks = buffer.split(/\r?\n\r?\n/);
-    buffer = blocks.pop() ?? "";
-    for (const block of blocks) {
-      const data = block
-        .split(/\r?\n/)
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trim())
-        .join("\n");
-      if (!data || data === "[DONE]") continue;
+  try {
+    while (true) {
+      let idleTimer: ReturnType<typeof setTimeout> | undefined;
+      const idleFailure = new Promise<never>((_, reject) => {
+        idleTimer = setTimeout(() => reject(new ProviderError(
+          "PROVIDER_TIMEOUT",
+          "توقف المزود عن إرسال بيانات البث ضمن المهلة المسموحة.",
+          504,
+          408,
+          true,
+        )), idleTimeoutMs);
+      });
+      let chunk: ReadableStreamReadResult<Uint8Array>;
       try {
-        const parsed = JSON.parse(data) as unknown;
-        if (parsed && typeof parsed === "object") {
-          const event = parsed as Record<string, unknown>;
-          if (event.error || event.type === "error") throw providerErrorFromPayload(event);
-          yield event;
+        chunk = await Promise.race([reader.read(), idleFailure]);
+      } finally {
+        if (idleTimer) clearTimeout(idleTimer);
+      }
+      if (chunk.done) break;
+      const value = chunk.value;
+      received += value.byteLength;
+      if (received > 8 * 1024 * 1024) {
+        await reader.cancel();
+        throw new ProviderError("PROVIDER_RESPONSE_TOO_LARGE", "تجاوز البث الحد المسموح.", 502);
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split(/\r?\n\r?\n/);
+      buffer = blocks.pop() ?? "";
+      for (const block of blocks) {
+        const data = parseSseBlock(block);
+        if (!data || data === "[DONE]") continue;
+        try {
+          const parsed = JSON.parse(data) as unknown;
+          if (parsed && typeof parsed === "object") {
+            const event = parsed as Record<string, unknown>;
+            if (event.error || event.type === "error") throw providerErrorFromPayload(event);
+            yield event;
+          }
+        } catch (error) {
+          if (error instanceof ProviderError) throw error;
+          throw new ProviderError("PROVIDER_INVALID_STREAM", "أعاد المزود حدث بث غير صالح.", 502);
         }
-      } catch (error) {
-        if (error instanceof ProviderError) throw error;
-        throw new ProviderError("PROVIDER_INVALID_STREAM", "أعاد المزود حدث بث غير صالح.", 502);
       }
     }
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+      const data = parseSseBlock(buffer);
+      if (data && data !== "[DONE]") {
+        try {
+          const parsed = JSON.parse(data) as unknown;
+          if (parsed && typeof parsed === "object") {
+            const event = parsed as Record<string, unknown>;
+            if (event.error || event.type === "error") throw providerErrorFromPayload(event);
+            yield event;
+          }
+        } catch (error) {
+          if (error instanceof ProviderError) throw error;
+          throw new ProviderError("PROVIDER_INVALID_STREAM", "أعاد المزود حدث بث غير صالح.", 502);
+        }
+      }
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    streamCleanup.get(response)?.();
+    streamCleanup.delete(response);
   }
 }
 

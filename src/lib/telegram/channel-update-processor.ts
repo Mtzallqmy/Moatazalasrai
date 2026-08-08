@@ -5,14 +5,14 @@ import { ensureTelegramChannelConnection } from "@/lib/channels/connections";
 import { routeIncomingChannelMessage } from "@/lib/channels/router";
 import { telegramChannelAdapter } from "@/lib/channels/telegram-adapter";
 import { listGitHubRepositories, readGitHubFile } from "@/lib/integrations/github";
-import { sendTelegramMessage } from "@/lib/integrations/telegram";
+import { answerTelegramCallback, sendTelegramMessage } from "@/lib/integrations/telegram";
 import { decryptSecret } from "@/lib/security/encryption";
 
 type TelegramUpdate = {
   update_id?: number;
   message?: { text?: string; caption?: string; chat?: { id?: number } };
   edited_message?: { text?: string; caption?: string; chat?: { id?: number } };
-  callback_query?: { data?: string; message?: { chat?: { id?: number } } };
+  callback_query?: { id?: string; data?: string; message?: { chat?: { id?: number } } };
 };
 
 function telegramText(update: TelegramUpdate) {
@@ -96,6 +96,9 @@ export async function processTelegramChannelUpdate(input: {
   const token = decryptSecret(integration.encryptedToken, `integration:${integration.organizationId}`);
   const chatId = telegramChatId(update);
   try {
+    if (update.callback_query?.id) {
+      await answerTelegramCallback({ token, callbackQueryId: update.callback_query.id }).catch(() => undefined);
+    }
     if (!chatId) {
       await markUpdate(input.updateRowId, "ignored", "TELEGRAM_CHAT_UNAVAILABLE");
       return;

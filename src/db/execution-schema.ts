@@ -7,7 +7,6 @@ import {
   numeric,
   pgEnum,
   pgTable,
-  primaryKey,
   text,
   timestamp,
   uniqueIndex,
