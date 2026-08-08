@@ -1,186 +1,58 @@
-import { and, count, desc, eq } from "drizzle-orm";
-import { Activity, Bot, Braces, FileText, MessageSquare, PlayCircle, Plus, Workflow } from "lucide-react";
 import Link from "next/link";
+import { Bot, MessageSquare, PlugZap, Plus, TriangleAlert } from "lucide-react";
 import { redirect } from "next/navigation";
 import { DashboardShell } from "@/components/dashboard-shell";
-import { OwnerOperationsOverview } from "@/components/owner-operations-overview";
-import { db } from "@/db";
-import { agentTeams, agents, conversations, mcpServers, providerCredentials, runs } from "@/db/schema";
-import { loadCustomPermissions } from "@/lib/auth/custom-permissions";
-import { can } from "@/lib/auth/permissions";
+import { buttonClass } from "@/components/ui";
 import { currentSession } from "@/lib/auth/session";
-import { conversationAccessFilter } from "@/lib/chat/access";
-
-function statusLabel(status: string) {
-  return ({
-    queued: "في الانتظار",
-    running: "يعمل الآن",
-    completed: "مكتمل",
-    failed: "فشل",
-    cancelled: "ملغي",
-  } as Record<string, string>)[status] ?? status;
-}
+import { loadDashboardSummary } from "@/lib/dashboard/summary";
+import { friendlyModelName, relativeTime, runStatusPresentation } from "@/lib/ui/presentation";
+import "./dashboard-workspace.css";
 
 export default async function DashboardPage() {
   const session = await currentSession();
   if (!session) redirect("/login");
   if (!session.organizationId || !session.role) redirect("/select-organization");
-  const organizationId = session.organizationId;
-  const isMember = session.role === "member";
-  const customPermissions = can(session.role, "analytics:read")
-    ? []
-    : await loadCustomPermissions(organizationId, session.userId);
-  const canViewAnalytics = can(session.role, "analytics:read") || customPermissions.includes("analytics:read");
 
-  const [agentCount, providerCount, runCount, teamCount, mcpCount, recentRuns] = await Promise.all([
-    db().select({ value: count() }).from(agents).where(and(eq(agents.organizationId, organizationId), eq(agents.status, "published"))),
-    db().select({ value: count() }).from(providerCredentials).where(and(eq(providerCredentials.organizationId, organizationId), eq(providerCredentials.enabled, true), eq(providerCredentials.validationStatus, "verified"))),
-    isMember
-      ? db().select({ value: count() }).from(runs)
-        .innerJoin(conversations, eq(conversations.id, runs.conversationId))
-        .where(and(
-          eq(runs.organizationId, organizationId),
-          conversationAccessFilter({ role: session.role, userId: session.userId, access: "read" }),
-        ))
-      : db().select({ value: count() }).from(runs).where(eq(runs.organizationId, organizationId)),
-    db().select({ value: count() }).from(agentTeams).where(eq(agentTeams.organizationId, organizationId)),
-    db().select({ value: count() }).from(mcpServers).where(and(eq(mcpServers.organizationId, organizationId), eq(mcpServers.status, "connected"))),
-    isMember
-      ? db().select({
-        id: runs.id,
-        status: runs.status,
-        model: runs.model,
-        createdAt: runs.createdAt,
-        agentName: agents.name,
-      }).from(runs)
-        .innerJoin(agents, eq(agents.id, runs.agentId))
-        .innerJoin(conversations, eq(conversations.id, runs.conversationId))
-        .where(and(
-          eq(runs.organizationId, organizationId),
-          conversationAccessFilter({ role: session.role, userId: session.userId, access: "read" }),
-        ))
-        .orderBy(desc(runs.createdAt)).limit(6)
-      : db().select({
-        id: runs.id,
-        status: runs.status,
-        model: runs.model,
-        createdAt: runs.createdAt,
-        agentName: agents.name,
-      }).from(runs)
-        .innerJoin(agents, eq(agents.id, runs.agentId))
-        .where(eq(runs.organizationId, organizationId))
-        .orderBy(desc(runs.createdAt)).limit(6),
-  ]);
-
-  const metrics = [
-    { label: "الوكلاء النشطون", value: agentCount[0]?.value ?? 0, hint: "وكلاء جاهزون للتشغيل", icon: Bot },
-    { label: "إجمالي التشغيلات", value: runCount[0]?.value ?? 0, hint: "سجل تنفيذي قابل للتدقيق", icon: PlayCircle },
-    { label: "فرق الوكلاء", value: teamCount[0]?.value ?? 0, hint: "تنسيق متعدد الوكلاء", icon: Workflow },
-    {
-      label: isMember ? "الخدمات المتصلة" : "MCP / المزودون",
-      value: isMember ? providerCount[0]?.value ?? 0 : `${mcpCount[0]?.value ?? 0} / ${providerCount[0]?.value ?? 0}`,
-      hint: "اتصالات متحققة ومفعلة",
-      icon: Braces,
-    },
-  ];
+  const summary = await loadDashboardSummary({
+    organizationId: session.organizationId,
+    userId: session.userId,
+    role: session.role,
+  });
+  const displayName = session.name?.trim().split(/\s+/)[0] || "مرحبًا";
 
   return (
     <DashboardShell
       session={session}
       activePath="/dashboard"
-      title={`مرحباً ${session.name ?? "بك"}`}
-      description="حوّل أهدافك إلى تشغيلات ووكلاء وفرق عمل مترابطة، وراقب التنفيذ من لوحة واحدة."
+      title={`مرحبًا ${displayName}`}
+      description="ابدأ محادثة أو تابع ما يحتاج انتباهك دون ازدحام التفاصيل التشغيلية."
+      actions={<Link className={buttonClass({ variant: "primary", size: "md" })} href="/dashboard/chat"><Plus size={16} /> محادثة جديدة</Link>}
     >
-      <dl className="metric-grid">
-        {metrics.map((metric) => {
-          const Icon = metric.icon;
-          return (
-            <div className="metric-card" key={metric.label}>
-              <span className="metric-icon"><Icon size={18} aria-hidden="true" /></span>
-              <dt>{metric.label}</dt>
-              <dd>{metric.value}</dd>
-              <p className="metric-trend">{metric.hint}</p>
-            </div>
-          );
-        })}
-      </dl>
+      <section className="workspace-metrics" aria-label="ملخص مساحة العمل">
+        <Link href="/dashboard/agents?status=published" className="workspace-metric"><span className="workspace-metric-icon"><Bot size={18} /></span><div><strong>{new Intl.NumberFormat("ar").format(summary.activeAgents)}</strong><span>وكلاء منشورون</span></div></Link>
+        <Link href="/dashboard/runs" className="workspace-metric"><span className="workspace-metric-icon"><MessageSquare size={18} /></span><div><strong>{new Intl.NumberFormat("ar").format(summary.runsToday)}</strong><span>تشغيلات اليوم</span></div></Link>
+        <Link href="/dashboard/runs?status=failed" className="workspace-metric"><span className="workspace-metric-icon metric-danger"><TriangleAlert size={18} /></span><div><strong>{new Intl.NumberFormat("ar").format(summary.failedRuns)}</strong><span>فشلت اليوم</span></div></Link>
+        <Link href="/dashboard/integrations" className="workspace-metric"><span className="workspace-metric-icon metric-warning"><PlugZap size={18} /></span><div><strong>{new Intl.NumberFormat("ar").format(summary.integrationsNeedingAttention)}</strong><span>تكاملات تحتاج تدخلًا</span></div></Link>
+      </section>
 
-      <div className="dashboard-grid">
-        <section className="dashboard-panel">
-          <div className="panel-header">
-            <div>
-              <h2>آخر عمليات التشغيل</h2>
-              <p>أحدث السجلات المحفوظة في قاعدة البيانات</p>
-            </div>
-            <Link className="panel-link" href="/dashboard/runs">عرض الكل</Link>
+      <div className="workspace-home-grid">
+        <section className="page-section workspace-recent-section">
+          <header className="page-section-header"><div><h2>متابعة العمل</h2><p>آخر المحادثات التي يمكنك الوصول إليها.</p></div><Link href="/dashboard/chat">عرض الكل</Link></header>
+          <div className="workspace-recent-list">
+            {summary.recentConversations.length ? summary.recentConversations.map((conversation) => <Link key={conversation.id} href={`/dashboard/chat?conversationId=${encodeURIComponent(conversation.id)}`} className="workspace-recent-row"><span className="workspace-row-avatar">{conversation.agentName.slice(0, 1)}</span><span className="workspace-row-copy"><b>{conversation.title?.trim() || "محادثة بدون عنوان"}</b><small>{conversation.summary?.trim() || conversation.agentName}</small></span><time>{relativeTime(conversation.lastMessageAt ?? conversation.updatedAt)}</time></Link>) : <div className="workspace-empty-inline"><MessageSquare size={18} /><p>لا توجد محادثات نشطة بعد.</p><Link href="/dashboard/chat">ابدأ أول محادثة</Link></div>}
           </div>
-          {recentRuns.length === 0 ? (
-            <div className="empty-state">
-              <Activity size={26} aria-hidden="true" className="mx-auto mb-3" />
-              لم تبدأ أي عملية بعد. ابدأ محادثة أو شغّل فريقاً.
-            </div>
-          ) : (
-            <ul className="run-list">
-              {recentRuns.map((run) => (
-                <li className="run-row" key={run.id}>
-                  <div className="min-w-0">
-                    <Link className="run-title" href="/dashboard/runs">{run.agentName}</Link>
-                    <div className="run-meta">
-                      <bdi dir="ltr">{run.model}</bdi>
-                      <span>{run.createdAt.toLocaleString("ar", { dateStyle: "medium", timeStyle: "short" })}</span>
-                      <bdi dir="ltr">{run.id.slice(0, 8)}</bdi>
-                    </div>
-                  </div>
-                  <span className={`status-chip status-${run.status}`}>{statusLabel(run.status)}</span>
-                </li>
-              ))}
-            </ul>
-          )}
         </section>
 
-        <aside className="dashboard-panel">
-          <div className="panel-header">
-            <div>
-              <h2>بدء سريع</h2>
-              <p>أقصر طريق من الفكرة إلى التنفيذ</p>
-            </div>
-            <Plus size={18} aria-hidden="true" />
+        <section className="page-section workspace-recent-section">
+          <header className="page-section-header"><div><h2>النشاط الأخير</h2><p>أحدث تشغيلات الوكلاء.</p></div><Link href="/dashboard/runs">كل التشغيلات</Link></header>
+          <div className="workspace-run-list">
+            {summary.recentRuns.length ? summary.recentRuns.map((run) => {
+              const status = runStatusPresentation[run.status];
+              return <Link key={run.id} href={`/dashboard/runs?runId=${encodeURIComponent(run.id)}`} className="workspace-run-row"><span className={`status-badge status-${status.tone}`}>{status.label}</span><span className="workspace-row-copy"><b>{run.agentName}</b><small>{friendlyModelName(run.model)}</small></span><time>{relativeTime(run.createdAt)}</time></Link>;
+            }) : <div className="workspace-empty-inline"><Bot size={18} /><p>لا توجد تشغيلات بعد.</p><Link href="/dashboard/agents">افتح الوكلاء</Link></div>}
           </div>
-          <div className="quick-actions">
-            <Link className="quick-action" href="/dashboard/chat">
-              <MessageSquare size={19} aria-hidden="true" />
-              <span><b>محادثة جديدة</b><span>ابدأ مهمة مع وكيل منشور</span></span>
-            </Link>
-            <Link className="quick-action" href="/dashboard/agents">
-              <Bot size={19} aria-hidden="true" />
-              <span><b>إنشاء وكيل</b><span>تعليمات ونموذج وأدوات محددة</span></span>
-            </Link>
-            {!isMember ? (
-              <>
-                <Link className="quick-action" href="/dashboard/teams">
-                  <Workflow size={19} aria-hidden="true" />
-                  <span><b>تكوين فريق</b><span>مشرف وعدة وكلاء متخصصين</span></span>
-                </Link>
-                <Link className="quick-action" href="/dashboard/mcp">
-                  <Braces size={19} aria-hidden="true" />
-                  <span><b>ربط MCP</b><span>اكتشاف وتشغيل أدوات بعيدة</span></span>
-                </Link>
-                {canViewAnalytics ? <Link className="quick-action" href="/dashboard/content">
-                  <FileText size={19} aria-hidden="true" />
-                  <span><b>إدارة المحتوى</b><span>صفحات وخدمات وقوائم قابلة للنشر</span></span>
-                </Link> : null}
-              </>
-            ) : (
-              <Link className="quick-action" href="/dashboard/files">
-                <FileText size={19} aria-hidden="true" />
-                <span><b>رفع ملف</b><span>استخدم الملفات داخل محادثاتك</span></span>
-              </Link>
-            )}
-          </div>
-        </aside>
+        </section>
       </div>
-
-      {canViewAnalytics ? <OwnerOperationsOverview organizationId={organizationId} /> : null}
     </DashboardShell>
   );
 }
