@@ -16,7 +16,17 @@ export const telegramUpdatePayloadSchema = z.object({
   updateRowId: uuid,
   updateId: z.number().int().safe(),
   update: z.record(z.string(), z.unknown()),
-}).strict();
+  integrationId: uuid.optional(),
+  organizationId: uuid.optional(),
+}).strict().superRefine((value, context) => {
+  if (Boolean(value.integrationId) !== Boolean(value.organizationId)) {
+    context.addIssue({
+      code: "custom",
+      path: ["integrationId"],
+      message: "Telegram integrationId and organizationId must be supplied together.",
+    });
+  }
+});
 export const whatsappChannelUpdatePayloadSchema = z.object({
   eventRowId: uuid,
   message: z.record(z.string(), z.unknown()),
