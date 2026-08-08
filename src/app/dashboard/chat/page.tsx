@@ -10,6 +10,7 @@ import { defaultChatAppearance, normalizeChatAppearance } from "@/lib/chat/appea
 import { canManageConversation, canWriteConversation, conversationAccessFilter } from "@/lib/chat/access";
 import { isPuterEnabled } from "@/lib/puter/feature";
 import "./chat-experience.css";
+import "./conversation-workspace.css";
 
 export default async function ChatPage({ searchParams }: { searchParams: Promise<{ conversationId?: string; agentId?: string; view?: string }> }) {
   const session = await currentSession();
