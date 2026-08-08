@@ -9,8 +9,7 @@ import type { ProviderContentPart } from "@/lib/providers/types";
 const MAX_CONTEXT_TOKENS = 12_000;
 const MAX_CONTEXT_CHUNKS = 16;
 const IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
-const FILE_REFERENCE = /(?:الملف|المرفق|المرفقات|الوثيقة|المستند|الجدول|الصورة|pdf|excel|اكسل|zip|الملفات|attached|attachment|file|document|spreadsheet|workbook|presentation|image|archive|previous\s+file)/iu;
-const GLOBAL_QUERY = /(?:لخص|ملخص|حلل(?:\s+الملف)?|افحص(?:\s+المشروع)?|ماذا\s+(?:يوجد|يحتوي)|اشرح(?:\s+الملف|\s+المشروع)?|summari[sz]e|overview|analy[sz]e\s+(?:the\s+)?(?:file|project)|what(?:'s| is)\s+in\s+(?:the\s+)?file|review\s+(?:the\s+)?(?:file|project))/iu;
+const GLOBAL_QUERY = /(?:لخص|ملخص|حلل|افحص|ماذا\s+(?:يوجد|يحتوي)|اشرح|summari[sz]e|overview|analy[sz]e|what(?:'s| is)\s+in|review)/iu;
 const MULTI_FILE_QUERY = /(?:قارن|الملفات|المرفقات|compare|files|attachments)/iu;
 
 export type ResolvedAttachment = {
@@ -22,6 +21,7 @@ export type ResolvedAttachment = {
   warnings: string[];
   chunkCount: number;
   explicit: boolean;
+  currentUpload: boolean;
 };
 
 function terms(query: string) {
@@ -31,9 +31,7 @@ function score(content: string, queryTerms: string[]) {
   const lower = content.toLocaleLowerCase();
   return queryTerms.reduce((total, term) => total + (lower.includes(term) ? 3 : 0) + Math.min(lower.split(term).length - 1, 3), 0);
 }
-function estimateTokens(value: string) {
-  return Math.ceil(value.length / 4) + 8;
-}
+function estimateTokens(value: string) { return Math.ceil(value.length / 4) + 8; }
 function citationLabel(filename: string, metadata: Record<string, unknown>) {
   const details: string[] = [];
   if (typeof metadata.page === "number") details.push(`page ${metadata.page}`);
@@ -41,6 +39,9 @@ function citationLabel(filename: string, metadata: Record<string, unknown>) {
   if (typeof metadata.slide === "number") details.push(`slide ${metadata.slide}`);
   if (typeof metadata.archivePath === "string") details.push(metadata.archivePath);
   return details.length ? `${filename}, ${details.join(", ")}` : filename;
+}
+function emptyResult() {
+  return { text: "", media: [] as ProviderContentPart[], attachments: [] as ResolvedAttachment[], citations: [] as Array<{ attachmentId: string; filename: string; chunkIndex: number; label: string; excerpt: string }>, retrievedChunkCount: 0, contextTokens: 0 };
 }
 
 export async function resolveAttachmentContext(input: {
@@ -52,25 +53,19 @@ export async function resolveAttachmentContext(input: {
   userQuery: string;
 }) {
   const explicitIds = [...new Set(input.explicitAttachmentIds ?? [])];
-  const referencesFiles = FILE_REFERENCE.test(input.userQuery);
-  if (!explicitIds.length && !referencesFiles) {
-    return { text: "", media: [] as ProviderContentPart[], attachments: [] as ResolvedAttachment[], citations: [], retrievedChunkCount: 0, contextTokens: 0 };
-  }
-
-  const candidates = await db().select({
+  const fetched = await db().select({
     id: attachments.id,
+    messageId: attachments.messageId,
     filename: attachments.filename,
     mimeType: attachments.mimeType,
     sizeBytes: attachments.sizeBytes,
     content: attachments.content,
     storageDriver: attachments.storageDriver,
     objectKey: attachments.objectKey,
-    uploadedByUserId: attachments.uploadedByUserId,
     createdAt: attachments.createdAt,
     status: attachmentIntelligence.status,
     warnings: attachmentIntelligence.warnings,
     chunkCount: attachmentIntelligence.chunkCount,
-    category: attachmentIntelligence.category,
   }).from(attachments)
     .leftJoin(attachmentIntelligence, eq(attachmentIntelligence.attachmentId, attachments.id))
     .where(and(
@@ -80,31 +75,41 @@ export async function resolveAttachmentContext(input: {
       explicitIds.length ? inArray(attachments.id, explicitIds) : undefined,
     ))
     .orderBy(desc(attachments.createdAt))
-    .limit(explicitIds.length ? Math.min(explicitIds.length, 12) : MULTI_FILE_QUERY.test(input.userQuery) ? 6 : 1);
+    .limit(explicitIds.length ? Math.min(explicitIds.length, 12) : 12);
 
   if (explicitIds.length) {
-    const found = new Set(candidates.map((file) => file.id));
+    const found = new Set(fetched.map((file) => file.id));
     if (explicitIds.some((id) => !found.has(id))) throw new ApiError(404, "FILE_NOT_FOUND", "أحد المرفقات غير موجود في هذه المحادثة أو لا يمكنك الوصول إليه.");
   }
-  if (!candidates.length) return { text: "", media: [] as ProviderContentPart[], attachments: [] as ResolvedAttachment[], citations: [], retrievedChunkCount: 0, contextTokens: 0 };
+  if (!fetched.length) return emptyResult();
+
+  // Conversation policy: explicit files win. Otherwise current unbound uploads win.
+  // If neither exists, keep the most recent attachment group (same message) active
+  // across subsequent turns, model/provider switches, refreshes, retries and edits.
+  let candidates = fetched;
+  if (!explicitIds.length) {
+    const unbound = fetched.filter((file) => file.messageId === null);
+    if (unbound.length) candidates = unbound.slice(0, 8);
+    else {
+      const latestMessageId = fetched[0]?.messageId;
+      candidates = latestMessageId ? fetched.filter((file) => file.messageId === latestMessageId) : fetched.slice(0, 1);
+      if (MULTI_FILE_QUERY.test(input.userQuery) && candidates.length < fetched.length) candidates = fetched.slice(0, 8);
+    }
+  }
+
+  const blocked = candidates.filter((file) => file.status === "processing" || file.status === "uploaded");
+  if (blocked.length) throw new ApiError(409, "FILE_NOT_READY", `الملف ${blocked[0]!.filename} لا يزال قيد التحليل.`);
 
   const media: ProviderContentPart[] = [];
   for (const file of candidates) {
     if (!IMAGE_MIMES.has(file.mimeType)) continue;
     const bytes = await readAttachmentContent(file);
     if (bytes.byteLength > 12 * 1024 * 1024) throw new ApiError(413, "PROVIDER_ATTACHMENT_UNSUPPORTED", `الصورة ${file.filename} أكبر من حد الإدخال المرئي.`);
-    media.push({
-      type: "image",
-      mediaType: file.mimeType as "image/jpeg" | "image/png" | "image/webp" | "image/gif",
-      data: Buffer.from(bytes).toString("base64"),
-    });
+    media.push({ type: "image", mediaType: file.mimeType as "image/jpeg" | "image/png" | "image/webp" | "image/gif", data: Buffer.from(bytes).toString("base64") });
   }
 
-  const blocked = candidates.filter((file) => file.status === "processing" || file.status === "uploaded");
-  if (blocked.length && explicitIds.length) throw new ApiError(409, "FILE_NOT_READY", `الملف ${blocked[0]!.filename} لا يزال قيد التحليل.`);
-
   const candidateIds = candidates.map((file) => file.id);
-  const chunks = candidateIds.length ? await db().select({
+  const chunks = await db().select({
     attachmentId: attachmentChunks.attachmentId,
     chunkIndex: attachmentChunks.chunkIndex,
     content: attachmentChunks.content,
@@ -114,7 +119,7 @@ export async function resolveAttachmentContext(input: {
     eq(attachmentChunks.organizationId, input.organizationId),
     eq(attachmentChunks.conversationId, input.conversationId),
     inArray(attachmentChunks.attachmentId, candidateIds),
-  )).orderBy(asc(attachmentChunks.attachmentId), asc(attachmentChunks.chunkIndex)) : [];
+  )).orderBy(asc(attachmentChunks.attachmentId), asc(attachmentChunks.chunkIndex));
 
   const global = GLOBAL_QUERY.test(input.userQuery);
   const queryTerms = terms(input.userQuery);
@@ -170,6 +175,7 @@ export async function resolveAttachmentContext(input: {
       warnings: file.warnings ?? [],
       chunkCount: file.chunkCount ?? 0,
       explicit: explicitIds.includes(file.id),
+      currentUpload: file.messageId === null,
     })),
     citations,
     retrievedChunkCount: contextParts.length,
