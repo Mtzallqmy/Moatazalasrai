@@ -9,12 +9,16 @@ const enabled = process.env.E2E_BASE_URL
 
 const baseUrl = process.env.E2E_BASE_URL ?? "http://127.0.0.1:3000";
 
-const regressionViewports = [
-  { name: "375x812", width: 375, height: 812 },
-  { name: "390x844", width: 390, height: 844 },
-  { name: "430x932", width: 430, height: 932 },
-  { name: "768x1024", width: 768, height: 1024 },
-  { name: "1440x900", width: 1440, height: 900 },
+const responsiveViewports = [
+  { name: "320x568", width: 320, height: 568, capture: false },
+  { name: "360x800", width: 360, height: 800, capture: false },
+  { name: "375x812", width: 375, height: 812, capture: true },
+  { name: "390x844", width: 390, height: 844, capture: true },
+  { name: "412x915", width: 412, height: 915, capture: false },
+  { name: "430x932", width: 430, height: 932, capture: true },
+  { name: "768x1024", width: 768, height: 1024, capture: true },
+  { name: "1024x768", width: 1024, height: 768, capture: false },
+  { name: "1440x900", width: 1440, height: 900, capture: true },
 ] as const;
 
 test.describe("Puter browser provider", () => {
@@ -124,9 +128,14 @@ test.describe("Puter browser provider", () => {
     await page.reload();
     await expect(page.getByText("نجح بث Puter التجريبي")).toBeVisible();
 
-    for (const viewport of regressionViewports) {
+    for (const viewport of responsiveViewports) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
-      await page.screenshot({ path: `artifacts/puter-ui/chat-${viewport.name}.png`, fullPage: true });
+      const hasNoHorizontalOverflow = await page.evaluate(() => {
+        const root = document.documentElement;
+        return Math.max(root.scrollWidth, document.body.scrollWidth) <= root.clientWidth + 1;
+      });
+      expect(hasNoHorizontalOverflow, `horizontal overflow at ${viewport.name}`).toBe(true);
+      if (viewport.capture) await page.screenshot({ path: `artifacts/puter-ui/chat-${viewport.name}.png`, fullPage: true });
     }
   });
 });
