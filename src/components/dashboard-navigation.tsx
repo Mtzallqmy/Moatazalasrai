@@ -98,7 +98,7 @@ const navigationGroups: NavigationGroup[] = [
   {
     label: "الإدارة والحوكمة",
     items: [
-      { label: "مركز تحكم المنصة", href: "/dashboard/control-plane", icon: SlidersHorizontal, permission: "platform:read", keywords: ["modules", "features", "notifications", "trash"] },
+      { label: "مركز تحكم المؤسسة", href: "/dashboard/control-plane", icon: SlidersHorizontal, permission: "control_plane:read", keywords: ["modules", "features", "notifications", "trash"] },
       { label: "الأعضاء والصلاحيات", href: "/dashboard/members", icon: Users, permission: "members:read" },
       { label: "سجل التدقيق", href: "/dashboard/audit", icon: ShieldCheck, permission: "audit:read" },
       { label: "صحة المنصة", href: "/dashboard/diagnostics", icon: Activity, permission: "audit:read" },
