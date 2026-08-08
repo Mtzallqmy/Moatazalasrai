@@ -15,7 +15,7 @@ describeDatabase("channel integration application services", () => {
 
   beforeAll(async () => {
     process.env.DATABASE_URL = databaseUrl!;
-    process.env.BROWSER_AGENT_ENABLED = "true";
+    process.env.BROWSER_AGENT_ENABLED = "false";
     sql = createTestSqlClient(databaseUrl!, 3);
     await sql`INSERT INTO organizations (id, name, slug) VALUES (${organizationId}, 'Channel Integrations Test', ${`channel-integrations-${organizationId}`})`;
     await sql`INSERT INTO users (id, email, name) VALUES (${userId}, ${`channel-integrations-${userId}@example.test`}, 'Integration Admin')`;
