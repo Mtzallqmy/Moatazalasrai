@@ -59,8 +59,9 @@ beforeEach(() => {
   });
   resetEnvForTests();
   vi.clearAllMocks();
-  mocks.insertReturning.mockResolvedValue([{ id: "event-id", status: "accepted" }]);
+  mocks.insertReturning.mockResolvedValue([{ id: "event-id", status: "accepted", errorCode: null }]);
   mocks.selectLimit.mockResolvedValue([]);
+  mocks.enqueue.mockResolvedValue({ jobId: "job-1" });
 });
 
 afterEach(() => {
@@ -121,7 +122,7 @@ describe("WhatsApp webhook route", () => {
 
   it("does not queue an event already completed", async () => {
     mocks.insertReturning.mockResolvedValueOnce([]);
-    mocks.selectLimit.mockResolvedValueOnce([{ id: "event-id", status: "completed" }]);
+    mocks.selectLimit.mockResolvedValueOnce([{ id: "event-id", status: "completed", errorCode: null }]);
     const { POST } = await import("@/app/api/webhooks/whatsapp/route");
     const raw = JSON.stringify({ entry: [{ changes: [{ value: {
       metadata: { phone_number_id: "1234567890" },
@@ -131,6 +132,32 @@ describe("WhatsApp webhook route", () => {
     expect(response.status).toBe(200);
     expect((await response.json()).data).toMatchObject({ messages: 1, queued: 0, duplicates: 1 });
     expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("re-enqueues a duplicate that previously failed only at the queue boundary", async () => {
+    mocks.insertReturning.mockResolvedValueOnce([]);
+    mocks.selectLimit.mockResolvedValueOnce([{ id: "event-id", status: "accepted", errorCode: "WHATSAPP_QUEUE_UNAVAILABLE" }]);
+    const { POST } = await import("@/app/api/webhooks/whatsapp/route");
+    const message = { id: "wamid.retry", from: "967711111111", type: "text", text: { body: "أعد المحاولة" } };
+    const raw = JSON.stringify({ entry: [{ changes: [{ value: { metadata: { phone_number_id: "1234567890" }, messages: [message] } }] }] });
+    const response = await POST(signedRequest(raw));
+    expect(response.status).toBe(200);
+    expect((await response.json()).data).toMatchObject({ messages: 1, queued: 1, failed: 0 });
+    expect(mocks.enqueue).toHaveBeenCalledWith({ eventRowId: "event-id", message });
+  });
+
+  it("returns 503 for a partial batch enqueue failure so Meta retries only the non-terminal rows", async () => {
+    mocks.enqueue.mockResolvedValueOnce({ jobId: "job-1" }).mockRejectedValueOnce(new Error("queue down"));
+    const { POST } = await import("@/app/api/webhooks/whatsapp/route");
+    const messages = [
+      { id: "wamid.ok", from: "967711111111", type: "text", text: { body: "الأولى" } },
+      { id: "wamid.fail", from: "967722222222", type: "text", text: { body: "الثانية" } },
+    ];
+    const raw = JSON.stringify({ entry: [{ changes: [{ value: { metadata: { phone_number_id: "1234567890" }, messages } }] }] });
+    const response = await POST(signedRequest(raw));
+    expect(response.status).toBe(503);
+    expect(mocks.enqueue).toHaveBeenCalledTimes(2);
+    expect(mocks.updateWhere).toHaveBeenCalled();
   });
 
   it("rejects an invalid signature before database processing", async () => {
