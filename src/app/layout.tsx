@@ -4,6 +4,7 @@ import "@fontsource-variable/alexandria";
 import "./globals.css";
 import "./typography.css";
 import "./dashboard-polish.css";
+import "./ai-workspace.css";
 
 export const metadata: Metadata = {
   title: {
