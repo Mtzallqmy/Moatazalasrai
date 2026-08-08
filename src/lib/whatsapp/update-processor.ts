@@ -17,6 +17,7 @@ import { ensureChannelClientSession, finishChannelFlow } from "@/lib/channel-cli
 import { presentChannelClientError } from "@/lib/channel-client/error-presenter";
 import { sendChannelClientView } from "@/lib/channel-client/message-renderer";
 import { isFeatureEnabled } from "@/lib/control-plane/features";
+import { ApiError } from "@/lib/http/api";
 import { requireWhatsAppConfig } from "@/lib/integrations/whatsapp/config";
 import { markMessageAsRead } from "@/lib/integrations/whatsapp/client";
 import {
@@ -81,6 +82,11 @@ async function markEvent(id: string, status: string, errorCode?: string) {
 
 function safeLog(level: "info" | "warn" | "error", event: string, metadata: Record<string, unknown>) {
   console[level](JSON.stringify({ level, event, ...metadata }));
+}
+
+function retryableProcessingError(error: unknown) {
+  if (error instanceof ApiError) return error.status === 429 || error.status >= 500;
+  return true;
 }
 
 function policyFeatureResolver(policy: Awaited<ReturnType<typeof resolveEffectiveWhatsAppPolicy>>) {
@@ -278,8 +284,10 @@ export async function processWhatsAppChannelUpdate(input: {
       eventRowId: input.eventRowId,
       errorCode: presented.code,
       referenceId: presented.referenceId,
+      retryable: retryableProcessingError(error),
     });
     await sendChannelClientView(transport, { text: presented.message }).catch(() => undefined);
     await markEvent(input.eventRowId, "failed", presented.code);
+    if (retryableProcessingError(error)) throw error;
   }
 }
