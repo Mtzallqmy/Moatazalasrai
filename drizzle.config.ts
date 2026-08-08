@@ -20,6 +20,7 @@ export default defineConfig({
     "./src/db/whatsapp-runtime-schema.ts",
     "./src/db/execution-schema.ts",
     "./src/db/file-intelligence-schema.ts",
+    "./src/db/tool-run-schema.ts",
   ],
   out: "./drizzle",
   dialect: "postgresql",

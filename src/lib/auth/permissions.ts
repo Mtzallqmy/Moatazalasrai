@@ -22,6 +22,11 @@ export const ALL_PERMISSIONS = [
   "browser_tasks:read", "browser_tasks:run", "browser_tasks:manage", "browser_tasks:approve",
   "sandbox:read", "sandbox:use", "sandbox:manage", "sandbox:approve",
   "executions:read", "executions:run", "executions:manage",
+  "tools:read", "tools:run", "tools:manage",
+  "data_interpreter:run",
+  "coding_agent:run", "coding_agent:write", "coding_agent:publish",
+  "browser_agent:run", "browser_agent:write",
+  "voice_studio:run", "voice_studio:manage_profiles",
 ] as const;
 
 export type Permission = typeof ALL_PERMISSIONS[number];
@@ -40,6 +45,9 @@ const permissions: Record<Role, ReadonlySet<Permission>> = {
     "browser_tasks:read", "browser_tasks:run",
     "sandbox:read", "sandbox:use", "sandbox:manage",
     "executions:read", "executions:run", "executions:manage",
+    "tools:read", "tools:run",
+    "data_interpreter:run", "coding_agent:run", "coding_agent:write",
+    "browser_agent:run", "browser_agent:write", "voice_studio:run",
   ]),
   operator: new Set([
     "providers:read", "agents:read", "agents:run", "runs:read", "integrations:read",
@@ -50,17 +58,19 @@ const permissions: Record<Role, ReadonlySet<Permission>> = {
     "browser_tasks:read", "browser_tasks:run", "browser_tasks:approve",
     "sandbox:read", "sandbox:use", "sandbox:approve",
     "executions:read", "executions:run",
+    "tools:read", "tools:run", "data_interpreter:run", "browser_agent:run", "voice_studio:run",
   ]),
   viewer: new Set([
     "providers:read", "agents:read", "runs:read", "integrations:read", "channels:read",
     "notifications:read", "platform:read", "analytics:read", "content:read", "services:read", "menus:read",
-    "files:read", "site_connections:read", "browser_tasks:read", "sandbox:read", "executions:read",
+    "files:read", "site_connections:read", "browser_tasks:read", "sandbox:read", "executions:read", "tools:read",
   ]),
   member: new Set([
     "agents:read", "agents:run", "channels:read", "channels:use", "notifications:read",
     "content:read", "services:read", "menus:read", "files:read", "files:upload",
     "site_connections:read", "site_connections:use", "browser_tasks:read", "browser_tasks:run",
-    "sandbox:read", "sandbox:use", "security:read",
+    "sandbox:read", "sandbox:use", "security:read", "tools:read", "tools:run",
+    "data_interpreter:run", "voice_studio:run",
   ]),
 };
 
