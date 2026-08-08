@@ -11,6 +11,7 @@ import { enforceRateLimit } from "@/lib/security/rate-limit";
 import { enqueueWhatsAppChannelUpdate } from "@/worker/queue";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 const MAX_WEBHOOK_BYTES = 1024 * 1024;
 
@@ -31,11 +32,13 @@ async function eventRow(input: {
   }).onConflictDoNothing().returning({
     id: whatsappWebhookEvents.id,
     status: whatsappWebhookEvents.status,
+    errorCode: whatsappWebhookEvents.errorCode,
   });
   if (created) return { ...created, duplicate: false };
   const [existing] = await db().select({
     id: whatsappWebhookEvents.id,
     status: whatsappWebhookEvents.status,
+    errorCode: whatsappWebhookEvents.errorCode,
   }).from(whatsappWebhookEvents).where(and(
     eq(whatsappWebhookEvents.messageId, input.messageId),
   )).limit(1);
@@ -107,7 +110,11 @@ export async function POST(request: Request) {
         failed += 1;
         continue;
       }
-      if (row.duplicate && row.status === "completed") {
+      if (row.duplicate && (row.status === "completed" || row.status === "ignored")) {
+        duplicates += 1;
+        continue;
+      }
+      if (row.duplicate && row.status === "failed" && row.errorCode !== "WHATSAPP_QUEUE_UNAVAILABLE") {
         duplicates += 1;
         continue;
       }
@@ -116,13 +123,18 @@ export async function POST(request: Request) {
           eventRowId: row.id,
           message: item.message as unknown as Record<string, unknown>,
         });
+        await db().update(whatsappWebhookEvents).set({
+          status: "accepted",
+          errorCode: null,
+          completedAt: null,
+        }).where(eq(whatsappWebhookEvents.id, row.id));
         queued += 1;
       } catch (error) {
         failed += 1;
         await db().update(whatsappWebhookEvents).set({
-          status: "failed",
+          status: "accepted",
           errorCode: "WHATSAPP_QUEUE_UNAVAILABLE",
-          completedAt: new Date(),
+          completedAt: null,
         }).where(eq(whatsappWebhookEvents.id, row.id));
         safeLog("error", "whatsapp.update.enqueue_failed", {
           requestId,
@@ -133,8 +145,10 @@ export async function POST(request: Request) {
       }
     }
 
-    if (failed > 0 && queued === 0 && extracted.length > 0) {
-      return apiFailure(503, "WHATSAPP_QUEUE_UNAVAILABLE", "تعذر جدولة رسائل WhatsApp.", requestId);
+    // Meta retries the whole webhook on 5xx. Successful rows remain idempotent,
+    // while only queue-unavailable rows are re-enqueued on the retry.
+    if (failed > 0 && extracted.length > 0) {
+      return apiFailure(503, "WHATSAPP_QUEUE_UNAVAILABLE", "تعذر جدولة بعض رسائل WhatsApp. سيُطلب من Meta إعادة المحاولة.", requestId);
     }
     return apiSuccess({ accepted: true, messages: extracted.length, queued, duplicates, failed }, requestId);
   } catch (error) {
