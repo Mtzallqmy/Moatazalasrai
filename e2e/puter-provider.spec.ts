@@ -9,6 +9,14 @@ const enabled = process.env.E2E_BASE_URL
 
 const baseUrl = process.env.E2E_BASE_URL ?? "http://127.0.0.1:3000";
 
+const regressionViewports = [
+  { name: "375x812", width: 375, height: 812 },
+  { name: "390x844", width: 390, height: 844 },
+  { name: "430x932", width: 430, height: 932 },
+  { name: "768x1024", width: 768, height: 1024 },
+  { name: "1440x900", width: 1440, height: 900 },
+] as const;
+
 test.describe("Puter browser provider", () => {
   test.skip(!enabled, "Puter E2E requires an isolated deployment with the explicit browser mock enabled.");
 
@@ -95,26 +103,30 @@ test.describe("Puter browser provider", () => {
     await page.evaluate(() => localStorage.removeItem("moataz:puter:e2e-auth-fail"));
     await card.getByRole("button", { name: "الاتصال بحساب Puter" }).click();
     await expect(card.getByText("Puter E2E Model")).toBeVisible();
-    await page.screenshot({ path: "artifacts/puter-ui/providers-desktop.png", fullPage: true });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.screenshot({ path: "artifacts/puter-ui/providers-1440x900.png", fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.screenshot({ path: "artifacts/puter-ui/providers-mobile.png", fullPage: true });
-    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.screenshot({ path: "artifacts/puter-ui/providers-390x844.png", fullPage: true });
+    await page.setViewportSize({ width: 1440, height: 900 });
 
     await page.goto("/dashboard/chat");
-    await page.getByRole("button", { name: "محادثة جديدة" }).click();
-    await page.getByLabel("مصدر تنفيذ الدردشة").selectOption("puter");
+    await page.locator(".conversation-empty").getByRole("button", { name: "محادثة جديدة" }).click();
+    await page.getByRole("button", { name: "أدوات" }).click();
+    await page.getByLabel("مصدر التنفيذ").selectOption("puter");
     await expect(page.getByLabel("نموذج Puter").locator('option[value="puter-e2e-model"]')).toHaveCount(1);
     await page.getByLabel("نموذج Puter").selectOption("puter-e2e-model");
-    const composer = page.getByPlaceholder("اكتب طلبك… Enter للإرسال وShift+Enter لسطر جديد");
+    const composer = page.getByLabel("رسالة المحادثة");
     await expect(composer).toBeEnabled();
     await composer.fill("ابدأ اختبار Puter");
-    await page.getByRole("button", { name: "إرسال" }).click();
+    await page.getByRole("button", { name: "إرسال الرسالة" }).click();
     await page.getByRole("button", { name: "أفهم وأتابع" }).click();
     await expect(page.getByText("نجح بث Puter التجريبي")).toBeVisible();
-    await page.screenshot({ path: "artifacts/puter-ui/chat-desktop.png", fullPage: true });
     await page.reload();
     await expect(page.getByText("نجح بث Puter التجريبي")).toBeVisible();
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.screenshot({ path: "artifacts/puter-ui/chat-mobile.png", fullPage: true });
+
+    for (const viewport of regressionViewports) {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await page.screenshot({ path: `artifacts/puter-ui/chat-${viewport.name}.png`, fullPage: true });
+    }
   });
 });
