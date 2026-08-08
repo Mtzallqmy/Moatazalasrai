@@ -5,6 +5,7 @@ import { db } from "@/db";
 import { enterTenantDatabaseContext, runWithSystemDatabaseContext } from "@/db/tenant-context";
 import { organizationMembers, organizations, sessions, users } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
+import { activeMembership } from "@/lib/auth/membership-access";
 
 const LEGACY_SESSION_COOKIE = "moataz_session";
 export const SESSION_COOKIE = process.env.NODE_ENV === "production"
@@ -37,11 +38,15 @@ async function clearSessionCookies() {
 export async function createSession(input: {
   userId: string;
   activeOrganizationId?: string;
+  accessExpiresAt?: Date | null;
   ipAddress?: string;
   userAgent?: string;
 }) {
   const token = randomBytes(32).toString("base64url");
-  const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000);
+  const standardExpiry = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000);
+  const expiresAt = input.accessExpiresAt && input.accessExpiresAt < standardExpiry
+    ? input.accessExpiresAt
+    : standardExpiry;
   const values: {
     userId: string;
     activeOrganizationId?: string;
@@ -83,9 +88,10 @@ export async function revokeAllSessions(userId: string) {
 
 export async function setActiveOrganization(userId: string, sessionId: string, organizationId: string) {
   await runWithSystemDatabaseContext(async () => {
-    const [membership] = await db().select({ id: organizationMembers.id }).from(organizationMembers).where(and(
+    const [membership] = await db().select({ id: organizationMembers.id, expiresAt: organizationMembers.expiresAt }).from(organizationMembers).where(and(
       eq(organizationMembers.userId, userId),
       eq(organizationMembers.organizationId, organizationId),
+      activeMembership(),
     )).limit(1);
     if (!membership) throw new ApiError(404, "MEMBERSHIP_NOT_FOUND", "المؤسسة غير متاحة لهذا الحساب.");
     const nextToken = randomBytes(32).toString("base64url");
@@ -114,6 +120,7 @@ async function resolveCurrentSession() {
     sessionId: sessions.id,
     activeOrganizationId: sessions.activeOrganizationId,
     lastSeenAt: sessions.lastSeenAt,
+    sessionExpiresAt: sessions.expiresAt,
     userId: users.id,
     email: users.email,
     name: users.name,
@@ -128,8 +135,13 @@ async function resolveCurrentSession() {
   let activeOrganizationId = base.activeOrganizationId;
   if (!activeOrganizationId) {
     const memberships = await db().select({ organizationId: organizationMembers.organizationId })
-      .from(organizationMembers).where(eq(organizationMembers.userId, base.userId))
+      .from(organizationMembers).where(and(eq(organizationMembers.userId, base.userId), activeMembership()))
       .orderBy(asc(organizationMembers.createdAt)).limit(2);
+    if (memberships.length === 0) {
+      await db().update(sessions).set({ revokedAt: new Date() }).where(eq(sessions.id, base.sessionId));
+      await clearSessionCookies();
+      return null;
+    }
     if (memberships.length === 1) {
       activeOrganizationId = memberships[0].organizationId;
       await db().update(sessions).set({ activeOrganizationId }).where(eq(sessions.id, base.sessionId));
@@ -141,13 +153,20 @@ async function resolveCurrentSession() {
         organizationId: organizations.id,
         organizationName: organizations.name,
         role: organizationMembers.role,
+        expiresAt: organizationMembers.expiresAt,
       }).from(organizationMembers)
         .innerJoin(organizations, eq(organizations.id, organizationMembers.organizationId))
-        .where(and(eq(organizationMembers.userId, base.userId), eq(organizationMembers.organizationId, activeOrganizationId)))
+        .where(and(
+          eq(organizationMembers.userId, base.userId),
+          eq(organizationMembers.organizationId, activeOrganizationId),
+          activeMembership(),
+        ))
         .limit(1)
     : [];
   if (activeOrganizationId && !membership) {
-    await db().update(sessions).set({ activeOrganizationId: null }).where(eq(sessions.id, base.sessionId));
+    await db().update(sessions).set({ revokedAt: new Date() }).where(eq(sessions.id, base.sessionId));
+    await clearSessionCookies();
+    return null;
   }
 
   const staleBefore = new Date(Date.now() - LAST_SEEN_WRITE_INTERVAL_MS);
@@ -164,6 +183,7 @@ async function resolveCurrentSession() {
     organizationId: membership?.organizationId ?? null,
     organizationName: membership?.organizationName ?? null,
     role: membership?.role ?? null,
+    accessExpiresAt: membership?.expiresAt?.toISOString() ?? null,
   };
 }
 

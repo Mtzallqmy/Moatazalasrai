@@ -44,6 +44,7 @@ describe("production Docker runtime dependencies", () => {
     expect(dockerfile).toContain("test -f /app/drizzle/0040_telegram_admin_default_permissions.sql");
     expect(dockerfile).toContain("test -f /app/drizzle/0041_telegram_user_sessions.sql");
     expect(dockerfile).toContain("test -f /app/drizzle/0042_whatsapp_user_sessions.sql");
+    expect(dockerfile).toContain("test -f /app/drizzle/0050_member_access_expiry.sql");
     expect(dockerfile).toContain("test -f /app/scripts/start-production.mjs");
     expect(dockerfile).toContain("test -f /app/scripts/validate-runtime-env.mjs");
   });

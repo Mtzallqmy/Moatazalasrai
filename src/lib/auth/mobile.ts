@@ -6,6 +6,7 @@ import { mobileSessions, organizationMembers, organizations, users } from "@/db/
 import { getPostgresPool } from "@/db/pool";
 import { ApiError } from "@/lib/http/api";
 import { hashApiKey } from "@/lib/security/encryption";
+import { activeMembership } from "@/lib/auth/membership-access";
 
 const ACCESS_MINUTES = 15;
 const REFRESH_DAYS = 90;
@@ -26,17 +27,30 @@ type IssueMobileSessionInput = {
   rememberSession?: boolean;
 };
 
-function mobileSessionMaterial(input: IssueMobileSessionInput) {
+function earlierExpiry(standard: Date, membership: Date | null) {
+  return membership && membership < standard ? membership : standard;
+}
+
+function mobileSessionMaterial(input: IssueMobileSessionInput, membershipExpiresAt: Date | null) {
   const accessToken = token("mat");
   const refreshToken = token("mrt");
-  const accessExpiresAt = expiresIn(ACCESS_MINUTES * 60_000);
+  const accessExpiresAt = earlierExpiry(expiresIn(ACCESS_MINUTES * 60_000), membershipExpiresAt);
   const refreshDays = input.rememberSession === false ? 1 : REFRESH_DAYS;
-  const refreshExpiresAt = expiresIn(refreshDays * 24 * 60 * 60_000);
+  const refreshExpiresAt = earlierExpiry(expiresIn(refreshDays * 24 * 60 * 60_000), membershipExpiresAt);
   return { accessToken, refreshToken, accessExpiresAt, refreshExpiresAt, refreshDays };
 }
 
 export async function issueMobileSessionWithClient(client: PoolClient, input: IssueMobileSessionInput) {
-  const material = mobileSessionMaterial(input);
+  const membershipResult = await client.query<{ expires_at: Date | null }>(`
+    SELECT expires_at
+    FROM organization_members
+    WHERE user_id = $1 AND organization_id = $2
+      AND (expires_at IS NULL OR expires_at > now())
+    LIMIT 1
+  `, [input.userId, input.organizationId]);
+  const membership = membershipResult.rows[0];
+  if (!membership) throw new ApiError(403, "ACCOUNT_ACCESS_EXPIRED", "انتهت صلاحية استخدام الحساب أو أوقفه مدير المؤسسة.");
+  const material = mobileSessionMaterial(input, membership.expires_at);
   const result = await client.query<{ id: string }>(`
     INSERT INTO mobile_sessions (
       user_id, organization_id, access_token_hash, access_expires_at,
@@ -70,8 +84,8 @@ export async function issueMobileSessionWithClient(client: PoolClient, input: Is
     accessToken: material.accessToken,
     refreshToken: material.refreshToken,
     tokenType: "Bearer" as const,
-    expiresIn: ACCESS_MINUTES * 60,
-    refreshExpiresIn: material.refreshDays * 24 * 60 * 60,
+    expiresIn: Math.max(1, Math.floor((material.accessExpiresAt.getTime() - Date.now()) / 1000)),
+    refreshExpiresIn: Math.max(1, Math.floor((material.refreshExpiresAt.getTime() - Date.now()) / 1000)),
   };
 }
 
@@ -92,10 +106,22 @@ export async function rotateMobileSession(refreshToken: string) {
   )).limit(1);
   if (!current) throw new ApiError(401, "REFRESH_TOKEN_INVALID", "انتهت جلسة التطبيق أو أُبطلت.");
 
+  const [membership] = await db().select({ expiresAt: organizationMembers.expiresAt })
+    .from(organizationMembers)
+    .where(and(
+      eq(organizationMembers.userId, current.userId),
+      eq(organizationMembers.organizationId, current.organizationId),
+      activeMembership(),
+    )).limit(1);
+  if (!membership) {
+    await db().update(mobileSessions).set({ revokedAt: new Date(), updatedAt: new Date() }).where(eq(mobileSessions.id, current.id));
+    throw new ApiError(401, "ACCOUNT_ACCESS_EXPIRED", "انتهت صلاحية استخدام الحساب. سجّل الدخول بحساب مصرح له.");
+  }
+
   const accessToken = token("mat");
   const nextRefreshToken = token("mrt");
-  const accessExpiresAt = expiresIn(ACCESS_MINUTES * 60_000);
-  const refreshExpiresAt = expiresIn(REFRESH_DAYS * 24 * 60 * 60_000);
+  const accessExpiresAt = earlierExpiry(expiresIn(ACCESS_MINUTES * 60_000), membership.expiresAt);
+  const refreshExpiresAt = earlierExpiry(expiresIn(REFRESH_DAYS * 24 * 60 * 60_000), membership.expiresAt);
   const [rotated] = await db().update(mobileSessions).set({
     accessTokenHash: hashApiKey(accessToken),
     accessExpiresAt,
@@ -116,8 +142,8 @@ export async function rotateMobileSession(refreshToken: string) {
     accessToken,
     refreshToken: nextRefreshToken,
     tokenType: "Bearer" as const,
-    expiresIn: ACCESS_MINUTES * 60,
-    refreshExpiresIn: REFRESH_DAYS * 24 * 60 * 60,
+    expiresIn: Math.max(1, Math.floor((accessExpiresAt.getTime() - Date.now()) / 1000)),
+    refreshExpiresIn: Math.max(1, Math.floor((refreshExpiresAt.getTime() - Date.now()) / 1000)),
   };
 }
 
@@ -132,9 +158,10 @@ export async function mobileOrganizations(userId: string) {
     name: organizations.name,
     slug: organizations.slug,
     role: organizationMembers.role,
+    expiresAt: organizationMembers.expiresAt,
   }).from(organizationMembers)
     .innerJoin(organizations, eq(organizations.id, organizationMembers.organizationId))
-    .where(eq(organizationMembers.userId, userId));
+    .where(and(eq(organizationMembers.userId, userId), activeMembership()));
 }
 
 export async function mobileMe(userId: string, organizationId: string) {
@@ -145,10 +172,11 @@ export async function mobileMe(userId: string, organizationId: string) {
     organizationId: organizations.id,
     organizationName: organizations.name,
     role: organizationMembers.role,
+    expiresAt: organizationMembers.expiresAt,
   }).from(users)
     .innerJoin(organizationMembers, eq(organizationMembers.userId, users.id))
     .innerJoin(organizations, eq(organizations.id, organizationMembers.organizationId))
-    .where(and(eq(users.id, userId), eq(organizations.id, organizationId)))
+    .where(and(eq(users.id, userId), eq(organizations.id, organizationId), activeMembership()))
     .limit(1);
   return identity ?? null;
 }

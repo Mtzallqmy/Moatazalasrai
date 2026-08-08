@@ -44,6 +44,7 @@ export type DashboardSession = {
   organizationId: string | null;
   organizationName: string | null;
   role: Role | null;
+  accessExpiresAt?: string | null;
   permissions?: Permission[];
 };
 

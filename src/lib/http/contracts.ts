@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ALL_PERMISSIONS } from "@/lib/auth/permissions";
 
 export const uuidSchema = z.uuid();
 export const providerKindSchema = z.enum(["openai", "anthropic", "gemini", "openai_compatible"]);
@@ -214,8 +215,25 @@ export const platformRunSchema = z.object({
 
 export const memberMutationSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("add"), email: z.string().trim().max(320).pipe(z.email()).transform((value) => value.toLowerCase()), role: roleSchema.exclude(["owner"]) }).strict(),
+  z.object({
+    action: z.literal("create"),
+    name: z.string().trim().min(2).max(100),
+    email: z.string().trim().max(320).pipe(z.email()).transform((value) => value.toLowerCase()),
+    password: z.string().min(12).max(128),
+    role: roleSchema.exclude(["owner"]),
+    expiresAt: z.iso.datetime({ offset: true }).nullable().default(null),
+    permissions: z.array(z.enum(ALL_PERMISSIONS)).max(ALL_PERMISSIONS.length).default([]),
+  }).strict(),
+  z.object({
+    action: z.literal("access"),
+    memberId: uuidSchema,
+    role: roleSchema.exclude(["owner"]),
+    expiresAt: z.iso.datetime({ offset: true }).nullable(),
+    permissions: z.array(z.enum(ALL_PERMISSIONS)).max(ALL_PERMISSIONS.length),
+  }).strict(),
   z.object({ action: z.literal("role"), memberId: uuidSchema, role: roleSchema }).strict(),
   z.object({ action: z.literal("remove"), memberId: uuidSchema }).strict(),
+  z.object({ action: z.literal("registration"), enabled: z.boolean() }).strict(),
 ]);
 
 export const accountMutationSchema = z.discriminatedUnion("action", [
