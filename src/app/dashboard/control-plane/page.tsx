@@ -7,18 +7,18 @@ import { loadCustomPermissions } from "@/lib/auth/custom-permissions";
 import { can } from "@/lib/auth/permissions";
 
 export default async function ControlPlanePage() {
-  const session = await requireSession("platform:read");
-  const customPermissions = can(session.role, "platform:manage")
+  const session = await requireSession("control_plane:read");
+  const customPermissions = can(session.role, "control_plane:manage")
     ? []
     : await loadCustomPermissions(session.organizationId, session.userId);
-  const canManage = can(session.role, "platform:manage") || customPermissions.includes("platform:manage");
+  const canManage = can(session.role, "control_plane:manage") || customPermissions.includes("control_plane:manage");
 
   return (
     <DashboardShell
       session={session}
       activePath="/dashboard/control-plane"
-      title="مركز تحكم المنصة"
-      description="إدارة الوحدات والميزات والأدوار المخصصة والإعدادات والإشعارات وسلة المحذوفات من مكان واحد."
+      title="مركز تحكم المؤسسة"
+      description="إدارة وحدات المؤسسة وميزاتها وأدوارها المخصصة وإعداداتها وإشعاراتها وسلة محذوفاتها من مكان واحد."
     >
       <PlatformControlCenter canManage={canManage} />
       <PlatformAdvancedControls canManage={canManage} />
