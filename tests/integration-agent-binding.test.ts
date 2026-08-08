@@ -6,17 +6,27 @@ const integrationId = "00000000-0000-4000-8000-000000000001";
 const agentId = "00000000-0000-4000-8000-000000000002";
 
 describe("integration agent binding", () => {
-  it("keeps the legacy schema compatible for historical Telegram records", () => {
+  it("keeps the integration schema compatible with Telegram agent binding", () => {
     expect(integrationUpdateSchema.parse({ id: integrationId, agentId }).agentId).toBe(agentId);
     expect(integrationUpdateSchema.parse({ id: integrationId, agentId: null }).agentId).toBeNull();
   });
 
-  it("rejects new tenant Telegram tokens while preserving audited GitHub mutations", async () => {
+  it("supports tenant Telegram tokens with verified webhooks and audited mutations", async () => {
     const route = await readFile("src/app/api/dashboard/integrations/route.ts", "utf8");
-    expect(route).toContain("TELEGRAM_CENTRAL_BOT_ONLY");
-    expect(route).toContain("assertTelegramUserTokensAllowed(body.kind)");
+    const webhook = await readFile("src/app/api/webhooks/telegram/[integrationId]/route.ts", "utf8");
+    const processor = await readFile("src/lib/telegram/channel-update-processor.ts", "utf8");
+
+    expect(route).toContain("configureAndVerifyTelegramWebhook");
+    expect(route).toContain('mode: "channel"');
+    expect(route).toContain("webhookSecretHash: hashApiKey(secret)");
+    expect(route).toContain("webhookActive: true");
     expect(route).toContain("db().transaction");
     expect(route).toContain('action: "integration.created"');
+    expect(webhook).toContain("enqueueTelegramUpdate");
+    expect(webhook).toContain("integrationId: integration.id");
+    expect(webhook).toContain("organizationId: integration.organizationId");
+    expect(processor).toContain("routeIncomingChannelMessage");
+    expect(processor).toContain("decryptSecret");
   });
 
   it("routes the central Telegram bot through the queued processor and shared platform services", async () => {
