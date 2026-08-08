@@ -8,7 +8,7 @@ import { requireConversationAccess } from "@/lib/chat/access";
 import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { paginationSchema, runCancelSchema, uuidSchema } from "@/lib/http/contracts";
 
-const runStatusSchema = z.enum(["queued", "running", "completed", "failed", "cancelled"]);
+const runStatusSchema = z.enum(["queued", "running", "waiting_approval", "completed", "failed", "cancelled"]);
 
 export async function GET(request: Request) {
   const requestId = getRequestId(request);
