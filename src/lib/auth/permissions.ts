@@ -12,7 +12,7 @@ export const ALL_PERMISSIONS = [
   "integrations:read", "integrations:manage",
   "channels:read", "channels:manage", "channels:use", "channels:handoff",
   "notifications:read", "notifications:manage", "notifications:send",
-  "platform:read", "platform:manage", "trash:manage",
+  "control_plane:read", "control_plane:manage", "trash:manage",
   "content:read", "content:manage", "content:publish",
   "services:read", "services:manage",
   "menus:read", "menus:manage",
@@ -38,7 +38,7 @@ const permissions: Record<Role, ReadonlySet<Permission>> = {
   developer: new Set([
     "providers:read", "providers:manage", "agents:read", "agents:manage", "agents:run", "runs:read",
     "integrations:read", "channels:read", "channels:manage", "channels:use", "channels:handoff",
-    "notifications:read", "notifications:send", "platform:read", "analytics:read",
+    "notifications:read", "notifications:send", "control_plane:read", "analytics:read",
     "content:read", "services:read", "menus:read", "security:read",
     "files:read", "files:upload", "files:manage",
     "site_connections:read", "site_connections:manage", "site_connections:use",
@@ -52,7 +52,7 @@ const permissions: Record<Role, ReadonlySet<Permission>> = {
   operator: new Set([
     "providers:read", "agents:read", "agents:run", "runs:read", "integrations:read",
     "channels:read", "channels:use", "channels:handoff", "notifications:read", "notifications:send",
-    "platform:read", "analytics:read", "content:read", "services:read", "menus:read", "security:read",
+    "control_plane:read", "analytics:read", "content:read", "services:read", "menus:read", "security:read",
     "files:read", "files:upload", "files:manage",
     "site_connections:read", "site_connections:use", "site_connections:approve",
     "browser_tasks:read", "browser_tasks:run", "browser_tasks:approve",
@@ -62,7 +62,7 @@ const permissions: Record<Role, ReadonlySet<Permission>> = {
   ]),
   viewer: new Set([
     "providers:read", "agents:read", "runs:read", "integrations:read", "channels:read",
-    "notifications:read", "platform:read", "analytics:read", "content:read", "services:read", "menus:read",
+    "notifications:read", "control_plane:read", "analytics:read", "content:read", "services:read", "menus:read",
     "files:read", "site_connections:read", "browser_tasks:read", "sandbox:read", "executions:read", "tools:read",
   ]),
   member: new Set([
