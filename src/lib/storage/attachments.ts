@@ -1,84 +1,51 @@
 import { createHash } from "node:crypto";
-import { and, eq, isNull } from "drizzle-orm";
+import path from "node:path";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
+import { attachmentIntelligence } from "@/db/file-intelligence-schema";
 import { attachments, conversations } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
 import { processFile } from "@/server/files/processor";
+import { indexProcessedAttachment } from "@/server/files/indexer";
 import { objectStorage } from "@/lib/storage/object-storage";
 
 const configuredMaxBytes = Number(process.env.MAX_ATTACHMENT_BYTES ?? 10 * 1024 * 1024);
 export const MAX_ATTACHMENT_BYTES = Number.isFinite(configuredMaxBytes)
   ? Math.min(Math.max(Math.floor(configuredMaxBytes), 1024), 25 * 1024 * 1024)
   : 10 * 1024 * 1024;
-export const ALLOWED_ATTACHMENT_TYPES = new Set([
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-  "image/gif",
-  "application/pdf",
-  "text/plain",
-  "text/markdown",
-  "text/csv",
-  "application/json",
+
+const SUPPORTED_EXTENSIONS = new Set([
+  ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".xml", ".yaml", ".yml", ".log", ".ini", ".conf", ".env", ".sql",
+  ".js", ".jsx", ".ts", ".tsx", ".py", ".java", ".c", ".h", ".cpp", ".hpp", ".cs", ".go", ".rs", ".php", ".rb", ".swift",
+  ".kt", ".kts", ".dart", ".vue", ".svelte", ".sh", ".bash", ".ps1", ".toml", ".gradle", ".html", ".htm", ".css", ".scss",
+  ".pdf", ".doc", ".docx", ".odt", ".rtf", ".epub", ".xls", ".xlsx", ".ods", ".ppt", ".pptx", ".odp",
+  ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".svg", ".heic", ".heif",
+  ".zip", ".rar", ".7z", ".tar", ".gz", ".tgz", ".mp3", ".wav", ".ogg", ".m4a", ".mp4", ".webm", ".mov",
+]);
+const ALLOWED_MIME_PREFIXES = ["text/", "image/", "audio/", "video/"];
+const ALLOWED_APPLICATION_MIMES = new Set([
+  "application/octet-stream", "application/pdf", "application/json", "application/xml", "application/zip", "application/x-zip-compressed",
+  "application/vnd.rar", "application/x-rar-compressed", "application/x-7z-compressed", "application/gzip", "application/x-gzip", "application/x-tar",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-  "application/zip",
-  "application/vnd.rar",
-  "application/x-rar-compressed",
-  "application/x-7z-compressed",
-  "application/octet-stream",
-  "audio/mpeg",
-  "audio/wav",
-  "audio/ogg",
-  "video/mp4",
-  "video/webm",
+  "application/vnd.oasis.opendocument.text", "application/vnd.oasis.opendocument.spreadsheet", "application/vnd.oasis.opendocument.presentation",
+  "application/rtf", "application/epub+zip", "application/msword", "application/vnd.ms-excel", "application/vnd.ms-powerpoint",
 ]);
-
-const MIME_FAMILIES: Record<string, Set<string>> = {
-  ".jpg": new Set(["image/jpeg"]),
-  ".jpeg": new Set(["image/jpeg"]),
-  ".png": new Set(["image/png"]),
-  ".webp": new Set(["image/webp"]),
-  ".gif": new Set(["image/gif"]),
-  ".pdf": new Set(["application/pdf"]),
-  ".docx": new Set(["application/vnd.openxmlformats-officedocument.wordprocessingml.document"]),
-  ".xlsx": new Set(["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]),
-  ".pptx": new Set(["application/vnd.openxmlformats-officedocument.presentationml.presentation"]),
-  ".txt": new Set(["text/plain"]),
-  ".md": new Set(["text/markdown", "text/plain"]),
-  ".csv": new Set(["text/csv", "application/csv", "text/plain"]),
-  ".json": new Set(["application/json", "text/json", "text/plain"]),
-  ".zip": new Set(["application/zip", "application/x-zip-compressed", "application/octet-stream"]),
-  ".rar": new Set(["application/vnd.rar", "application/x-rar-compressed", "application/octet-stream"]),
-  ".7z": new Set(["application/x-7z-compressed", "application/octet-stream"]),
-  ".mp3": new Set(["audio/mpeg", "audio/mp3", "application/octet-stream"]),
-  ".wav": new Set(["audio/wav", "audio/x-wav", "application/octet-stream"]),
-  ".ogg": new Set(["audio/ogg", "application/ogg", "application/octet-stream"]),
-  ".m4a": new Set(["audio/mp4", "audio/x-m4a", "application/octet-stream"]),
-  ".mp4": new Set(["video/mp4", "application/octet-stream"]),
-  ".webm": new Set(["video/webm", "application/octet-stream"]),
-  ".mov": new Set(["video/quicktime", "application/octet-stream"]),
-};
 
 function cleanFilename(value: string) {
   return value.replace(/[^\p{L}\p{N}._ -]/gu, "_").slice(0, 180) || "file";
 }
-
+function filenameExtension(filename: string) {
+  return filename.toLowerCase() === "dockerfile" ? ".dockerfile" : path.extname(filename).toLowerCase();
+}
 export function validateDeclaredMime(filename: string, mimeType: string) {
-  const normalized = mimeType.split(";", 1)[0].trim().toLowerCase();
-  const dot = filename.lastIndexOf(".");
-  const ext = dot >= 0 ? filename.slice(dot).toLowerCase() : "";
-  const allowed = MIME_FAMILIES[ext];
-  if (!allowed || !ALLOWED_ATTACHMENT_TYPES.has(normalized) && normalized !== "application/x-zip-compressed"
-    && normalized !== "application/csv" && normalized !== "text/json" && normalized !== "audio/mp3"
-    && normalized !== "audio/x-wav" && normalized !== "application/ogg" && normalized !== "audio/mp4"
-    && normalized !== "audio/x-m4a" && normalized !== "video/quicktime") {
-    throw new ApiError(415, "FILE_MIME_UNSUPPORTED", "نوع الملف المعلن غير مدعوم.");
-  }
-  if (!allowed.has(normalized)) {
-    throw new ApiError(415, "FILE_MIME_MISMATCH", "نوع الملف المعلن لا يطابق امتداده.");
-  }
+  const normalized = (mimeType || "application/octet-stream").split(";", 1)[0]!.trim().toLowerCase() || "application/octet-stream";
+  const ext = filenameExtension(filename);
+  const extensionAllowed = SUPPORTED_EXTENSIONS.has(ext) || ext === ".dockerfile" || !ext;
+  const mimeAllowed = ALLOWED_APPLICATION_MIMES.has(normalized) || ALLOWED_MIME_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+  if (!extensionAllowed) throw new ApiError(415, "UNSUPPORTED_FILE_TYPE", "امتداد الملف غير مدعوم للتحليل الآمن.");
+  if (!mimeAllowed) throw new ApiError(415, "UNSUPPORTED_FILE_TYPE", "نوع الملف المعلن غير مدعوم.");
   return normalized;
 }
 
@@ -94,11 +61,8 @@ export async function storeAttachment(input: {
   telegramFileId?: string;
 }) {
   if (input.content.byteLength === 0) throw new ApiError(400, "FILE_EMPTY", "الملف فارغ.");
-  if (input.content.byteLength > MAX_ATTACHMENT_BYTES) {
-    throw new ApiError(413, "FILE_TOO_LARGE", "الحد الأقصى للملف 10 ميجابايت.");
-  }
+  if (input.content.byteLength > MAX_ATTACHMENT_BYTES) throw new ApiError(413, "FILE_TOO_LARGE", `الملف يتجاوز الحد الأقصى المسموح (${MAX_ATTACHMENT_BYTES} بايت).`);
   const declaredMime = validateDeclaredMime(input.filename, input.mimeType);
-  const processed = processFile(input.filename, declaredMime, input.content);
   if (input.conversationId) {
     const [conversation] = await db().select({ id: conversations.id }).from(conversations).where(and(
       eq(conversations.id, input.conversationId),
@@ -108,15 +72,16 @@ export async function storeAttachment(input: {
     )).limit(1);
     if (!conversation) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة.");
   }
+
+  const processed = processFile(input.filename, declaredMime, input.content);
   const sha256 = createHash("sha256").update(input.content).digest("hex");
   const id = crypto.randomUUID();
   const configuredDriver = process.env.OBJECT_STORAGE_DRIVER?.trim().toLowerCase();
-  // Unset means the legacy database driver so an existing Railway deployment
-  // remains backward compatible until R2/local is enabled deliberately.
   const legacyDatabase = !configuredDriver || configuredDriver === "database";
   const storage = legacyDatabase ? null : objectStorage();
   const objectKey = storage ? `${input.organizationId}/${id}` : null;
   if (storage && objectKey) await storage.put({ key: objectKey, body: input.content, contentType: declaredMime, sha256 });
+
   try {
     const [created] = await db().insert(attachments).values({
       id,
@@ -133,8 +98,8 @@ export async function storeAttachment(input: {
       objectKey,
       telegramFileId: input.telegramFileId,
       detectedType: processed.detectedType,
-      processingStatus: "ready",
-      extractedText: processed.extractedText,
+      processingStatus: "processing",
+      extractedText: processed.extractedText || null,
       archiveEntryCount: processed.archiveEntryCount,
     }).returning({
       id: attachments.id,
@@ -144,12 +109,33 @@ export async function storeAttachment(input: {
       sha256: attachments.sha256,
       source: attachments.source,
       detectedType: attachments.detectedType,
-      processingStatus: attachments.processingStatus,
       createdAt: attachments.createdAt,
     });
     if (!created) throw new Error("ATTACHMENT_CREATE_FAILED");
-    return created;
+
+    const indexed = await indexProcessedAttachment({
+      attachmentId: id,
+      organizationId: input.organizationId,
+      conversationId: input.conversationId,
+      processed,
+    });
+    const legacyStatus = indexed.status === "unsupported" || indexed.status === "failed" ? "failed" : "ready";
+    const [finalized] = await db().update(attachments).set({
+      processingStatus: legacyStatus,
+      processingErrorCode: indexed.status === "unsupported" ? processed.warnings[0] ?? "UNSUPPORTED_FILE_TYPE" : null,
+      updatedAt: new Date(),
+    }).where(and(eq(attachments.id, id), eq(attachments.organizationId, input.organizationId))).returning({ processingStatus: attachments.processingStatus });
+
+    return {
+      ...created,
+      processingStatus: finalized?.processingStatus ?? legacyStatus,
+      intelligenceStatus: indexed.status,
+      chunkCount: indexed.chunkCount,
+      indexedAt: indexed.indexedAt,
+      warnings: processed.warnings,
+    };
   } catch (error) {
+    await db().delete(attachments).where(and(eq(attachments.id, id), eq(attachments.organizationId, input.organizationId))).catch(() => undefined);
     if (storage && objectKey) await storage.delete(objectKey).catch(() => undefined);
     throw error;
   }
@@ -157,22 +143,21 @@ export async function storeAttachment(input: {
 
 export async function readAttachmentContent(file: { content: Buffer | null; storageDriver: string; objectKey: string | null }) {
   if (file.storageDriver === "database") {
-    if (!file.content) throw new ApiError(500, "ATTACHMENT_CONTENT_MISSING", "محتوى الملف غير متاح.");
+    if (!file.content) throw new ApiError(500, "FILE_NOT_FOUND", "محتوى الملف غير متاح.");
     return new Uint8Array(file.content);
   }
-  if (!file.objectKey) throw new ApiError(500, "ATTACHMENT_OBJECT_MISSING", "مرجع تخزين الملف غير متاح.");
-  if (file.storageDriver !== "local" && file.storageDriver !== "r2") throw new ApiError(500, "ATTACHMENT_STORAGE_INVALID", "مرجع تخزين الملف غير صالح.");
-  const storage = objectStorage(file.storageDriver);
-  return storage.get(file.objectKey);
+  if (!file.objectKey) throw new ApiError(500, "FILE_NOT_FOUND", "مرجع تخزين الملف غير متاح.");
+  if (file.storageDriver !== "local" && file.storageDriver !== "r2") throw new ApiError(500, "FILE_PROCESSING_FAILED", "مرجع تخزين الملف غير صالح.");
+  return objectStorage(file.storageDriver).get(file.objectKey);
 }
 
 export async function deleteAttachmentContent(file: { content: Buffer | null; storageDriver: string; objectKey: string | null }) {
   if (file.storageDriver === "database" || !file.objectKey) return;
-  if (file.storageDriver !== "local" && file.storageDriver !== "r2") throw new ApiError(500, "ATTACHMENT_STORAGE_INVALID", "مرجع تخزين الملف غير صالح.");
-  const storage = objectStorage(file.storageDriver);
-  await storage.delete(file.objectKey);
+  if (file.storageDriver !== "local" && file.storageDriver !== "r2") throw new ApiError(500, "FILE_PROCESSING_FAILED", "مرجع تخزين الملف غير صالح.");
+  await objectStorage(file.storageDriver).delete(file.objectKey);
 }
 
+/** Legacy explicit-only context helper retained for non-chat callers. New chat requests use resolveAttachmentContext. */
 export async function attachmentContext(organizationId: string, conversationId: string, ids: string[]) {
   if (ids.length === 0) return { text: "", rows: [] };
   const rows = await db().select({
@@ -185,27 +170,18 @@ export async function attachmentContext(organizationId: string, conversationId: 
     objectKey: attachments.objectKey,
     extractedText: attachments.extractedText,
     processingStatus: attachments.processingStatus,
-  }).from(attachments).where(and(
+    intelligenceStatus: attachmentIntelligence.status,
+  }).from(attachments).leftJoin(attachmentIntelligence, eq(attachmentIntelligence.attachmentId, attachments.id)).where(and(
     eq(attachments.organizationId, organizationId),
     eq(attachments.conversationId, conversationId),
+    inArray(attachments.id, ids),
     isNull(attachments.deletedAt),
   ));
-  const selected = rows.filter((row) => ids.includes(row.id));
-  if (selected.length !== ids.length) throw new ApiError(404, "ATTACHMENT_NOT_FOUND", "أحد الملفات غير موجود.");
-  const hydrated = await Promise.all(selected.map(async (row) => ({
+  if (rows.length !== ids.length) throw new ApiError(404, "FILE_NOT_FOUND", "أحد الملفات غير موجود.");
+  const hydrated = await Promise.all(rows.map(async (row) => ({
     ...row,
-    content: ["image/jpeg", "image/png", "image/webp", "image/gif"].includes(row.mimeType)
-      ? Buffer.from(await readAttachmentContent(row))
-      : Buffer.alloc(0),
+    content: ["image/jpeg", "image/png", "image/webp", "image/gif"].includes(row.mimeType) ? Buffer.from(await readAttachmentContent(row)) : Buffer.alloc(0),
   })));
-  const parts = hydrated.map((row) => {
-    if (row.processingStatus !== "ready") {
-      throw new ApiError(409, "FILE_NOT_READY", `الملف ${row.filename} لم يجهز للتحليل بعد.`);
-    }
-    if (row.extractedText) {
-      return `\n\n[مرفق مفهرس: ${row.filename}]\n${row.extractedText.slice(0, 40_000)}`;
-    }
-    return `\n\n[مرفق: ${row.filename}، النوع ${row.mimeType}، الحجم ${row.sizeBytes} بايت]`;
-  });
+  const parts = hydrated.map((row) => row.extractedText ? `\n\n[File: ${row.filename}]\n${row.extractedText.slice(0, 40_000)}` : `\n\n[File: ${row.filename}; status=${row.intelligenceStatus ?? row.processingStatus}]`);
   return { text: parts.join(""), rows: hydrated };
 }
