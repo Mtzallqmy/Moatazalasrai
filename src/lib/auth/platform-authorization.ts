@@ -54,11 +54,12 @@ export async function requirePlatformPermission(
     throw new ApiError(403, "PLATFORM_MFA_REQUIRED", "يجب تفعيل المصادقة متعددة العوامل لحسابات إدارة المنصة.");
   }
 
-  if (options.requireRecentReauthentication) {
-    const reauthenticatedAt = await sessionReauthenticatedAt(session.sessionId);
-    if (!reauthenticatedAt || Date.now() - reauthenticatedAt.getTime() > REAUTH_WINDOW_MS) {
-      throw new ApiError(428, "PLATFORM_REAUTH_REQUIRED", "أعد تسجيل الدخول مع MFA قبل تنفيذ هذا الإجراء الحساس.");
-    }
+  const reauthenticatedAt = await sessionReauthenticatedAt(session.sessionId);
+  if (!reauthenticatedAt) {
+    throw new ApiError(428, "PLATFORM_MFA_SESSION_REQUIRED", "سجّل الدخول مجددًا وأكمل MFA قبل استخدام صلاحيات المنصة.");
+  }
+  if (options.requireRecentReauthentication && Date.now() - reauthenticatedAt.getTime() > REAUTH_WINDOW_MS) {
+    throw new ApiError(428, "PLATFORM_REAUTH_REQUIRED", "أعد التحقق من كلمة المرور وMFA قبل تنفيذ هذا الإجراء الحساس.");
   }
 
   return { ...session, platformRole: identity.role };
