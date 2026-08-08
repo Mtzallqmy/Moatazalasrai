@@ -1,6 +1,6 @@
-import { and, count, desc, eq, ilike, inArray, isNotNull, isNull, or } from "drizzle-orm";
+import { and, count, desc, eq, ilike, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { agents, attachments, conversationMembers, conversations, messages, users } from "@/db/schema";
+import { agents, conversationMembers, conversations, messages, users } from "@/db/schema";
 import { requireSession } from "@/lib/auth/authorization";
 import { canManageConversation, canWriteConversation, conversationAccessFilter } from "@/lib/chat/access";
 import { createConversationForAgent } from "@/lib/chat/conversation-service";
@@ -26,8 +26,7 @@ export async function GET(request: Request) {
         ))
         .limit(1);
       if (!owned) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة.");
-      const [rows, totals] = await Promise.all([
-        db().select({
+      const rows = await db().select({
           id: messages.id,
           role: messages.role,
           authorUserId: messages.authorUserId,
@@ -46,31 +45,35 @@ export async function GET(request: Request) {
           latencyMs: messages.latencyMs,
           errorCode: messages.errorCode,
           editedAt: messages.editedAt,
+          attachments: sql<Array<{
+            id: string;
+            filename: string;
+            mimeType: string;
+            sizeBytes: number;
+            processingStatus: string;
+            processingErrorCode: string | null;
+          }>>`COALESCE((
+            SELECT jsonb_agg(jsonb_build_object(
+              'id', message_files.id,
+              'filename', message_files.filename,
+              'mimeType', message_files.mime_type,
+              'sizeBytes', message_files.size_bytes,
+              'processingStatus', message_files.processing_status,
+              'processingErrorCode', message_files.processing_error_code
+            ) ORDER BY message_files.created_at)
+            FROM attachments AS message_files
+            WHERE message_files.message_id = ${messages.id}
+              AND message_files.organization_id = ${session.organizationId}
+              AND message_files.deleted_at IS NULL
+          ), '[]'::jsonb)`,
         }).from(messages)
           .leftJoin(users, eq(users.id, messages.authorUserId))
           .where(and(eq(messages.conversationId, id), isNull(messages.deletedAt)))
           .orderBy(desc(messages.createdAt))
           .limit(query.limit)
-          .offset((query.page - 1) * query.limit),
-        db().select({ value: count() }).from(messages).where(and(eq(messages.conversationId, id), isNull(messages.deletedAt))),
-      ]);
-      const total = totals[0]?.value ?? 0;
-      const messageIds = rows.map((row) => row.id);
-      const fileRows = messageIds.length ? await db().select({
-        id: attachments.id, messageId: attachments.messageId, filename: attachments.filename,
-        mimeType: attachments.mimeType, sizeBytes: attachments.sizeBytes,
-        processingStatus: attachments.processingStatus, processingErrorCode: attachments.processingErrorCode,
-      }).from(attachments).where(and(
-        eq(attachments.organizationId, session.organizationId),
-        inArray(attachments.messageId, messageIds),
-        isNull(attachments.deletedAt),
-      )) : [];
-      const enriched = rows.reverse().map((row) => ({
-        ...row,
-        attachments: fileRows.filter((file) => file.messageId === row.id),
-      }));
-      return apiSuccess(enriched, requestId, 200, {
-        pagination: { ...query, total, pages: Math.ceil(total / query.limit) },
+          .offset((query.page - 1) * query.limit);
+      return apiSuccess(rows.reverse(), requestId, 200, {
+        pagination: { ...query, hasMore: rows.length === query.limit },
       });
     }
 
@@ -78,22 +81,17 @@ export async function GET(request: Request) {
     const deleted = url.searchParams.get("deleted") === "true";
     const search = url.searchParams.get("q")?.trim().slice(0, 120) ?? "";
     const pattern = search ? `%${search}%` : "";
-    const matchingMessageConversations = search
-      ? await db().selectDistinct({ id: messages.conversationId }).from(messages)
-          .innerJoin(conversations, eq(conversations.id, messages.conversationId))
-          .where(and(
-            eq(conversations.organizationId, session.organizationId),
-            conversationAccessFilter({ role: session.role, userId: session.userId, access: "read" }),
-            isNull(messages.deletedAt),
-            ilike(messages.content, pattern),
-          ))
-          .limit(200)
-      : [];
-    const matchingIds = matchingMessageConversations.map((row) => row.id);
     const searchFilter = search
-      ? matchingIds.length
-        ? or(ilike(conversations.title, pattern), inArray(conversations.id, matchingIds))
-        : ilike(conversations.title, pattern)
+      ? or(
+          ilike(conversations.title, pattern),
+          sql<boolean>`EXISTS (
+            SELECT 1
+            FROM messages AS searchable_messages
+            WHERE searchable_messages.conversation_id = ${conversations.id}
+              AND searchable_messages.deleted_at IS NULL
+              AND searchable_messages.content ILIKE ${pattern}
+          )`,
+        )
       : undefined;
     const archiveFilter = deleted
       ? undefined

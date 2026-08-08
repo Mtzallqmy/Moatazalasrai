@@ -38,9 +38,12 @@ describe("AI workspace UX architecture", () => {
   });
 
   it("implements independent upload states and never renders upload progress for FAILED", async () => {
-    const chat = await readFile("src/components/chat-console-v2.tsx", "utf8");
+    const [types, chat] = await Promise.all([
+      readFile("src/components/chat/types.ts", "utf8"),
+      readFile("src/components/chat/upload-tray.tsx", "utf8"),
+    ]);
     for (const state of ["SELECTED", "VALIDATING", "UPLOADING", "PROCESSING", "READY", "PARTIALLY_READY", "FAILED", "CANCELLED"]) {
-      expect(chat).toContain(`\"${state}\"`);
+      expect(types).toContain(`\"${state}\"`);
     }
     expect(chat).toContain('task.state === "UPLOADING" && task.progress !== null');
     expect(chat).toContain('task.state === "FAILED" || task.state === "CANCELLED"');

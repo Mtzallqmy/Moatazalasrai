@@ -186,7 +186,7 @@ function Sidebar({ session, activePath, close }: { session: DashboardSession; ac
                 const active = itemActive(item, current);
                 const Icon = item.icon;
                 return (
-                  <Link key={item.href} href={item.href} onClick={close} aria-current={active ? "page" : undefined} className={`sidebar-link${active ? " sidebar-link-active" : ""}`}>
+                  <Link key={item.href} href={item.href} prefetch={item.href === "/dashboard/chat"} onClick={close} aria-current={active ? "page" : undefined} className={`sidebar-link${active ? " sidebar-link-active" : ""}`}>
                     <Icon size={18} strokeWidth={1.9} aria-hidden="true" />
                     <span>{item.label}</span>
                   </Link>
@@ -244,8 +244,9 @@ export function DashboardNavigation({ session, activePath }: { session: Dashboar
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
     document.body.style.overflow = "hidden";
     window.addEventListener("keydown", onKey);
-    window.setTimeout(() => closeButtonRef.current?.focus(), 0);
+    const focusTimer = window.setTimeout(() => closeButtonRef.current?.focus(), 0);
     return () => {
+      window.clearTimeout(focusTimer);
       document.body.style.overflow = "";
       window.removeEventListener("keydown", onKey);
       menuButton?.focus();
@@ -268,7 +269,9 @@ export function DashboardNavigation({ session, activePath }: { session: Dashboar
   }, []);
 
   useEffect(() => {
-    if (searchOpen) window.setTimeout(() => searchInputRef.current?.focus(), 0);
+    if (!searchOpen) return;
+    const focusTimer = window.setTimeout(() => searchInputRef.current?.focus(), 0);
+    return () => window.clearTimeout(focusTimer);
   }, [searchOpen]);
 
   useEffect(() => {
@@ -307,7 +310,7 @@ export function DashboardNavigation({ session, activePath }: { session: Dashboar
         <button ref={menuButtonRef} className="icon-button" type="button" onClick={() => setOpen(true)} aria-label="فتح القائمة" aria-expanded={open}>
           <Menu size={21} aria-hidden="true" />
         </button>
-        <Link href="/dashboard" className="mobile-brand"><CircleGauge size={20} aria-hidden="true" /> معتز <bdi dir="ltr">AI</bdi></Link>
+        <Link href="/dashboard" prefetch className="mobile-brand"><CircleGauge size={20} aria-hidden="true" /> معتز <bdi dir="ltr">AI</bdi></Link>
         <button className="icon-button" type="button" aria-label="البحث في مساحة العمل" onClick={() => setSearchOpen(true)}><Search size={19} aria-hidden="true" /></button>
       </header>
 
@@ -333,7 +336,7 @@ export function DashboardNavigation({ session, activePath }: { session: Dashboar
           const Icon = item.icon;
           const active = itemActive(item, pathname);
           return (
-            <Link href={item.href} key={item.href} aria-current={active ? "page" : undefined} className={active ? "mobile-bottom-link-active" : undefined}>
+            <Link href={item.href} prefetch={item.href === "/dashboard/chat" || item.href === "/dashboard"} key={item.href} aria-current={active ? "page" : undefined} className={active ? "mobile-bottom-link-active" : undefined}>
               <Icon size={20} aria-hidden="true" />
               <span>{item.label}</span>
             </Link>

@@ -19,13 +19,19 @@ export async function assertSessionPermission(session: AuthorizedSession, permis
   }
 }
 
-export async function requireSession(permission?: Permission): Promise<AuthorizedSession> {
+export async function requireSession(permission?: Permission, timings?: { sessionLatencyMs?: number; permissionLatencyMs?: number }): Promise<AuthorizedSession> {
+  const sessionStartedAt = performance.now();
   const session = await currentSession();
+  if (timings) timings.sessionLatencyMs = Math.round(performance.now() - sessionStartedAt);
   if (!session) throw new ApiError(401, "UNAUTHORIZED", "يجب تسجيل الدخول.");
   if (!session.organizationId || !session.role) {
     throw new ApiError(409, "ORGANIZATION_REQUIRED", "اختر المؤسسة النشطة أولًا.");
   }
   const authorized = session as AuthorizedSession;
-  if (permission) await assertSessionPermission(authorized, permission);
+  if (permission) {
+    const permissionStartedAt = performance.now();
+    await assertSessionPermission(authorized, permission);
+    if (timings) timings.permissionLatencyMs = Math.round(performance.now() - permissionStartedAt);
+  }
   return authorized;
 }

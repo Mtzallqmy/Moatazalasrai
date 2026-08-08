@@ -3,13 +3,12 @@ import { redirect } from "next/navigation";
 import { ChatConsoleV2 } from "@/components/chat-console-v2";
 import { DashboardShell } from "@/components/dashboard-shell";
 import { db } from "@/db";
-import { agents, conversationMembers, conversations, knowledgeBases, userPreferences } from "@/db/schema";
+import { agents, conversationMembers, conversations, userPreferences } from "@/db/schema";
 import { currentSession } from "@/lib/auth/session";
 import { aiFeatureEnabled } from "@/ai/config";
 import { defaultChatAppearance, normalizeChatAppearance } from "@/lib/chat/appearance";
 import { canManageConversation, canWriteConversation, conversationAccessFilter } from "@/lib/chat/access";
 import { isPuterEnabled } from "@/lib/puter/feature";
-import "./chat-experience.css";
 import "./conversation-workspace.css";
 
 export default async function ChatPage({ searchParams }: { searchParams: Promise<{ conversationId?: string; agentId?: string; view?: string; new?: string }> }) {
@@ -22,7 +21,7 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
   const archivedMode = params.view === "archived";
   const ragEnabled = aiFeatureEnabled("RAG");
   const memoryEnabled = aiFeatureEnabled("MEMORY");
-  const [publishedAgents, rows, [storedAppearance], bases] = await Promise.all([
+  const [publishedAgents, rows, [storedAppearance]] = await Promise.all([
     db().select({ id: agents.id, name: agents.name }).from(agents).where(and(eq(agents.organizationId, session.organizationId), eq(agents.status, "published"))).orderBy(desc(agents.updatedAt)),
     db().select({
       id: conversations.id,
@@ -58,9 +57,6 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
       theme: userPreferences.chatTheme,
       wallpaper: userPreferences.chatWallpaper,
     }).from(userPreferences).where(eq(userPreferences.userId, session.userId)).limit(1),
-    ragEnabled
-      ? db().select({ id: knowledgeBases.id, name: knowledgeBases.name }).from(knowledgeBases).where(eq(knowledgeBases.organizationId, session.organizationId)).orderBy(desc(knowledgeBases.updatedAt)).limit(100)
-      : Promise.resolve([]),
   ]);
   return (
     <DashboardShell
@@ -88,7 +84,6 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
           currentUser={{ id: session.userId, name: session.name ?? session.email, email: session.email }}
           initialAppearance={normalizeChatAppearance(storedAppearance ?? defaultChatAppearance)}
           puterEnabled={isPuterEnabled()}
-          knowledgeBases={bases}
           ragEnabled={ragEnabled}
           memoryEnabled={memoryEnabled}
         />
