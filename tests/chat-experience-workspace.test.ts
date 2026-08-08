@@ -2,14 +2,16 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 describe("chat experience workspace", () => {
-  it("mounts the unified toolbar and scoped responsive stylesheet", async () => {
+  it("mounts the production conversation console and scoped responsive stylesheets", async () => {
     const page = await readFile("src/app/dashboard/chat/page.tsx", "utf8");
-    expect(page).toContain("ChatExperienceToolbar");
+    expect(page).toContain("ChatConsoleV2");
     expect(page).toContain('import "./chat-experience.css"');
+    expect(page).toContain('import "./conversation-workspace.css"');
     expect(page).toContain("chat-workspace-shell");
+    expect(page).not.toContain("ChatExperienceToolbar");
   });
 
-  it("links the conversation workspace to agents, channels, integrations, and files", async () => {
+  it("keeps the legacy appearance toolbar contract available without mounting it in the primary conversation flow", async () => {
     const toolbar = await readFile("src/components/chat-experience-toolbar.tsx", "utf8");
     for (const path of ["/dashboard/agents", "/dashboard/channels", "/dashboard/integrations", "/dashboard/files"]) {
       expect(toolbar).toContain(path);
