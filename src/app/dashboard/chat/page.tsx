@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { ChatConsoleV2 } from "@/components/chat-console-v2";
 import { DashboardShell } from "@/components/dashboard-shell";
@@ -17,6 +17,8 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
   if (!session) redirect("/login");
   if (!session.organizationId || !session.role) redirect("/select-organization");
   if (session.role === "viewer") redirect("/forbidden");
+  const params = await searchParams;
+  const archivedMode = params.view === "archived";
   const ragEnabled = aiFeatureEnabled("RAG");
   const memoryEnabled = aiFeatureEnabled("MEMORY");
   const [publishedAgents, rows, [storedAppearance], bases] = await Promise.all([
@@ -47,7 +49,7 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
         eq(conversations.organizationId, session.organizationId),
         conversationAccessFilter({ role: session.role, userId: session.userId, access: "read" }),
         isNull(conversations.deletedAt),
-        isNull(conversations.archivedAt),
+        archivedMode ? isNotNull(conversations.archivedAt) : isNull(conversations.archivedAt),
       ))
       .orderBy(desc(conversations.pinnedAt), desc(conversations.lastMessageAt), desc(conversations.updatedAt))
       .limit(50),
@@ -59,7 +61,6 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
       ? db().select({ id: knowledgeBases.id, name: knowledgeBases.name }).from(knowledgeBases).where(eq(knowledgeBases.organizationId, session.organizationId)).orderBy(desc(knowledgeBases.updatedAt)).limit(100)
       : Promise.resolve([]),
   ]);
-  const params = await searchParams;
   return (
     <DashboardShell
       session={session}
