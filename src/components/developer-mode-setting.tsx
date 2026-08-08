@@ -19,6 +19,7 @@ export function DeveloperModeSetting({ initialEnabled }: { initialEnabled: boole
         body: { enabled: next },
       });
       setEnabled(result.enabled);
+      window.dispatchEvent(new CustomEvent("moataz:developer-mode", { detail: { enabled: result.enabled } }));
       setMessage(result.enabled ? "تم تفعيل تفاصيل المطور." : "تم إخفاء تفاصيل المطور افتراضيًا.");
     } catch (cause) {
       setMessage(apiErrorMessage(cause, "تعذر حفظ الإعداد."));
