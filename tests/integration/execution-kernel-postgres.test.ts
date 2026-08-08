@@ -10,7 +10,6 @@ const storageRoot = join(process.cwd(), ".data", `execution-tests-${process.pid}
 
 describeDatabase("Execution Kernel PostgreSQL lifecycle", () => {
   let sql: Sql;
-  const organizations = new Set<string>();
 
   beforeAll(() => {
     process.env.DATABASE_URL = databaseUrl!;
@@ -37,9 +36,8 @@ describeDatabase("Execution Kernel PostgreSQL lifecycle", () => {
   });
 
   afterAll(async () => {
-    for (const organizationId of organizations) {
-      await sql`DELETE FROM organizations WHERE id = ${organizationId}`;
-    }
+    // execution_events are intentionally append-only, including against FK cascades.
+    // Integration databases are isolated/ephemeral, so do not delete tenant rows here.
     const { releaseWorkerUtils } = await import("@/worker/queue");
     await releaseWorkerUtils();
     await sql.end({ timeout: 5 });
@@ -49,7 +47,6 @@ describeDatabase("Execution Kernel PostgreSQL lifecycle", () => {
   async function fixture(role: "owner" | "admin" | "developer" | "operator" | "viewer" | "member" = "owner") {
     const organizationId = randomUUID();
     const userId = randomUUID();
-    organizations.add(organizationId);
     await sql`INSERT INTO organizations (id, name, slug) VALUES (${organizationId}, ${`Execution ${organizationId}`}, ${`exec-${organizationId}`})`;
     await sql`INSERT INTO users (id, email, name) VALUES (${userId}, ${`execution-${userId}@example.test`}, 'Execution User')`;
     await sql`INSERT INTO organization_members (organization_id, user_id, role) VALUES (${organizationId}, ${userId}, ${role})`;
@@ -93,7 +90,7 @@ describeDatabase("Execution Kernel PostgreSQL lifecycle", () => {
     `;
     const [queued] = await sql<{ count: string }[]>`
       SELECT count(*)::text AS count FROM graphile_worker.jobs
-      WHERE job_key = ${`execution:provision:${first.job.id}`}
+      WHERE key = ${`execution:provision:${first.job.id}`}
     `;
     expect(job?.status).toBe("queued");
     expect(Number(queued?.count ?? 0)).toBe(1);
