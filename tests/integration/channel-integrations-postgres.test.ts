@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createTestSqlClient, type Sql } from "../helpers/pg-sql";
-import { listOrganizationMcpCatalog } from "@/lib/mcp/application-service";
-import { listOrganizationSiteConnections } from "@/lib/site-connections/application-service";
+import { resetEnvForTests } from "@/lib/config/env";
 
 const databaseUrl = process.env.TEST_DATABASE_URL?.trim();
 const describeDatabase = databaseUrl ? describe : describe.skip;
@@ -15,7 +14,11 @@ describeDatabase("channel integration application services", () => {
 
   beforeAll(async () => {
     process.env.DATABASE_URL = databaseUrl!;
-    process.env.BROWSER_AGENT_ENABLED = "false";
+    process.env.BROWSER_AGENT_ENABLED = "true";
+    process.env.BROWSER_RUNNER_URL = "http://127.0.0.1:65534";
+    process.env.BROWSER_RUNNER_SHARED_SECRET = "integration-browser-runner-secret-000000000000";
+    resetEnvForTests();
+
     sql = createTestSqlClient(databaseUrl!, 3);
     await sql`INSERT INTO organizations (id, name, slug) VALUES (${organizationId}, 'Channel Integrations Test', ${`channel-integrations-${organizationId}`})`;
     await sql`INSERT INTO users (id, email, name) VALUES (${userId}, ${`channel-integrations-${userId}@example.test`}, 'Integration Admin')`;
@@ -30,9 +33,11 @@ describeDatabase("channel integration application services", () => {
     await sql`DELETE FROM organizations WHERE id = ${organizationId}`;
     await sql`DELETE FROM users WHERE id = ${userId}`;
     await sql.end({ timeout: 5 });
+    resetEnvForTests();
   });
 
   test("returns the real MCP server without secret fields", async () => {
+    const { listOrganizationMcpCatalog } = await import("@/lib/mcp/application-service");
     const catalog = await listOrganizationMcpCatalog({ organizationId, userId });
     const server = catalog.find((item) => item.id === serverId);
     expect(server).toMatchObject({
@@ -55,6 +60,7 @@ describeDatabase("channel integration application services", () => {
   });
 
   test("reads site connections through the same application service and preserves tenant isolation", async () => {
+    const { listOrganizationSiteConnections } = await import("@/lib/site-connections/application-service");
     const connections = await listOrganizationSiteConnections({ organizationId, userId });
     expect(connections).toEqual([]);
   });
