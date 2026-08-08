@@ -1,4 +1,5 @@
 import { getPostgresPool } from "@/db/pool";
+import { enterPlatformDatabaseContext, runWithSystemDatabaseContext } from "@/db/tenant-context";
 import { currentSession } from "@/lib/auth/session";
 import { mfaStatus } from "@/lib/auth/mfa";
 import { ApiError } from "@/lib/http/api";
@@ -44,17 +45,19 @@ export async function requirePlatformPermission(
   const session = await currentSession();
   if (!session) throw new ApiError(401, "UNAUTHORIZED", "يجب تسجيل الدخول.");
 
-  const identity = await platformIdentity(session.userId);
+  const { identity, mfa, reauthenticatedAt } = await runWithSystemDatabaseContext(async () => ({
+    identity: await platformIdentity(session.userId),
+    mfa: await mfaStatus(session.userId),
+    reauthenticatedAt: await sessionReauthenticatedAt(session.sessionId),
+  }));
   if (!identity?.active || !permissions[identity.role]?.has(permission)) {
     throw new ApiError(403, "PLATFORM_FORBIDDEN", "لا تملك صلاحية منصة لهذا الإجراء.");
   }
 
-  const mfa = await mfaStatus(session.userId);
   if (!mfa.enabled) {
     throw new ApiError(403, "PLATFORM_MFA_REQUIRED", "يجب تفعيل المصادقة متعددة العوامل لحسابات إدارة المنصة.");
   }
 
-  const reauthenticatedAt = await sessionReauthenticatedAt(session.sessionId);
   if (!reauthenticatedAt) {
     throw new ApiError(428, "PLATFORM_MFA_SESSION_REQUIRED", "سجّل الدخول مجددًا وأكمل MFA قبل استخدام صلاحيات المنصة.");
   }
@@ -62,6 +65,7 @@ export async function requirePlatformPermission(
     throw new ApiError(428, "PLATFORM_REAUTH_REQUIRED", "أعد التحقق من كلمة المرور وMFA قبل تنفيذ هذا الإجراء الحساس.");
   }
 
+  enterPlatformDatabaseContext(session.userId);
   return { ...session, platformRole: identity.role };
 }
 
