@@ -43,117 +43,110 @@ export async function POST(request: Request) {
       )).limit(1);
     if (!conversation) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة أو الوكيل غير متاح.");
 
-    const [attachmentData, mcpContext] = await Promise.all([
-      resolveAttachmentContext({
-        organizationId: session.organizationId,
-        conversationId: conversation.id,
-        userId: session.userId,
-        explicitAttachmentIds: body.attachmentIds,
-        userQuery: body.message,
-      }),
-      buildMcpChatContext({ organizationId: session.organizationId, userId: session.userId, resources: body.mcpResources, prompt: body.mcpPrompt }),
-    ]);
-    const combinedMedia = [...attachmentData.media, ...mcpContext.media];
-    if (combinedMedia.reduce((sum, item) => sum + (item.type === "image" ? base64Bytes(item.data) : 0), 0) > 20 * 1024 * 1024) {
-      throw new ApiError(413, "PROVIDER_ATTACHMENT_UNSUPPORTED", "إجمالي الصور والمصادر المرسلة للنموذج يتجاوز الحد الآمن.");
-    }
-    const effectiveInputKind = combinedMedia.length > 0
-      ? "image"
-      : attachmentData.attachments.length > 0
-        ? inputKindForAttachments(attachmentData.attachments.map((file) => file.mimeType))
-        : body.inputKind;
-    const knowledge = body.knowledgeBaseId && aiFeatureEnabled("RAG")
-      ? await retrieveKnowledge({ organizationId: session.organizationId, knowledgeBaseId: body.knowledgeBaseId, query: body.message })
-      : { text: "", citations: [] };
-    const memoryRows = body.useMemory && aiFeatureEnabled("MEMORY")
-      ? await db().select({ content: agentMemories.content }).from(agentMemories).where(and(
-        eq(agentMemories.organizationId, session.organizationId),
-        eq(agentMemories.userId, session.userId),
-        eq(agentMemories.enabled, true),
-      )).limit(10)
-      : [];
-    const memoryText = memoryRows.length ? `\n\n[ذاكرة مصرح بها]\n${memoryRows.map((row) => row.content).join("\n")}` : "";
-
-    const [userMessage] = await db().transaction(async (tx) => {
-      const createdAt = new Date();
-      const [created] = await tx.insert(messages).values({
-        conversationId: conversation.id,
-        role: "user",
-        authorUserId: session.userId,
-        content: body.message,
-        contentParts: [{ type: "text", text: body.message }],
-        status: "completed",
-        requestId,
-        completedAt: createdAt,
-        clientRequestId: body.clientRequestId,
-        providerCredentialId: body.providerCredentialId,
-        model: body.model,
-        metadata: {
-          requestId,
-          attachmentIds: body.attachmentIds,
-          attachments: attachmentData.attachments.filter((file) => file.explicit).map((file) => ({
-            id: file.id, filename: file.filename, mimeType: file.mimeType, sizeBytes: file.sizeBytes, processingStatus: file.status,
-          })),
-          resolvedAttachmentIds: attachmentData.attachments.map((file) => file.id),
-          retrievedAttachmentChunks: attachmentData.retrievedChunkCount,
-          mcpReferences: mcpContext.references,
-        },
-      }).onConflictDoNothing().returning();
-      if (!created) throw new ApiError(409, "DUPLICATE_MESSAGE", "تم استقبال هذه الرسالة سابقًا.");
-      if (body.attachmentIds.length > 0) {
-        await tx.update(attachments).set({ messageId: created.id }).where(and(
-          eq(attachments.organizationId, session.organizationId),
-          eq(attachments.conversationId, conversation.id),
-          inArray(attachments.id, body.attachmentIds),
-        ));
-      }
-      await tx.update(conversations).set({
-        providerCredentialId: body.providerCredentialId,
-        model: body.model,
-        lastMessageAt: createdAt,
-        updatedAt: createdAt,
-      }).where(and(eq(conversations.id, conversation.id), eq(conversations.organizationId, session.organizationId)));
-      return [created];
-    });
-
-    console.info(JSON.stringify({
-      event: "chat.attachment_context_resolved",
-      requestId,
-      organizationId: session.organizationId,
-      conversationId: conversation.id,
-      messageId: userMessage.id,
-      providerCredentialId: body.providerCredentialId ?? null,
-      model: body.model ?? null,
-      attachmentCount: body.attachmentIds.length,
-      resolvedAttachmentCount: attachmentData.attachments.length,
-      retrievedChunkCount: attachmentData.retrievedChunkCount,
-      attachmentContextTokens: attachmentData.contextTokens,
-      attachmentStatuses: attachmentData.attachments.map((file) => file.status),
-    }));
-
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
-        controller.enqueue(encoder.encode(sse("message", {
-          userMessage: {
-            ...userMessage,
-            authorName: session.name,
-            authorEmail: session.email,
-            attachments: attachmentData.attachments.filter((file) => file.explicit).map((file) => ({
-              id: file.id, filename: file.filename, mimeType: file.mimeType, sizeBytes: file.sizeBytes, processingStatus: file.status,
-            })),
-          },
-          requestId,
-          mcpReferences: mcpContext.references,
-        })));
-        if (knowledge.citations.length) controller.enqueue(encoder.encode(sse("citations", { citations: knowledge.citations })));
-        if (attachmentData.citations.length) controller.enqueue(encoder.encode(sse("file-citations", { citations: attachmentData.citations })));
-        if (attachmentData.attachments.length) controller.enqueue(encoder.encode(sse("attachment-context", {
-          resolvedAttachmentCount: attachmentData.attachments.length,
-          retrievedChunkCount: attachmentData.retrievedChunkCount,
-          attachments: attachmentData.attachments.map(({ id, filename, status, warnings, chunkCount }) => ({ id, filename, status, warnings, chunkCount })),
-        })));
         try {
+          controller.enqueue(encoder.encode(sse("status", { stage: "preparing", message: "جارٍ تجهيز سياق المحادثة…" })));
+          const [attachmentData, mcpContext, knowledge, memoryRows] = await Promise.all([
+            resolveAttachmentContext({
+              organizationId: session.organizationId,
+              conversationId: conversation.id,
+              userId: session.userId,
+              explicitAttachmentIds: body.attachmentIds,
+              userQuery: body.message,
+            }),
+            buildMcpChatContext({ organizationId: session.organizationId, userId: session.userId, resources: body.mcpResources, prompt: body.mcpPrompt }),
+            body.knowledgeBaseId && aiFeatureEnabled("RAG")
+              ? retrieveKnowledge({ organizationId: session.organizationId, knowledgeBaseId: body.knowledgeBaseId, query: body.message })
+              : Promise.resolve({ text: "", citations: [] }),
+            body.useMemory && aiFeatureEnabled("MEMORY")
+              ? db().select({ content: agentMemories.content }).from(agentMemories).where(and(
+                eq(agentMemories.organizationId, session.organizationId),
+                eq(agentMemories.userId, session.userId),
+                eq(agentMemories.enabled, true),
+              )).limit(10)
+              : Promise.resolve([]),
+          ]);
+          const combinedMedia = [...attachmentData.media, ...mcpContext.media];
+          if (combinedMedia.reduce((sum, item) => sum + (item.type === "image" ? base64Bytes(item.data) : 0), 0) > 20 * 1024 * 1024) {
+            throw new ApiError(413, "PROVIDER_ATTACHMENT_UNSUPPORTED", "إجمالي الصور والمصادر المرسلة للنموذج يتجاوز الحد الآمن.");
+          }
+          const effectiveInputKind = combinedMedia.length > 0
+            ? "image"
+            : attachmentData.attachments.length > 0
+              ? inputKindForAttachments(attachmentData.attachments.map((file) => file.mimeType))
+              : body.inputKind;
+          const memoryText = memoryRows.length ? `\n\n[ذاكرة مصرح بها]\n${memoryRows.map((row) => row.content).join("\n")}` : "";
+          const [userMessage] = await db().transaction(async (tx) => {
+            const createdAt = new Date();
+            const [created] = await tx.insert(messages).values({
+              conversationId: conversation.id,
+              role: "user",
+              authorUserId: session.userId,
+              content: body.message,
+              contentParts: [{ type: "text", text: body.message }],
+              status: "completed",
+              requestId,
+              completedAt: createdAt,
+              clientRequestId: body.clientRequestId,
+              providerCredentialId: body.providerCredentialId,
+              model: body.model,
+              metadata: {
+                requestId,
+                attachmentIds: body.attachmentIds,
+                attachments: attachmentData.attachments.filter((file) => file.explicit).map((file) => ({
+                  id: file.id, filename: file.filename, mimeType: file.mimeType, sizeBytes: file.sizeBytes, processingStatus: file.status,
+                })),
+                resolvedAttachmentIds: attachmentData.attachments.map((file) => file.id),
+                retrievedAttachmentChunks: attachmentData.retrievedChunkCount,
+                mcpReferences: mcpContext.references,
+              },
+            }).onConflictDoNothing().returning();
+            if (!created) throw new ApiError(409, "DUPLICATE_MESSAGE", "تم استقبال هذه الرسالة سابقًا.");
+            if (body.attachmentIds.length > 0) {
+              await tx.update(attachments).set({ messageId: created.id }).where(and(
+                eq(attachments.organizationId, session.organizationId),
+                eq(attachments.conversationId, conversation.id),
+                inArray(attachments.id, body.attachmentIds),
+              ));
+            }
+            await tx.update(conversations).set({
+              providerCredentialId: body.providerCredentialId,
+              model: body.model,
+              lastMessageAt: createdAt,
+              updatedAt: createdAt,
+            }).where(and(eq(conversations.id, conversation.id), eq(conversations.organizationId, session.organizationId)));
+            return [created];
+          });
+          console.info(JSON.stringify({
+            event: "chat.attachment_context_resolved", requestId, organizationId: session.organizationId,
+            conversationId: conversation.id, messageId: userMessage.id,
+            providerCredentialId: body.providerCredentialId ?? null, model: body.model ?? null,
+            attachmentCount: body.attachmentIds.length, resolvedAttachmentCount: attachmentData.attachments.length,
+            retrievedChunkCount: attachmentData.retrievedChunkCount, attachmentContextTokens: attachmentData.contextTokens,
+            attachmentStatuses: attachmentData.attachments.map((file) => file.status),
+          }));
+          controller.enqueue(encoder.encode(sse("message", {
+            userMessage: {
+              ...userMessage,
+              authorName: session.name,
+              authorEmail: session.email,
+              attachments: attachmentData.attachments.filter((file) => file.explicit).map((file) => ({
+                id: file.id, filename: file.filename, mimeType: file.mimeType, sizeBytes: file.sizeBytes, processingStatus: file.status,
+              })),
+            },
+            requestId,
+            mcpReferences: mcpContext.references,
+          })));
+          if (knowledge.citations.length) controller.enqueue(encoder.encode(sse("citations", { citations: knowledge.citations })));
+          if (attachmentData.citations.length) controller.enqueue(encoder.encode(sse("file-citations", { citations: attachmentData.citations })));
+          if (attachmentData.attachments.length) controller.enqueue(encoder.encode(sse("attachment-context", {
+            resolvedAttachmentCount: attachmentData.attachments.length,
+            retrievedChunkCount: attachmentData.retrievedChunkCount,
+            attachments: attachmentData.attachments.map(({ id, filename, status, warnings, chunkCount }) => ({ id, filename, status, warnings, chunkCount })),
+          })));
+          controller.enqueue(encoder.encode(sse("status", { stage: "generating", message: "يتولى الوكيل الذكي إنشاء الرد…" })));
           for await (const event of streamAgentRun({
             organizationId: session.organizationId,
             userId: session.userId,

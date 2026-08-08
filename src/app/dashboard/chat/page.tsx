@@ -12,7 +12,7 @@ import { isPuterEnabled } from "@/lib/puter/feature";
 import "./chat-experience.css";
 import "./conversation-workspace.css";
 
-export default async function ChatPage({ searchParams }: { searchParams: Promise<{ conversationId?: string; agentId?: string; view?: string }> }) {
+export default async function ChatPage({ searchParams }: { searchParams: Promise<{ conversationId?: string; agentId?: string; view?: string; new?: string }> }) {
   const session = await currentSession();
   if (!session) redirect("/login");
   if (!session.organizationId || !session.role) redirect("/select-organization");
@@ -83,6 +83,7 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
           }))}
           initialConversationId={params.conversationId}
           initialAgentId={params.agentId}
+          initialNewChat={params.new === "true"}
           currentUser={{ id: session.userId, name: session.name ?? session.email, email: session.email }}
           initialAppearance={normalizeChatAppearance(storedAppearance ?? defaultChatAppearance)}
           puterEnabled={isPuterEnabled()}

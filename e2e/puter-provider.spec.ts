@@ -113,12 +113,9 @@ test.describe("Puter browser provider", () => {
     await page.screenshot({ path: "artifacts/puter-ui/providers-390x844.png", fullPage: true });
     await page.setViewportSize({ width: 1440, height: 900 });
 
-    await page.goto("/dashboard/chat");
-    const draftLoaded = page.waitForResponse((response) => response.request().method() === "GET"
-      && response.url().includes("/api/dashboard/chat/draft?conversationId=")
-      && response.status() === 200);
-    await page.locator(".conversation-empty").getByRole("button", { name: "محادثة جديدة" }).click();
-    await draftLoaded;
+    await page.goto("/dashboard/chat?new=true");
+    await expect(page).toHaveURL(/\/dashboard\/chat\?new=true/);
+    await expect(page.getByRole("heading", { name: "ابدأ مع وكيلك الذكي" })).toBeVisible();
     await page.getByRole("button", { name: "أدوات" }).click();
     await page.getByLabel("مصدر التنفيذ").selectOption("puter");
     await expect(page.getByLabel("نموذج Puter").locator('option[value="puter-e2e-model"]')).toHaveCount(1);
@@ -129,7 +126,12 @@ test.describe("Puter browser provider", () => {
     const sendButton = page.getByRole("button", { name: "إرسال الرسالة" });
     await expect(sendButton).toBeEnabled();
     await sendButton.click();
+    const conversationCreated = page.waitForResponse((response) => response.request().method() === "POST"
+      && new URL(response.url()).pathname === "/api/dashboard/chat"
+      && response.status() === 201);
     await page.getByRole("button", { name: "أفهم وأتابع" }).click();
+    await conversationCreated;
+    await expect(page).toHaveURL(/\/dashboard\/chat\?.*conversationId=/);
     await expect(page.getByText("نجح بث Puter التجريبي")).toBeVisible();
     await page.reload();
     await expect(page.getByText("نجح بث Puter التجريبي")).toBeVisible();
