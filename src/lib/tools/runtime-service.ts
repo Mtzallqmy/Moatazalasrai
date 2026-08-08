@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
-import { db } from "@/db";
+import { db, checkDatabase } from "@/db";
 import { executionEvents, executionJobs, executionSteps, executionUsage, executionWorkspaces } from "@/db/execution-schema";
 import {
   browserAgentSessions,
@@ -11,8 +11,10 @@ import {
   voiceGenerationJobs,
 } from "@/db/tool-run-schema";
 import { auditLogs } from "@/db/schema";
+import type { Role } from "@/lib/auth/permissions";
 import { platformExecutionLimits } from "@/lib/execution/quota-service";
 import { enqueueExecutionTaskTx, type ExecutionActor } from "@/lib/execution/repository";
+import { executionRunnerHealth } from "@/lib/execution/runner-health";
 import { assertExecutionKernelEnabled, selectedRunnerKind } from "@/lib/execution/runner-registry";
 import { getToolAvailability } from "./permission-service";
 import { requireToolManifest } from "./registry";
@@ -37,23 +39,37 @@ function toolLimits(toolId: OperationalToolRunRequest["toolId"]) {
 
 function networkPolicy(toolId: OperationalToolRunRequest["toolId"], body: OperationalToolRunRequest) {
   if (toolId === "browser.agent" && body.toolId === "browser.agent") {
-    return { mode: "allowlist" as const, allowedHosts: body.allowedDomains, allowedPorts: [80, 443], allowDns: true, allowedMethods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"] as const, maxRequests: 1_000 };
+    return { mode: "allowlist" as const, allowedHosts: body.allowedDomains, allowedPorts: [80, 443], allowDns: true, allowedMethods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"], maxRequests: 1_000 };
   }
-  return { mode: "deny_all" as const, allowedHosts: [], allowedPorts: [], allowDns: false, allowedMethods: ["GET", "HEAD"] as const, maxRequests: 0 };
+  return { mode: "deny_all" as const, allowedHosts: [], allowedPorts: [], allowDns: false, allowedMethods: ["GET", "HEAD"], maxRequests: 0 };
+}
+
+function voiceProviderAvailable(body: Extract<OperationalToolRunRequest, { toolId: "voice.studio" }>) {
+  return body.provider === "openai"
+    ? process.env.OPENAI_VOICE_PROVIDER_ENABLED === "true" && Boolean(process.env.OPENAI_API_KEY)
+    : process.env.ELEVENLABS_VOICE_PROVIDER_ENABLED === "true" && Boolean(process.env.ELEVENLABS_API_KEY);
+}
+
+function browserRuntimeAvailable() {
+  return process.env.BROWSER_AGENT_ENABLED === "true" && Boolean(process.env.BROWSER_RUNNER_URL) && Boolean(process.env.BROWSER_RUNNER_SHARED_SECRET);
 }
 
 export async function createOperationalToolRun(input: {
-  actor: ExecutionActor & { role: Parameters<typeof getToolAvailability>[0]["role"] };
+  actor: ExecutionActor & { role: Role };
   requestId: string;
   body: OperationalToolRunRequest;
 }) {
-  if (input.body.toolId !== "voice.studio") assertExecutionKernelEnabled();
+  if (input.body.toolId === "data.interpreter" || input.body.toolId === "coding.agent") assertExecutionKernelEnabled();
   const manifest = requireToolManifest(input.body.toolId);
-  const runnerHealthy = input.body.toolId === "voice.studio" ? true : true;
-  const providerAvailable = input.body.toolId !== "voice.studio" || (
-    (input.body.provider === "openai" && process.env.OPENAI_VOICE_PROVIDER_ENABLED === "true" && Boolean(process.env.OPENAI_API_KEY)) ||
-    (input.body.provider === "elevenlabs" && process.env.ELEVENLABS_VOICE_PROVIDER_ENABLED === "true" && Boolean(process.env.ELEVENLABS_API_KEY))
-  );
+  let runnerHealthy = true;
+  if (input.body.toolId === "data.interpreter" || input.body.toolId === "coding.agent") {
+    try { runnerHealthy = (await executionRunnerHealth(input.actor.organizationId)).ready; } catch { runnerHealthy = false; }
+  } else if (input.body.toolId === "browser.agent") {
+    runnerHealthy = browserRuntimeAvailable();
+  }
+  const providerAvailable = input.body.toolId === "voice.studio" ? voiceProviderAvailable(input.body) : true;
+  let migrationsApplied = false;
+  try { await checkDatabase(); migrationsApplied = true; } catch { migrationsApplied = false; }
   const availability = await getToolAvailability({
     organizationId: input.actor.organizationId,
     userId: input.actor.userId,
@@ -61,7 +77,7 @@ export async function createOperationalToolRun(input: {
     manifest,
     runnerHealthy,
     providerAvailable,
-    migrationsApplied: true,
+    migrationsApplied,
   });
   if (!availability.runnable) throw new Error(`TOOL_NOT_RUNNABLE:${availability.reasons.join(",")}`);
 
@@ -101,7 +117,7 @@ export async function createOperationalToolRun(input: {
       userId: input.actor.userId,
       runnerKind,
       templateId,
-      state: input.body.toolId === "voice.studio" ? "ready" : "provisioning",
+      state: input.body.toolId === "voice.studio" || input.body.toolId === "browser.agent" ? "ready" : "provisioning",
       networkPolicy: policy,
       limits,
       metadata: { requestId: input.requestId, toolId: input.body.toolId },
