@@ -8,6 +8,7 @@ export const puterChatStartSchema = z.object({
   message: z.string().trim().min(1).max(12_000),
   model,
   clientRequestId: z.string().uuid(),
+  attachmentIds: z.array(uuid).max(12).default([]),
 }).strict();
 
 export const puterChatFinishSchema = z.object({
