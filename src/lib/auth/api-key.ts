@@ -1,5 +1,6 @@
 import { and, eq, gt, isNull, lt, or } from "drizzle-orm";
 import { db } from "@/db";
+import { enterTenantDatabaseContext, runWithSystemDatabaseContext } from "@/db/tenant-context";
 import { mobileSessions, organizationMembers, platformApiKeys } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
 import { hashApiKey, secureHashEquals } from "@/lib/security/encryption";
@@ -40,7 +41,7 @@ export type ApiPrincipal = {
   scopes: ApiScope[];
 };
 
-export async function authenticateApiKey(request: Request): Promise<ApiPrincipal | null> {
+async function resolveApiPrincipal(request: Request): Promise<ApiPrincipal | null> {
   const authorization = request.headers.get("authorization");
   const token = authorization?.startsWith("Bearer ") ? authorization.slice(7).trim() : null;
   if (!token) return null;
@@ -105,6 +106,12 @@ export async function authenticateApiKey(request: Request): Promise<ApiPrincipal
     role: mobile.role,
     scopes: mobileScopes as ApiScope[],
   };
+}
+
+export async function authenticateApiKey(request: Request): Promise<ApiPrincipal | null> {
+  const principal = await runWithSystemDatabaseContext(() => resolveApiPrincipal(request));
+  if (principal) enterTenantDatabaseContext(principal.organizationId, principal.userId);
+  return principal;
 }
 
 export function requireApiScope(principal: ApiPrincipal, scope: ApiScope) {
