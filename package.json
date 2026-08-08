@@ -4,7 +4,9 @@
   "private": true,
   "description": "Production-oriented multi-tenant AI agent platform with encrypted BYOK credentials and multi-provider model routing.",
   "license": "MIT",
-  "engines": { "node": "22.18.0" },
+  "engines": {
+    "node": "22.18.0"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -14,6 +16,7 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "test:integration": "vitest run tests/integration",
+    "execution:kernel:check": "node scripts/check-execution-kernel-readiness.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node scripts/migrate.mjs",
     "worker:migrate": "node scripts/migrate-worker.mjs",
@@ -78,6 +81,7 @@
     "fast-uri": "3.1.5",
     "hono": "4.12.34",
     "js-yaml": "4.3.1",
+    "nanoid": "5.1.16",
     "postcss": "8.5.25",
     "sharp": "^0.35.0",
     "undici": "7.29.0",
