@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { run, type Runner } from "graphile-worker";
 import { db } from "@/db";
-import { closePostgresPool, getPostgresPool } from "@/db/pool";
+import { closePostgresPool, configureDatabaseProcessKind, getSystemPostgresPool } from "@/db/pool";
 import { workerHeartbeats } from "@/db/agent-runtime-schema";
 import { recoverPendingDomainEvents } from "@/lib/events/recover";
 import { executionKernelEnabled } from "@/lib/execution/runner-registry";
@@ -11,6 +11,8 @@ import { startNodeTelemetry } from "@/ai/observability/node-otel";
 import { safeTelemetry } from "@/ai/observability/telemetry";
 import { enqueueExecutionExpire, enqueueExecutionReconcile } from "@/worker/queue";
 import { taskList } from "@/worker/task-list";
+
+configureDatabaseProcessKind("worker");
 
 function workerConcurrency() {
   const configured = Number(process.env.WORKER_CONCURRENCY ?? 4);
@@ -147,7 +149,7 @@ async function main() {
     executionKernelEnabled: executionKernelEnabled(),
   })));
   runner = await run({
-    pgPool: getPostgresPool(),
+    pgPool: getSystemPostgresPool(),
     concurrency: workerConcurrency(),
     taskList,
     noHandleSignals: true,
