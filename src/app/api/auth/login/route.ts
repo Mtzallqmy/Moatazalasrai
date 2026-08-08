@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { auditLogs, organizationMembers, users } from "@/db/schema";
 import { verifyMfaForLogin } from "@/lib/auth/mfa";
 import { verifyPassword } from "@/lib/auth/password";
+import { markCurrentSessionReauthenticated } from "@/lib/auth/reauthentication";
 import { createSession } from "@/lib/auth/session";
 import { publishDomainEventBestEffort } from "@/lib/events/publish";
 import { apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson, ApiError } from "@/lib/http/api";
@@ -48,6 +49,7 @@ export async function POST(request: Request) {
       ipAddress: anonymizeIp(clientIp(request).address),
       userAgent: request.headers.get("user-agent") ?? undefined,
     });
+    if (mfaVerified) await markCurrentSessionReauthenticated();
     await db().insert(auditLogs).values({
       organizationId: activeOrganizationId,
       actorType: "user",

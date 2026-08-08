@@ -2,7 +2,9 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { users } from "@/db/schema";
+import { issueMobileMfaChallenge } from "@/lib/auth/mobile-mfa";
 import { issueMobileSession, mobileOrganizations } from "@/lib/auth/mobile";
+import { mfaStatus } from "@/lib/auth/mfa";
 import { verifyPassword } from "@/lib/auth/password";
 import { apiSuccess, ApiError, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { enforceRateLimit, requestClientKey } from "@/lib/security/rate-limit";
@@ -37,6 +39,23 @@ export async function POST(request: Request) {
         organizations: memberships,
       }, requestId, 409);
     }
+
+    const mfa = await mfaStatus(user.id);
+    if (mfa.enabled) {
+      const challenge = await issueMobileMfaChallenge({
+        userId: user.id,
+        organizationId: selected.id,
+        deviceId: body.deviceId,
+        deviceName: body.deviceName,
+        rememberSession: body.rememberSession,
+      });
+      return apiSuccess({
+        mfaRequired: true,
+        challengeToken: challenge.challengeToken,
+        expiresAt: challenge.expiresAt.toISOString(),
+      }, requestId, 202);
+    }
+
     const tokens = await issueMobileSession({
       userId: user.id,
       organizationId: selected.id,

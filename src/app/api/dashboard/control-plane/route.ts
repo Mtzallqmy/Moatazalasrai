@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   const requestId = getRequestId(request);
   try {
-    const session = await requireSession("platform:read");
+    const session = await requireSession("control_plane:read");
     const data = await loadControlPlaneV2(session.organizationId);
     return apiSuccess(data, requestId);
   } catch (error) {
@@ -22,7 +22,7 @@ export async function POST(request: Request) {
   const requestId = getRequestId(request);
   try {
     assertSameOrigin(request);
-    const session = await requireSession("platform:manage");
+    const session = await requireSession("control_plane:manage");
     await enforceRateLimit({
       scope: "dashboard.control-plane.mutate",
       key: `${session.organizationId}:${session.userId}:${requestClientKey(request)}`,
