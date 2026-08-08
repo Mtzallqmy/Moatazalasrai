@@ -10,8 +10,7 @@ import {
   integrationUpdateSchema,
 } from "@/lib/http/contracts";
 import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
-import { configureTelegramWebhook } from "@/lib/integrations/telegram";
-import { telegramPlatformConfig } from "@/lib/integrations/telegram-platform";
+import { configureAndVerifyTelegramWebhook } from "@/lib/integrations/telegram";
 import { decryptSecret, encryptSecret, hashApiKey, maskSecret } from "@/lib/security/encryption";
 import { integrationAdapter } from "@/server/integrations/registry";
 
@@ -35,24 +34,17 @@ function publicConfig(kind: "telegram" | "github", config: Record<string, unknow
   const agentId = typeof config.agentId === "string" ? config.agentId : null;
   if (kind === "telegram") {
     return {
-      botUsername: config.botUsername,
-      botName: config.botName,
+      botId: typeof config.botId === "number" || typeof config.botId === "string" ? String(config.botId) : null,
+      botUsername: typeof config.botUsername === "string" ? config.botUsername : null,
+      botName: typeof config.botName === "string" ? config.botName : null,
       agentId,
       webhookActive: config.webhookActive === true,
-      deprecated: true,
+      webhookUrl: typeof config.webhookUrl === "string" ? config.webhookUrl : null,
+      webhookPendingUpdates: typeof config.webhookPendingUpdates === "number" ? config.webhookPendingUpdates : null,
+      webhookLastVerifiedAt: typeof config.webhookLastVerifiedAt === "string" ? config.webhookLastVerifiedAt : null,
     };
   }
   return { login: config.login, accountName: config.accountName, agentId };
-}
-
-function assertTelegramUserTokensAllowed(kind: "telegram" | "github") {
-  if (kind === "telegram" && !telegramPlatformConfig().allowUserBotTokens) {
-    throw new ApiError(
-      409,
-      "TELEGRAM_CENTRAL_BOT_ONLY",
-      "Telegram يعمل عبر بوت المنصة المركزي. استخدم بطاقة ربط تيليجرام بدل إدخال Bot Token.",
-    );
-  }
 }
 
 async function validateAgent(organizationId: string, agentId?: string | null) {
@@ -68,6 +60,33 @@ async function validateAgent(organizationId: string, agentId?: string | null) {
 async function verifyIntegration(kind: "telegram" | "github", token: string) {
   const adapter = integrationAdapter(kind);
   return adapter.validateConfig(adapter.configSchema.parse({ token }));
+}
+
+function telegramWebhookUrl(integrationId: string) {
+  const appUrl = env().appUrl?.replace(/\/$/, "");
+  if (!appUrl) throw new ApiError(409, "APP_URL_REQUIRED", "اضبط APP_URL قبل تفعيل Telegram.");
+  if (!appUrl.startsWith("https://")) {
+    throw new ApiError(409, "TELEGRAM_HTTPS_REQUIRED", "Telegram Webhook يتطلب APP_URL عبر HTTPS.");
+  }
+  return `${appUrl}/api/webhooks/telegram/${integrationId}`;
+}
+
+async function configureTenantTelegram(input: { token: string; integrationId: string }) {
+  const secret = randomBytes(32).toString("base64url");
+  const url = telegramWebhookUrl(input.integrationId);
+  const info = await configureAndVerifyTelegramWebhook({
+    token: input.token,
+    url,
+    secretToken: secret,
+    mode: "channel",
+  });
+  return {
+    webhookSecretHash: hashApiKey(secret),
+    webhookActive: true,
+    webhookUrl: url,
+    webhookPendingUpdates: info.pending_update_count ?? 0,
+    webhookLastVerifiedAt: new Date().toISOString(),
+  };
 }
 
 export async function GET(request: Request) {
@@ -89,10 +108,8 @@ export async function POST(request: Request) {
     assertSameOrigin(request);
     const session = await requireSession("integrations:manage");
     const body = await parseJson(request, integrationCreateSchema, 12 * 1024);
-    assertTelegramUserTokensAllowed(body.kind);
     await validateAgent(session.organizationId, body.agentId);
     const verifiedConfig = await verifyIntegration(body.kind, body.token);
-    const webhookSecret = body.kind === "telegram" ? randomBytes(32).toString("base64url") : null;
     const [created] = await db().insert(integrations).values({
       organizationId: session.organizationId,
       kind: body.kind,
@@ -102,30 +119,42 @@ export async function POST(request: Request) {
       config: {
         ...verifiedConfig,
         ...(body.agentId ? { agentId: body.agentId } : {}),
-        ...(webhookSecret ? { webhookSecretHash: hashApiKey(webhookSecret), webhookActive: false } : {}),
+        ...(body.kind === "telegram" ? { webhookActive: false } : {}),
       },
-      status: "verified",
-      lastVerifiedAt: new Date(),
+      status: body.kind === "telegram" ? "pending" : "verified",
+      lastVerifiedAt: body.kind === "github" ? new Date() : null,
     }).returning(publicFields);
     if (!created) throw new Error("INTEGRATION_CREATE_FAILED");
 
     let result = created;
-    if (body.kind === "telegram" && webhookSecret) {
-      const appUrl = env().appUrl;
-      if (!appUrl) throw new ApiError(409, "APP_URL_REQUIRED", "اضبط APP_URL قبل تفعيل Telegram.");
-      await configureTelegramWebhook({
-        token: body.token,
-        url: `${appUrl}/api/webhooks/telegram/${created.id}`,
-        secretToken: webhookSecret,
-      });
-      [result] = await db().update(integrations).set({
-        config: { ...created.config, webhookActive: true },
-        updatedAt: new Date(),
-      }).where(and(
-        eq(integrations.id, created.id),
-        eq(integrations.organizationId, session.organizationId),
-      )).returning(publicFields);
+    if (body.kind === "telegram") {
+      try {
+        const webhook = await configureTenantTelegram({ token: body.token, integrationId: created.id });
+        [result] = await db().update(integrations).set({
+          config: { ...created.config, ...webhook },
+          status: "verified",
+          lastVerifiedAt: new Date(),
+          lastErrorCode: null,
+          updatedAt: new Date(),
+        }).where(and(
+          eq(integrations.id, created.id),
+          eq(integrations.organizationId, session.organizationId),
+        )).returning(publicFields);
+      } catch (error) {
+        const errorCode = error instanceof ApiError ? error.code : error instanceof Error ? error.name : "TELEGRAM_WEBHOOK_SETUP_FAILED";
+        await db().update(integrations).set({
+          status: "failed",
+          lastErrorCode: errorCode,
+          config: { ...created.config, webhookActive: false },
+          updatedAt: new Date(),
+        }).where(and(
+          eq(integrations.id, created.id),
+          eq(integrations.organizationId, session.organizationId),
+        ));
+        throw error;
+      }
     }
+
     await db().insert(auditLogs).values({
       organizationId: session.organizationId,
       actorType: "user",
@@ -133,7 +162,7 @@ export async function POST(request: Request) {
       action: "integration.created",
       resourceType: "integration",
       resourceId: created.id,
-      metadata: { kind: created.kind, agentId: body.agentId ?? null, requestId },
+      metadata: { kind: created.kind, agentId: body.agentId ?? null, webhookActive: body.kind === "telegram", requestId },
     });
     return apiSuccess({ ...result, config: publicConfig(result.kind, result.config) }, requestId, 201);
   } catch (error) {
@@ -152,14 +181,8 @@ export async function PATCH(request: Request) {
       eq(integrations.organizationId, session.organizationId),
     )).limit(1);
     if (!current) throw new ApiError(404, "INTEGRATION_NOT_FOUND", "التكامل غير موجود.");
-    if (current.kind === "telegram" && !telegramPlatformConfig().allowUserBotTokens) {
-      throw new ApiError(
-        409,
-        "TELEGRAM_LEGACY_INTEGRATION_READ_ONLY",
-        "تكاملات Telegram القديمة للقراءة التاريخية فقط. استخدم البوت المركزي لإدارة الربط.",
-      );
-    }
     await validateAgent(session.organizationId, body.agentId);
+
     const token = body.token ?? decryptSecret(current.encryptedToken, `integration:${session.organizationId}`);
     const verifiedConfig = body.token ? await verifyIntegration(current.kind, token) : {};
     const previousAgentId = typeof current.config.agentId === "string" ? current.config.agentId : null;
@@ -168,17 +191,12 @@ export async function PATCH(request: Request) {
       ...verifiedConfig,
       ...(body.agentId === undefined ? {} : { agentId: body.agentId }),
     };
-    if (current.kind === "telegram" && body.activateWebhook) {
-      const webhookSecret = randomBytes(32).toString("base64url");
-      const appUrl = env().appUrl;
-      if (!appUrl) throw new ApiError(409, "APP_URL_REQUIRED", "اضبط APP_URL قبل تفعيل Telegram.");
-      await configureTelegramWebhook({
-        token,
-        url: `${appUrl}/api/webhooks/telegram/${current.id}`,
-        secretToken: webhookSecret,
-      });
-      config = { ...config, webhookSecretHash: hashApiKey(webhookSecret), webhookActive: true };
+    const shouldConfigureWebhook = current.kind === "telegram"
+      && (body.token !== undefined || body.activateWebhook === true || current.config.webhookActive !== true);
+    if (shouldConfigureWebhook) {
+      config = { ...config, ...await configureTenantTelegram({ token, integrationId: current.id }) };
     }
+
     const now = new Date();
     const updated = await db().transaction(async (tx) => {
       const [row] = await tx.update(integrations).set({
@@ -190,7 +208,7 @@ export async function PATCH(request: Request) {
         }),
         config,
         status: "verified",
-        lastVerifiedAt: body.token ? now : current.lastVerifiedAt,
+        lastVerifiedAt: body.token !== undefined || shouldConfigureWebhook ? now : current.lastVerifiedAt,
         lastErrorCode: null,
         updatedAt: now,
       }).where(and(
@@ -213,7 +231,7 @@ export async function PATCH(request: Request) {
           previousAgentId,
           agentId: nextAgentId,
           enabled: row.enabled,
-          webhookReactivated: body.activateWebhook === true,
+          webhookReactivated: shouldConfigureWebhook,
           tokenRotated: body.token !== undefined,
           requestId,
         },
@@ -232,13 +250,6 @@ export async function DELETE(request: Request) {
     assertSameOrigin(request);
     const session = await requireSession("integrations:manage");
     const body = await parseJson(request, integrationDeleteSchema, 4 * 1024);
-    const [current] = await db().select({ kind: integrations.kind }).from(integrations).where(and(
-      eq(integrations.id, body.id),
-      eq(integrations.organizationId, session.organizationId),
-    )).limit(1);
-    if (current?.kind === "telegram" && !telegramPlatformConfig().allowUserBotTokens) {
-      throw new ApiError(409, "TELEGRAM_LEGACY_INTEGRATION_READ_ONLY", "لا تُحذف سجلات Telegram القديمة من الواجهة أثناء الانتقال للبوت المركزي.");
-    }
     const deleted = await db().transaction(async (tx) => {
       const [row] = await tx.delete(integrations).where(and(
         eq(integrations.id, body.id),
