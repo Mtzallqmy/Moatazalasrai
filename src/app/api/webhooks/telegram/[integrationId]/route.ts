@@ -41,37 +41,40 @@ export async function POST(request: Request, context: { params: Promise<{ integr
   }
 
   const contentLength = Number(request.headers.get("content-length") ?? 0);
-  if (Number.isFinite(contentLength) && contentLength > MAX_TELEGRAM_WEBHOOK_BYTES) {
-    return new Response(null, { status: 413 });
-  }
+  if (Number.isFinite(contentLength) && contentLength > MAX_TELEGRAM_WEBHOOK_BYTES) return new Response(null, { status: 413 });
   const raw = await request.text();
-  if (new TextEncoder().encode(raw).byteLength > MAX_TELEGRAM_WEBHOOK_BYTES) {
-    return new Response(null, { status: 413 });
-  }
+  if (new TextEncoder().encode(raw).byteLength > MAX_TELEGRAM_WEBHOOK_BYTES) return new Response(null, { status: 413 });
   const update = (() => {
-    try {
-      return JSON.parse(raw) as TelegramUpdate;
-    } catch {
-      return null;
-    }
+    try { return JSON.parse(raw) as TelegramUpdate; } catch { return null; }
   })();
   if (!update || !Number.isSafeInteger(update.update_id)) return apiSuccess({ accepted: false }, requestId);
 
-  return runWithTenantDatabaseContext({
-    organizationId: integration.organizationId,
-    userId: null,
-  }, async () => {
-    let updateRowId: string;
+  return runWithTenantDatabaseContext({ organizationId: integration.organizationId, userId: null }, async () => {
+    let persisted: { id: string; status: string; errorCode: string | null; duplicate: boolean };
     try {
-      const [updateRow] = await db().insert(telegramUpdates).values({
+      const [inserted] = await db().insert(telegramUpdates).values({
         integrationId: integration.id,
         updateId: String(update.update_id),
-      }).returning({ id: telegramUpdates.id });
-      if (!updateRow) throw new Error("TELEGRAM_UPDATE_INSERT_FAILED");
-      updateRowId = updateRow.id;
-    } catch (error) {
-      const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
-      if (code === "23505") return apiSuccess({ accepted: true, duplicate: true }, requestId);
+      }).onConflictDoNothing().returning({
+        id: telegramUpdates.id,
+        status: telegramUpdates.status,
+        errorCode: telegramUpdates.errorCode,
+      });
+      if (inserted) {
+        persisted = { ...inserted, duplicate: false };
+      } else {
+        const [existing] = await db().select({
+          id: telegramUpdates.id,
+          status: telegramUpdates.status,
+          errorCode: telegramUpdates.errorCode,
+        }).from(telegramUpdates).where(and(
+          eq(telegramUpdates.integrationId, integration.id),
+          eq(telegramUpdates.updateId, String(update.update_id)),
+        )).limit(1);
+        if (!existing) throw new Error("TELEGRAM_UPDATE_PERSISTENCE_INCONSISTENT");
+        persisted = { ...existing, duplicate: true };
+      }
+    } catch {
       console.error(JSON.stringify({
         level: "error",
         event: "telegram.channel_webhook.persist_failed",
@@ -82,20 +85,32 @@ export async function POST(request: Request, context: { params: Promise<{ integr
       return new Response(null, { status: 503, headers: { "retry-after": "5", "cache-control": "no-store" } });
     }
 
+    if (persisted.duplicate && (persisted.status === "completed" || persisted.status === "ignored")) {
+      return apiSuccess({ accepted: true, duplicate: true, terminal: true }, requestId);
+    }
+    if (persisted.duplicate && persisted.status === "failed" && persisted.errorCode !== "TELEGRAM_QUEUE_UNAVAILABLE") {
+      return apiSuccess({ accepted: true, duplicate: true, terminal: true }, requestId);
+    }
+
     try {
       await enqueueTelegramUpdate({
-        updateRowId,
+        updateRowId: persisted.id,
         updateId: update.update_id as number,
         update: update as Record<string, unknown>,
         integrationId: integration.id,
         organizationId: integration.organizationId,
       });
+      await db().update(telegramUpdates).set({
+        status: "accepted",
+        errorCode: null,
+        completedAt: null,
+      }).where(eq(telegramUpdates.id, persisted.id));
     } catch (error) {
       await db().update(telegramUpdates).set({
-        status: "failed",
+        status: "accepted",
         errorCode: "TELEGRAM_QUEUE_UNAVAILABLE",
-        completedAt: new Date(),
-      }).where(eq(telegramUpdates.id, updateRowId)).catch(() => undefined);
+        completedAt: null,
+      }).where(eq(telegramUpdates.id, persisted.id)).catch(() => undefined);
       console.error(JSON.stringify({
         level: "error",
         event: "telegram.channel_webhook.enqueue_failed",
@@ -108,6 +123,6 @@ export async function POST(request: Request, context: { params: Promise<{ integr
       return new Response(null, { status: 503, headers: { "retry-after": "5", "cache-control": "no-store" } });
     }
 
-    return apiSuccess({ accepted: true, queued: true }, requestId);
+    return apiSuccess({ accepted: true, queued: true, recovered: persisted.duplicate }, requestId);
   });
 }
