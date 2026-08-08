@@ -19,10 +19,12 @@ describe("Operational AI Tools runtime", () => {
     expect(codingAgentRunSchema.safeParse({ title: "Code", idempotencyKey: "code-run-001", objective: "update", files: { "src/a.ts": "a" }, operations: [{ kind: "write", path: "../secret", content: "x" }] }).success).toBe(false);
   });
 
-  test("browser plans require start host in allowlist", () => {
-    const plan = { connectionId: "00000000-0000-4000-8000-000000000001", objective: "read", steps: [{ id: "s1", action: "navigate", url: "https://example.com", requiredPermission: "navigate", risk: "low", expectedResult: "loaded" }] };
-    expect(browserAgentRunSchema.safeParse({ title: "Browser", idempotencyKey: "browser-001", startUrl: "https://example.com", allowedDomains: ["example.com"], plan }).success).toBe(true);
-    expect(browserAgentRunSchema.safeParse({ title: "Browser", idempotencyKey: "browser-002", startUrl: "https://evil.example", allowedDomains: ["example.com"], plan }).success).toBe(false);
+  test("browser plans require start host in allowlist and keep writes fail-closed", () => {
+    const readPlan = { connectionId: "00000000-0000-4000-8000-000000000001", objective: "read", steps: [{ id: "s1", action: "navigate", url: "https://example.com", requiredPermission: "navigate", risk: "low", expectedResult: "loaded" }] };
+    expect(browserAgentRunSchema.safeParse({ title: "Browser", idempotencyKey: "browser-001", startUrl: "https://example.com", allowedDomains: ["example.com"], plan: readPlan }).success).toBe(true);
+    expect(browserAgentRunSchema.safeParse({ title: "Browser", idempotencyKey: "browser-002", startUrl: "https://evil.example", allowedDomains: ["example.com"], plan: readPlan }).success).toBe(false);
+    const writePlan = { connectionId: "00000000-0000-4000-8000-000000000001", objective: "submit", steps: [{ id: "s1", action: "submit", target: { testId: "save" }, requiredPermission: "update", risk: "medium", expectedResult: "saved" }] };
+    expect(browserAgentRunSchema.safeParse({ title: "Browser", idempotencyKey: "browser-003", startUrl: "https://example.com", allowedDomains: ["example.com"], plan: writePlan }).success).toBe(false);
   });
 
   test("voice requests are provider explicit", () => {
