@@ -3,14 +3,16 @@
 import Link from "next/link";
 import { useState } from "react";
 import { Activity, ChevronDown, Clock3, ExternalLink, RefreshCw, TerminalSquare } from "lucide-react";
-import { Alert, Button, EmptyState, StatusBadge } from "@/components/ui";
+import { Alert, Button, EmptyState } from "@/components/ui";
 import { apiErrorMessage, apiRequest } from "@/lib/http/client";
+import { detailedDateTime, formatCompactNumber, formatDurationMs, friendlyModelName, relativeTime, runStatusPresentation } from "@/lib/ui/presentation";
 
+type RunStatus = keyof typeof runStatusPresentation;
 type Run = {
   id: string;
   requestId: string;
   agentName: string;
-  status: string;
+  status: RunStatus;
   provider: string;
   model: string;
   inputTokens: number | null;
@@ -25,18 +27,29 @@ type Run = {
 };
 type Event = { id: string; sequence: number; type: string; payload: Record<string, unknown>; createdAt: string };
 
-function duration(run: Run) {
-  if (!run.startedAt) return "لم يبدأ";
+function durationMs(run: Run) {
+  if (!run.startedAt) return null;
   const end = run.completedAt ? new Date(run.completedAt).getTime() : Date.now();
-  const milliseconds = Math.max(0, end - new Date(run.startedAt).getTime());
-  if (milliseconds < 1_000) return `${milliseconds}ms`;
-  if (milliseconds < 60_000) return `${(milliseconds / 1_000).toFixed(1)}s`;
-  return `${Math.floor(milliseconds / 60_000)}m ${Math.round((milliseconds % 60_000) / 1_000)}s`;
+  return Math.max(0, end - new Date(run.startedAt).getTime());
 }
 
 function safePayload(payload: Record<string, unknown>) {
-  const entries = Object.entries(payload).filter(([key]) => !/(token|secret|authorization|api.?key|password)/i.test(key));
-  return entries.slice(0, 8).map(([key, value]) => `${key}: ${typeof value === "string" ? value.slice(0, 160) : JSON.stringify(value).slice(0, 160)}`);
+  return Object.entries(payload)
+    .filter(([key]) => !/(token|secret|authorization|api.?key|password)/i.test(key))
+    .slice(0, 8)
+    .map(([key, value]) => `${key}: ${typeof value === "string" ? value.slice(0, 160) : JSON.stringify(value).slice(0, 160)}`);
+}
+
+function eventLabel(type: string) {
+  const normalized = type.toLowerCase();
+  if (normalized.includes("created") || normalized.includes("queued")) return "تم إنشاء التشغيل";
+  if (normalized.includes("started") || normalized.includes("running")) return "بدأ التنفيذ";
+  if (normalized.includes("tool")) return "استدعاء أداة";
+  if (normalized.includes("approval")) return "بانتظار الموافقة";
+  if (normalized.includes("completed")) return "اكتمل التشغيل";
+  if (normalized.includes("failed") || normalized.includes("error")) return "فشل التنفيذ";
+  if (normalized.includes("cancel")) return "أُلغي التشغيل";
+  return "حدث تشغيلي";
 }
 
 export function RunsTable({ runs }: { runs: Run[] }) {
@@ -59,31 +72,57 @@ export function RunsTable({ runs }: { runs: Run[] }) {
     }
   }
 
-  if (!runs.length) return <EmptyState icon={<Activity size={22} />} title="لا توجد عمليات تشغيل" description="ستظهر هنا العمليات الحقيقية بعد تشغيل وكيل أو إرسال رسالة." />;
+  if (!runs.length) return <EmptyState icon={<Activity size={22} />} title="لا توجد تشغيلات" description="ستظهر هنا التشغيلات الحقيقية بعد تشغيل وكيل أو إرسال رسالة." />;
 
-  return <div className="runs-workspace">
+  return <div className="runs-workspace runs-workspace-v2">
     {error ? <Alert tone="danger">{error}</Alert> : null}
-    <div className="run-card-list">{runs.map((run) => {
+    <div className="run-compact-list">{runs.map((run) => {
       const expanded = open === run.id;
-      return <article className="run-card" key={run.id}>
-        <header>
+      const presentation = runStatusPresentation[run.status] ?? { label: run.status, tone: "muted" as const };
+      const totalTokens = run.inputTokens !== null && run.outputTokens !== null ? run.inputTokens + run.outputTokens : null;
+      return <article className={`run-list-item${expanded ? " is-expanded" : ""}`} key={run.id}>
+        <div className="run-list-summary">
           <span className="run-agent-icon"><TerminalSquare size={18} /></span>
-          <div className="min-w-0"><h2>{run.agentName}</h2><p><bdi dir="ltr">{run.provider} / {run.model}</bdi></p></div>
-          <StatusBadge status={run.status} label={run.status === "completed" ? "مكتمل" : run.status === "running" ? "قيد التشغيل" : run.status === "queued" ? "في الطابور" : run.status === "failed" ? "فشل" : run.status === "cancelled" ? "ملغي" : run.status} />
-        </header>
-        <div className="run-metrics">
-          <div><span>المدة</span><strong><Clock3 size={13} /> {duration(run)}</strong></div>
-          <div><span>Tokens</span><strong dir="ltr">{run.inputTokens ?? "—"} / {run.outputTokens ?? "—"}</strong></div>
-          <div><span>وقت البدء</span><strong>{new Date(run.createdAt).toLocaleString("ar", { dateStyle: "short", timeStyle: "short" })}</strong></div>
+          <div className="run-list-copy">
+            <div className="run-list-title"><h2>{run.agentName}</h2><span className={`status-badge status-${presentation.tone}`}>{presentation.label}</span></div>
+            <p>{friendlyModelName(run.model)}</p>
+            <div className="run-list-meta"><span><Clock3 size={13} /> {formatDurationMs(durationMs(run))}</span><span>{relativeTime(run.createdAt)}</span></div>
+          </div>
+          <Button variant="secondary" size="sm" onClick={() => { const next = expanded ? null : run.id; setOpen(next); if (next) void loadEvents(run.id); }} aria-expanded={expanded}><ChevronDown size={14} className={expanded ? "rotate-180" : undefined} /> التفاصيل</Button>
         </div>
-        {run.error ? <Alert tone="danger" title={run.errorCode ?? "RUN_FAILED"}>{run.error}</Alert> : null}
-        <footer>
-          {run.conversationId ? <Link href={`/dashboard/chat?conversationId=${encodeURIComponent(run.conversationId)}`}>فتح المحادثة <ExternalLink size={13} /></Link> : <span />}
-          <Button variant="ghost" size="sm" onClick={() => { const next = expanded ? null : run.id; setOpen(next); if (next) void loadEvents(run.id); }} aria-expanded={expanded}><ChevronDown size={14} className={expanded ? "rotate-180" : undefined} /> الأحداث</Button>
-        </footer>
-        {expanded ? <section className="run-event-panel" aria-label={`أحداث تشغيل ${run.agentName}`}>
-          <div className="run-identifiers"><span><b>request</b><bdi dir="ltr">{run.requestId}</bdi></span><span><b>provider request</b><bdi dir="ltr">{run.providerRequestId ?? "N/A"}</bdi></span><Button size="sm" variant="ghost" disabled={loading === run.id} onClick={() => void loadEvents(run.id, true)}><RefreshCw size={13} /> تحديث</Button></div>
-          {loading === run.id && !events[run.id] ? <p className="run-loading">جارٍ تحميل التسلسل…</p> : (events[run.id] ?? []).length ? <ol className="run-timeline">{events[run.id].map((event) => <li key={event.id}><span>{event.sequence}</span><div><h3 dir="ltr">{event.type}</h3><time>{new Date(event.createdAt).toLocaleString("ar")}</time>{safePayload(event.payload).length ? <details><summary>المدخلات والنتائج الآمنة</summary><pre dir="ltr">{safePayload(event.payload).join("\n")}</pre></details> : null}</div></li>)}</ol> : <p className="run-loading">لا توجد أحداث مسجلة لهذه العملية.</p>}
+
+        {expanded ? <section className="run-detail-panel" aria-label={`تفاصيل تشغيل ${run.agentName}`}>
+          <div className="run-overview-grid">
+            <div><span>الحالة</span><b>{presentation.label}</b></div>
+            <div><span>المدة</span><b>{formatDurationMs(durationMs(run))}</b></div>
+            <div><span>وقت الإنشاء</span><b>{detailedDateTime(run.createdAt)}</b></div>
+            <div><span>الاستخدام</span><b>{totalTokens === null ? "غير متاح" : `${formatCompactNumber(totalTokens)} token`}</b></div>
+          </div>
+          {run.error ? <Alert tone="danger" title="فشل التشغيل">{run.error}</Alert> : null}
+          <div className="run-detail-links">
+            {run.conversationId ? <Link href={`/dashboard/chat?conversationId=${encodeURIComponent(run.conversationId)}`}>فتح المحادثة <ExternalLink size={13} /></Link> : null}
+            <Button size="sm" variant="ghost" disabled={loading === run.id} onClick={() => void loadEvents(run.id, true)}><RefreshCw size={13} /> تحديث الأحداث</Button>
+          </div>
+          <details className="run-technical-details">
+            <summary>التفاصيل التقنية</summary>
+            <dl>
+              <div><dt>Provider</dt><dd className="technical-value">{run.provider}</dd></div>
+              <div><dt>Model</dt><dd className="technical-value">{run.model}</dd></div>
+              <div><dt>Input tokens</dt><dd>{formatCompactNumber(run.inputTokens)}</dd></div>
+              <div><dt>Output tokens</dt><dd>{formatCompactNumber(run.outputTokens)}</dd></div>
+              <div><dt>Run ID</dt><dd className="technical-value">{run.id}</dd></div>
+              <div><dt>Request ID</dt><dd className="technical-value">{run.requestId}</dd></div>
+              {run.providerRequestId ? <div><dt>Provider request</dt><dd className="technical-value">{run.providerRequestId}</dd></div> : null}
+              {run.errorCode ? <div><dt>Error code</dt><dd className="technical-value">{run.errorCode}</dd></div> : null}
+            </dl>
+          </details>
+          <section className="run-event-panel" aria-label={`أحداث تشغيل ${run.agentName}`}>
+            <h3>التسلسل الزمني</h3>
+            {loading === run.id && !events[run.id] ? <p className="run-loading">جارٍ تحميل التسلسل…</p> : (events[run.id] ?? []).length ? <ol className="run-timeline">{events[run.id].map((event) => {
+              const safe = safePayload(event.payload);
+              return <li key={event.id}><time>{new Date(event.createdAt).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time><span className="run-timeline-dot" aria-hidden="true" /><div><h4>{eventLabel(event.type)}</h4><code className="technical-value">{event.type}</code>{safe.length ? <details><summary>بيانات الحدث</summary><pre dir="ltr">{safe.join("\n")}</pre></details> : null}</div></li>;
+            })}</ol> : <p className="run-loading">لا توجد أحداث مسجلة لهذه العملية.</p>}
+          </section>
         </section> : null}
       </article>;
     })}</div>
