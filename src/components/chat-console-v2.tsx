@@ -296,7 +296,8 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
 
   useEffect(() => {
     if (!conversationId) return;
-    void loadMessages(conversationId);
+    const timeout = window.setTimeout(() => { void loadMessages(conversationId); }, 0);
+    return () => window.clearTimeout(timeout);
   }, [conversationId, loadMessages]);
 
   useEffect(() => {
@@ -331,12 +332,15 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
   }, [draft]);
 
   useEffect(() => {
-    if (nearBottom.current) {
-      scrollAnchor.current?.scrollIntoView({ behavior: messages.length > 2 ? "smooth" : "auto", block: "end" });
-      setShowLatest(false);
-    } else if (messages.length) {
-      setShowLatest(true);
-    }
+    const frame = window.requestAnimationFrame(() => {
+      if (nearBottom.current) {
+        scrollAnchor.current?.scrollIntoView({ behavior: messages.length > 2 ? "smooth" : "auto", block: "end" });
+        setShowLatest(false);
+      } else if (messages.length) {
+        setShowLatest(true);
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [messages]);
 
   useEffect(() => {
@@ -850,7 +854,7 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
             <button type="button" aria-pressed={archivedMode} onClick={() => setArchivedView(true)}>المؤرشفة</button>
           </div>
         </div>
-        {conversationError ? <div className="compact-error" role="alert"><span>{conversationError}</span><button type="button" onClick={() => setSearch((value) => `${value} ` .trimEnd())}>إعادة المحاولة</button></div> : null}
+        {conversationError ? <div className="compact-error" role="alert"><span>{conversationError}</span></div> : null}
         <div className="conversation-list" aria-busy={loadingConversations}>
           {loadingConversations && !conversations.length ? <>{[0, 1, 2, 3].map((item) => <div key={item} className="skeleton conversation-row-skeleton" />)}</> : null}
           {conversationGroups.map((group) => (
