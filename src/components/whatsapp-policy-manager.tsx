@@ -1,65 +1,65 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
-type AgentOption = { id: string; name: string };
-type ProviderOption = { id: string; name: string; provider: string; enabled: boolean; defaultModel: string | null; models: string[] };
-type ToolOption = { id: string; name: string; title: string | null; risk: string };
-type MemberOption = { id: string; name: string; email: string };
-type InitialData = {
+type Option = { id: string; name: string };
+type ProviderOption = Option & { provider: string; models: string[]; defaultModel: string | null };
+type ToolOption = Option & { title: string | null; risk: string };
+type MemberOption = Option & { email: string };
+
+type Policy = {
+  agentId: string | null;
+  providerCredentialId: string | null;
+  modelId: string | null;
+  allowedTools: string[];
+  permissions: string[];
+  monthlyLimit: number | null;
+  autoReplyEnabled: boolean;
+  humanHandoffEnabled: boolean;
+  memoryEnabled: boolean;
+  filesEnabled: boolean;
+  status: "active" | "disabled";
+  forceHumanHandoff: boolean;
+};
+
+type ResponseData = {
   endpoint: {
-    displayPhoneNumber: string | null;
+    displayPhoneNumber: string;
     phoneNumberId: string;
     businessAccountId: string;
     credentialSource: string;
     status: string;
   } | null;
-  effective: Record<string, unknown> | null;
+  effective: Policy;
 };
 
-type FormState = {
-  agentId: string | null;
-  providerCredentialId: string | null;
-  modelId: string | null;
-  teamId: string | null;
-  inboxId: string | null;
-  workflowId: string | null;
-  allowedTools: string[];
-  allowedActions: string[];
-  permissions: string[];
-  monthlyLimit: number | null;
-  autoReplyEnabled: boolean | null;
-  humanHandoffEnabled: boolean | null;
-  memoryEnabled: boolean | null;
-  filesEnabled: boolean | null;
-  status: "active" | "disabled";
-  forceHumanHandoff: boolean;
-};
+const permissionOptions = [
+  ["ai.chat", "الدردشة بالذكاء الاصطناعي"],
+  ["agent.use", "استخدام الوكيل"],
+  ["tools.execute", "تنفيذ الأدوات"],
+  ["files.use", "استخدام الملفات"],
+  ["search.use", "البحث"],
+  ["workflows.execute", "تشغيل سير العمل"],
+  ["handoff.request", "طلب موظف بشري"],
+] as const;
 
-const emptyForm: FormState = {
-  agentId: null,
-  providerCredentialId: null,
-  modelId: null,
-  teamId: null,
-  inboxId: null,
-  workflowId: null,
-  allowedTools: [],
-  allowedActions: [],
-  permissions: ["ai.chat", "agent.use", "conversation.open"],
-  monthlyLimit: null,
-  autoReplyEnabled: null,
-  humanHandoffEnabled: null,
-  memoryEnabled: null,
-  filesEnabled: null,
-  status: "active",
-  forceHumanHandoff: false,
-};
+function normalizePolicy(policy: Policy, providers: ProviderOption[]) {
+  if (!policy.providerCredentialId) return policy;
+  const provider = providers.find((item) => item.id === policy.providerCredentialId);
+  if (!provider) return { ...policy, providerCredentialId: null, modelId: null };
+  const modelId = policy.modelId && provider.models.includes(policy.modelId)
+    ? policy.modelId
+    : provider.defaultModel && provider.models.includes(provider.defaultModel)
+      ? provider.defaultModel
+      : provider.models[0] ?? null;
+  return { ...policy, modelId };
+}
 
 export function WhatsAppPolicyManager(props: {
   canManage: boolean;
-  initialData: InitialData;
+  initialData: ResponseData;
   options: {
-    agents: AgentOption[];
+    agents: Option[];
     providers: ProviderOption[];
     tools: ToolOption[];
     members: MemberOption[];
@@ -67,85 +67,82 @@ export function WhatsAppPolicyManager(props: {
 }) {
   const [scope, setScope] = useState<"organization" | "user">("organization");
   const [userId, setUserId] = useState("");
-  const [form, setForm] = useState<FormState>(emptyForm);
-  const [data, setData] = useState<InitialData>(props.initialData);
+  const [data, setData] = useState<ResponseData>(props.initialData);
+  const [form, setForm] = useState<Policy>(() => normalizePolicy(props.initialData.effective, props.options.providers));
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
 
-  const selectedProvider = props.options.providers.find((provider) => provider.id === form.providerCredentialId) ?? null;
-
-  function normalizePolicy(policy: Record<string, unknown> | null | undefined): FormState {
-    if (!policy) return emptyForm;
-    return {
-      agentId: typeof policy.agentId === "string" ? policy.agentId : null,
-      providerCredentialId: typeof policy.providerCredentialId === "string" ? policy.providerCredentialId : null,
-      modelId: typeof policy.modelId === "string" ? policy.modelId : null,
-      teamId: typeof policy.teamId === "string" ? policy.teamId : null,
-      inboxId: typeof policy.inboxId === "string" ? policy.inboxId : null,
-      workflowId: typeof policy.workflowId === "string" ? policy.workflowId : null,
-      allowedTools: Array.isArray(policy.allowedTools) ? policy.allowedTools.filter((value): value is string => typeof value === "string") : [],
-      allowedActions: Array.isArray(policy.allowedActions) ? policy.allowedActions.filter((value): value is string => typeof value === "string") : [],
-      permissions: Array.isArray(policy.permissions) ? policy.permissions.filter((value): value is string => typeof value === "string") : [],
-      monthlyLimit: typeof policy.monthlyLimit === "number" ? policy.monthlyLimit : null,
-      autoReplyEnabled: typeof policy.autoReplyEnabled === "boolean" ? policy.autoReplyEnabled : null,
-      humanHandoffEnabled: typeof policy.humanHandoffEnabled === "boolean" ? policy.humanHandoffEnabled : null,
-      memoryEnabled: typeof policy.memoryEnabled === "boolean" ? policy.memoryEnabled : null,
-      filesEnabled: typeof policy.filesEnabled === "boolean" ? policy.filesEnabled : null,
-      status: policy.status === "disabled" ? "disabled" : "active",
-      forceHumanHandoff: policy.forceHumanHandoff === true,
-    };
-  }
+  const selectedProvider = useMemo(
+    () => props.options.providers.find((provider) => provider.id === form.providerCredentialId) ?? null,
+    [form.providerCredentialId, props.options.providers],
+  );
+  const validationError = useMemo(() => {
+    if (form.status === "disabled") return null;
+    if (!data.endpoint) return "قناة WhatsApp المركزية غير مهيأة من متغيرات البيئة.";
+    if (!form.agentId) return "يجب اختيار وكيل صالح قبل تفعيل الرد الآلي.";
+    if (!form.providerCredentialId) return "يجب اختيار مزود متحقق قبل تفعيل الرد الآلي.";
+    if (!selectedProvider) return "المزود المختار لم يعد متاحًا أو غير متحقق.";
+    if (selectedProvider.models.length === 0) return "لم يكتشف المزود أي نماذج. أعد التحقق من المزود في صفحة المزودات أولًا.";
+    if (!form.modelId || !selectedProvider.models.includes(form.modelId)) return "اختر نموذجًا صالحًا من قائمة المزود.";
+    if (form.autoReplyEnabled && !form.permissions.includes("ai.chat")) return "الرد الآلي يتطلب صلاحية الدردشة بالذكاء الاصطناعي.";
+    if (form.allowedTools.length > 0 && !form.permissions.includes("tools.execute")) return "الأدوات المحددة تتطلب صلاحية تنفيذ الأدوات.";
+    return null;
+  }, [data.endpoint, form, selectedProvider]);
 
   async function loadPolicy(nextScope: typeof scope, nextUserId: string) {
     setLoading(true);
-    setMessage(null);
+    setMessage("");
     try {
-      const query = nextScope === "user" && nextUserId ? `?userId=${encodeURIComponent(nextUserId)}` : "";
-      const response = await fetch(`/api/dashboard/channels/whatsapp-policy${query}`, { cache: "no-store" });
+      const suffix = nextScope === "user" && nextUserId ? `?userId=${encodeURIComponent(nextUserId)}` : "";
+      const response = await fetch(`/api/dashboard/channels/whatsapp-policy${suffix}`, { cache: "no-store" });
       const payload = await response.json();
-      if (!response.ok || !payload.success) throw new Error(payload.error?.message || "تعذر تحميل سياسة واتساب.");
-      const source = nextScope === "user" ? payload.data.userPolicy : payload.data.organizationPolicy;
-      setForm(normalizePolicy(source));
-      setData({ endpoint: payload.data.endpoint, effective: payload.data.effective });
+      if (!response.ok) throw new Error(payload?.error?.message ?? "تعذر تحميل إعدادات WhatsApp.");
+      const next = payload.data as ResponseData;
+      setData(next);
+      setForm(normalizePolicy(next.effective, props.options.providers));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "تعذر تحميل سياسة واتساب.");
+      setMessage(error instanceof Error ? error.message : "تعذر تحميل إعدادات WhatsApp.");
     } finally {
       setLoading(false);
     }
   }
 
   function changeScope(nextScope: typeof scope) {
+    const nextUserId = nextScope === "user" ? userId : "";
     setScope(nextScope);
     if (nextScope !== "user") setUserId("");
-    void loadPolicy(nextScope, nextScope === "user" ? userId : "");
+    void loadPolicy(nextScope, nextUserId);
   }
 
   function changeUser(nextUserId: string) {
     setUserId(nextUserId);
-    if (scope === "user" && nextUserId) void loadPolicy("user", nextUserId);
+    if (nextUserId) void loadPolicy("user", nextUserId);
   }
 
-  function toggleTool(toolId: string) {
-    setForm((current) => ({
-      ...current,
-      allowedTools: current.allowedTools.includes(toolId)
-        ? current.allowedTools.filter((id) => id !== toolId)
-        : [...current.allowedTools, toolId],
-    }));
-  }
-
-  function updateBoolean(key: keyof Pick<FormState, "autoReplyEnabled" | "humanHandoffEnabled" | "memoryEnabled" | "filesEnabled">, value: string) {
-    setForm((current) => ({ ...current, [key]: value === "inherit" ? null : value === "true" }));
+  function changeProvider(providerCredentialId: string) {
+    const provider = props.options.providers.find((item) => item.id === providerCredentialId) ?? null;
+    setForm({
+      ...form,
+      providerCredentialId: provider?.id ?? null,
+      modelId: provider?.defaultModel && provider.models.includes(provider.defaultModel)
+        ? provider.defaultModel
+        : provider?.models[0] ?? null,
+    });
   }
 
   async function save() {
     if (!props.canManage) return;
     if (scope === "user" && !userId) {
-      setMessage("اختر مستخدمًا قبل حفظ سياسة المستخدم.");
+      setMessage("اختر مستخدمًا أولًا.");
       return;
     }
-    setLoading(true);
-    setMessage(null);
+    if (validationError) {
+      setMessage(validationError);
+      return;
+    }
+    setSaving(true);
+    setMessage("");
     try {
       const response = await fetch("/api/dashboard/channels/whatsapp-policy", {
         method: "PATCH",
@@ -153,52 +150,49 @@ export function WhatsAppPolicyManager(props: {
         body: JSON.stringify({ scope, ...(scope === "user" ? { userId } : {}), ...form }),
       });
       const payload = await response.json();
-      if (!response.ok || !payload.success) throw new Error(payload.error?.message || "تعذر حفظ سياسة واتساب.");
-      setMessage("تم حفظ سياسة واتساب.");
+      if (!response.ok) throw new Error(payload?.error?.message ?? "تعذر حفظ الإعدادات.");
       await loadPolicy(scope, userId);
+      setMessage("تم حفظ سياسة WhatsApp وتطبيقها على الرسائل التالية مباشرة.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "تعذر حفظ سياسة واتساب.");
+      setMessage(error instanceof Error ? error.message : "تعذر حفظ الإعدادات.");
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   }
 
   return (
-    <section className="glass-panel rounded-3xl p-5 sm:p-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="eyebrow">WhatsApp Policy</p>
-          <h2 className="mt-2 text-xl font-black">سياسة قناة واتساب المركزية</h2>
-          <p className="mt-2 text-sm leading-7 text-stone-400">السياسات هنا خاصة بالمؤسسة أو المستخدم فقط. افتراضيات المنصة العالمية لا يمكن تعديلها من Tenant Plane.</p>
-        </div>
-        <span className={`status-pill ${data.endpoint?.status === "active" ? "status-pill-success" : "status-pill-warning"}`}>
-          {data.endpoint?.status === "active" ? "القناة المركزية فعالة" : "القناة المركزية غير جاهزة"}
-        </span>
-      </div>
+    <section className="surface-card space-y-5 p-5" aria-labelledby="whatsapp-policy-title" aria-busy={loading}>
+      <header className="space-y-1">
+        <h2 id="whatsapp-policy-title" className="text-lg font-semibold">إعدادات WhatsApp المركزية</h2>
+        <p className="text-sm text-muted">الرقم الرسمي يُحمّل من Environment ويستخدم Webhook واحدًا. الإعدادات التالية تغيّر التوجيه والسياسات الخاصة بالمؤسسة أو المستخدم فقط.</p>
+        {data.endpoint ? <p className="text-sm">الرقم: <bdi dir="ltr">{data.endpoint.displayPhoneNumber}</bdi> · الحالة: {data.endpoint.status}</p> : <p className="text-sm text-danger">لم تُحمّل قناة WhatsApp من Environment بعد.</p>}
+      </header>
 
-      <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-3">
         <label className="space-y-1 text-sm"><span>مستوى السياسة</span><select className="input" value={scope} onChange={(event) => changeScope(event.target.value as typeof scope)} disabled={!props.canManage || loading}><option value="organization">المؤسسة</option><option value="user">مستخدم محدد</option></select></label>
         {scope === "user" ? <label className="space-y-1 text-sm"><span>المستخدم</span><select className="input" value={userId} onChange={(event) => changeUser(event.target.value)} disabled={!props.canManage || loading}><option value="">اختر مستخدمًا</option>{props.options.members.map((member) => <option key={member.id} value={member.id}>{member.name} — {member.email}</option>)}</select></label> : null}
-        <label className="space-y-1 text-sm"><span>الوكيل</span><select className="input" value={form.agentId ?? ""} onChange={(event) => setForm((current) => ({ ...current, agentId: event.target.value || null }))} disabled={!props.canManage || loading}><option value="">موروث / افتراضي</option>{props.options.agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select></label>
-        <label className="space-y-1 text-sm"><span>المزود</span><select className="input" value={form.providerCredentialId ?? ""} onChange={(event) => setForm((current) => ({ ...current, providerCredentialId: event.target.value || null, modelId: null }))} disabled={!props.canManage || loading}><option value="">موروث / افتراضي</option>{props.options.providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
-        <label className="space-y-1 text-sm"><span>النموذج</span><select className="input" value={form.modelId ?? ""} onChange={(event) => setForm((current) => ({ ...current, modelId: event.target.value || null }))} disabled={!props.canManage || loading || !selectedProvider}><option value="">موروث / افتراضي</option>{selectedProvider?.models.map((model) => <option key={model} value={model}>{model}</option>)}</select></label>
-        <label className="space-y-1 text-sm"><span>الحد الشهري</span><input className="input" type="number" min={1} max={100000000} value={form.monthlyLimit ?? ""} onChange={(event) => setForm((current) => ({ ...current, monthlyLimit: event.target.value ? Number(event.target.value) : null }))} disabled={!props.canManage || loading} /></label>
-        <label className="space-y-1 text-sm"><span>الحالة</span><select className="input" value={form.status} onChange={(event) => setForm((current) => ({ ...current, status: event.target.value === "disabled" ? "disabled" : "active" }))} disabled={!props.canManage || loading}><option value="active">نشطة</option><option value="disabled">معطلة</option></select></label>
-        <label className="space-y-1 text-sm"><span>الرد التلقائي</span><select className="input" value={form.autoReplyEnabled === null ? "inherit" : String(form.autoReplyEnabled)} onChange={(event) => updateBoolean("autoReplyEnabled", event.target.value)} disabled={!props.canManage || loading}><option value="inherit">موروث</option><option value="true">مفعل</option><option value="false">معطل</option></select></label>
-        <label className="space-y-1 text-sm"><span>التحويل البشري</span><select className="input" value={form.humanHandoffEnabled === null ? "inherit" : String(form.humanHandoffEnabled)} onChange={(event) => updateBoolean("humanHandoffEnabled", event.target.value)} disabled={!props.canManage || loading}><option value="inherit">موروث</option><option value="true">مفعل</option><option value="false">معطل</option></select></label>
-        <label className="space-y-1 text-sm"><span>الذاكرة</span><select className="input" value={form.memoryEnabled === null ? "inherit" : String(form.memoryEnabled)} onChange={(event) => updateBoolean("memoryEnabled", event.target.value)} disabled={!props.canManage || loading}><option value="inherit">موروث</option><option value="true">مفعل</option><option value="false">معطل</option></select></label>
-        <label className="space-y-1 text-sm"><span>الملفات</span><select className="input" value={form.filesEnabled === null ? "inherit" : String(form.filesEnabled)} onChange={(event) => updateBoolean("filesEnabled", event.target.value)} disabled={!props.canManage || loading}><option value="inherit">موروث</option><option value="true">مفعل</option><option value="false">معطل</option></select></label>
+        <label className="space-y-1 text-sm"><span>الحالة</span><select className="input" value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value as Policy["status"] })} disabled={!props.canManage || loading}><option value="active">مفعل</option><option value="disabled">معطل</option></select></label>
       </div>
 
-      <div className="mt-5">
-        <p className="text-sm font-bold">الأدوات المسموح بها</p>
-        <div className="mt-2 flex flex-wrap gap-2">{props.options.tools.map((tool) => <label key={tool.id} className="chip"><input type="checkbox" checked={form.allowedTools.includes(tool.id)} onChange={() => toggleTool(tool.id)} disabled={!props.canManage || loading} /> <span>{tool.title || tool.name}</span></label>)}</div>
+      <div className="grid gap-4 md:grid-cols-3">
+        <label className="space-y-1 text-sm"><span>الوكيل</span><select className="input" value={form.agentId ?? ""} onChange={(event) => setForm({ ...form, agentId: event.target.value || null })} disabled={!props.canManage || loading}><option value="">اختر الوكيل</option>{props.options.agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select></label>
+        <label className="space-y-1 text-sm"><span>المزود / مفتاح BYOK المحفوظ</span><select className="input" value={form.providerCredentialId ?? ""} onChange={(event) => changeProvider(event.target.value)} disabled={!props.canManage || loading}><option value="">اختر المزود</option>{props.options.providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
+        <label className="space-y-1 text-sm"><span>النموذج</span><select className="input" value={form.modelId ?? ""} onChange={(event) => setForm({ ...form, modelId: event.target.value })} disabled={!props.canManage || loading || !selectedProvider || selectedProvider.models.length === 0}><option value="" disabled>{selectedProvider ? "اختر النموذج" : "اختر المزود أولًا"}</option>{selectedProvider?.models.map((model) => <option key={model} value={model}>{model}</option>)}</select>{selectedProvider && selectedProvider.models.length === 0 ? <small className="text-danger">لا توجد نماذج مكتشفة لهذا المزود.</small> : null}</label>
       </div>
 
-      <div className="mt-5 flex flex-wrap items-center gap-3">
-        <button className="button-primary" type="button" onClick={save} disabled={!props.canManage || loading}>{loading ? "جارٍ الحفظ…" : "حفظ السياسة"}</button>
-        {message ? <p className="text-sm text-stone-300">{message}</p> : null}
+      <div className="grid gap-5 md:grid-cols-2">
+        <fieldset className="space-y-2" disabled={!props.canManage || loading}><legend className="text-sm font-medium">الصلاحيات</legend>{permissionOptions.map(([value, label]) => <label key={value} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.permissions.includes(value)} onChange={(event) => setForm({ ...form, permissions: event.target.checked ? [...form.permissions, value] : form.permissions.filter((item) => item !== value), ...(value === "tools.execute" && !event.target.checked ? { allowedTools: [] } : {}) })} /><span>{label}</span></label>)}<p className="text-xs text-muted">العمليات المالية والحساسة محظورة من WhatsApp وتتطلب إعادة مصادقة داخل الموقع.</p></fieldset>
+        <fieldset className="space-y-2" disabled={!props.canManage || loading}><legend className="text-sm font-medium">الأدوات المسموحة</legend><div className="max-h-56 space-y-2 overflow-auto">{props.options.tools.map((tool) => <label key={tool.id} className="flex items-start gap-2 text-sm"><input type="checkbox" checked={form.allowedTools.includes(tool.id)} disabled={!form.permissions.includes("tools.execute")} onChange={(event) => setForm({ ...form, allowedTools: event.target.checked ? [...form.allowedTools, tool.id] : form.allowedTools.filter((item) => item !== tool.id) })} /><span>{tool.title || tool.name} <small className="text-muted">({tool.risk})</small></span></label>)}</div></fieldset>
       </div>
+
+      <div className="grid gap-4 md:grid-cols-3">
+        <label className="space-y-1 text-sm"><span>الحد الشهري</span><input className="input" type="number" min={1} value={form.monthlyLimit ?? ""} onChange={(event) => setForm({ ...form, monthlyLimit: event.target.value ? Number(event.target.value) : null })} disabled={!props.canManage || loading} /></label>
+        {[["autoReplyEnabled", "الرد الآلي"], ["humanHandoffEnabled", "التحويل البشري"], ["memoryEnabled", "الذاكرة"], ["filesEnabled", "الملفات"], ["forceHumanHandoff", "إجبار التحويل لموظف"]].map(([key, label]) => <label key={key} className="flex items-center gap-2 self-end text-sm"><input type="checkbox" checked={Boolean(form[key as keyof Policy])} disabled={!props.canManage || loading} onChange={(event) => setForm({ ...form, [key]: event.target.checked })} /><span>{label}</span></label>)}
+      </div>
+
+      {validationError ? <p className="text-sm text-danger" role="alert">{validationError}</p> : null}
+      {message ? <p className="text-sm" role="status">{message}</p> : null}
+      <button type="button" className="button-primary" onClick={() => void save()} disabled={!props.canManage || saving || loading || Boolean(validationError)}>{saving ? "جارٍ الحفظ…" : loading ? "جارٍ التحميل…" : "حفظ سياسة WhatsApp"}</button>
     </section>
   );
 }
