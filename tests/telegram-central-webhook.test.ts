@@ -35,13 +35,7 @@ beforeEach(() => {
   mocks.enqueue.mockReset();
   mocks.enqueue.mockResolvedValue({ jobId: "job-1" });
   mocks.answerCallback.mockClear();
-  mocks.execute.mockImplementation(async (query) => {
-    const text = String(query);
-    if (text.includes("INSERT INTO") && text.includes("telegram_updates")) {
-      return { rows: [{ id: updateRowId, status: "accepted", error_code: null }] };
-    }
-    return { rows: [] };
-  });
+  mocks.execute.mockResolvedValue({ rows: [{ id: updateRowId, status: "accepted", error_code: null }] });
 });
 
 afterEach(() => {
