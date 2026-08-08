@@ -1,4 +1,5 @@
-import { getPostgresPool } from "@/db/pool";
+import { makeWorkerUtils, type WorkerUtils } from "graphile-worker";
+import { getPostgresPool, getSystemPostgresPool } from "@/db/pool";
 import type {
   AgentRunResumePayload,
   AgentTeamRunPayload,
@@ -15,6 +16,30 @@ import type {
   TelegramUpdatePayload,
   WhatsAppChannelUpdatePayload,
 } from "@/worker/schemas";
+
+let integrationWorkerUtilsPromise: Promise<WorkerUtils> | null = null;
+
+/**
+ * Integration-test compatibility only. Production enqueue paths below use the
+ * SECURITY DEFINER boundary instead of exposing Graphile Worker internals to
+ * the tenant/application database role.
+ */
+export function getWorkerUtils() {
+  if (process.env.NODE_ENV !== "test") {
+    throw new Error("WORKER_UTILS_TEST_ONLY");
+  }
+  integrationWorkerUtilsPromise ??= makeWorkerUtils({ pgPool: getSystemPostgresPool() }).catch((error) => {
+    integrationWorkerUtilsPromise = null;
+    throw error;
+  });
+  return integrationWorkerUtilsPromise;
+}
+
+export async function releaseWorkerUtils() {
+  const promise = integrationWorkerUtilsPromise;
+  integrationWorkerUtilsPromise = null;
+  if (promise) await (await promise).release();
+}
 
 async function addJob(name: string, payload: unknown, options: {
   queueName: string;
