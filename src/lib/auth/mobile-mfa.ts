@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { getPostgresPool } from "@/db/pool";
-import { issueMobileSession } from "@/lib/auth/mobile";
-import { verifyMfaForLogin } from "@/lib/auth/mfa";
+import { issueMobileSessionWithClient } from "@/lib/auth/mobile";
+import { verifyMfaForLoginWithClient } from "@/lib/auth/mfa";
 import { ApiError } from "@/lib/http/api";
 
 const CHALLENGE_TTL_MS = 5 * 60_000;
@@ -70,15 +70,17 @@ export async function verifyMobileMfaChallenge(input: {
     if (challenge.attempt_count >= CHALLENGE_MAX_ATTEMPTS) throw new ApiError(423, "MFA_CHALLENGE_LOCKED", "تعذر التحقق من طلب المصادقة.");
 
     try {
-      await verifyMfaForLogin({ userId: challenge.user_id, code: input.code });
+      await verifyMfaForLoginWithClient(client, { userId: challenge.user_id, code: input.code });
     } catch (error) {
-      await client.query(`
-        UPDATE mobile_mfa_challenges
-        SET attempt_count = LEAST(attempt_count + 1, $2)
-        WHERE id = $1
-      `, [challenge.id, CHALLENGE_MAX_ATTEMPTS]);
-      await client.query("COMMIT");
-      committed = true;
+      if (error instanceof ApiError && error.code === "MFA_CODE_INVALID") {
+        await client.query(`
+          UPDATE mobile_mfa_challenges
+          SET attempt_count = LEAST(attempt_count + 1, $2)
+          WHERE id = $1
+        `, [challenge.id, CHALLENGE_MAX_ATTEMPTS]);
+        await client.query("COMMIT");
+        committed = true;
+      }
       throw error;
     }
 
@@ -95,7 +97,7 @@ export async function verifyMobileMfaChallenge(input: {
       throw new ApiError(403, "MOBILE_MEMBERSHIP_REVOKED", "تعذر إكمال تسجيل الدخول لهذه المساحة.");
     }
 
-    const tokens = await issueMobileSession({
+    const tokens = await issueMobileSessionWithClient(client, {
       userId: challenge.user_id,
       organizationId: challenge.organization_id,
       deviceId: challenge.device_id,
