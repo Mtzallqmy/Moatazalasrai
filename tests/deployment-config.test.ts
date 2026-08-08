@@ -37,16 +37,17 @@ describe("Railway deployment configuration", () => {
     expect(config.deploy?.healthcheckTimeout).toBeGreaterThanOrEqual(120);
   });
 
-  it("uses one Railway-compatible node-postgres driver and shared pools", async () => {
+  it("uses node-postgres with explicit runtime trust planes and a dedicated Graphile pool", async () => {
     const packageJson = JSON.parse(await readFile("package.json", "utf8")) as {
       dependencies?: Record<string, string>;
     };
-    const [databaseSource, poolSource, workerSource, queueSource, migrationSource] = await Promise.all([
+    const [databaseSource, poolSource, workerSource, queueSource, migrationSource, workerMigrationSource] = await Promise.all([
       readFile("src/db/index.ts", "utf8"),
       readFile("src/db/pool.ts", "utf8"),
       readFile("src/worker/index.ts", "utf8"),
       readFile("src/worker/queue.ts", "utf8"),
       readFile("scripts/migrate.mjs", "utf8"),
+      readFile("scripts/migrate-worker.mjs", "utf8"),
     ]);
 
     expect(packageJson.dependencies?.pg).toBeTruthy();
@@ -54,8 +55,15 @@ describe("Railway deployment configuration", () => {
     expect(packageJson.dependencies?.["graphile-worker"]).toBeTruthy();
     expect(databaseSource).toContain('from "drizzle-orm/node-postgres"');
     expect(poolSource).toContain('from "pg"');
-    expect(workerSource).toContain("pgPool: getPostgresPool()");
-    expect(queueSource).toContain("pgPool: getPostgresPool()");
+    expect(poolSource).toContain('new RolePool("moataz_app", "tenant"');
+    expect(poolSource).toContain('new RolePool("moataz_platform", "platform"');
+    expect(poolSource).toContain('new RolePool("moataz_worker", "worker"');
+    expect(workerSource).toContain("configureDatabaseProcessKind(\"worker\")");
+    expect(workerSource).toContain("pgPool: getSystemPostgresPool()");
+    expect(queueSource).toContain("app_security.enqueue_job");
+    expect(queueSource).not.toContain("makeWorkerUtils({ pgPool: getPostgresPool() })");
+    expect(workerMigrationSource).toContain("SECURITY DEFINER");
+    expect(workerMigrationSource).toContain("app_security.enqueue_job");
     expect(migrationSource).toContain('import pg from "pg"');
   });
 
