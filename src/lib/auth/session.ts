@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { cache } from "react";
 import { and, asc, eq, gt, isNull, lt } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { db } from "@/db";
@@ -6,6 +7,9 @@ import { enterTenantDatabaseContext, runWithSystemDatabaseContext } from "@/db/t
 import { organizationMembers, organizations, sessions, users } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
 import { activeMembership } from "@/lib/auth/membership-access";
+import { supabaseAuthConfigured } from "@/lib/supabase/config";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { ensureLocalIdentity, upsertSupabaseAppSession } from "@/lib/auth/supabase-identity";
 
 const LEGACY_SESSION_COOKIE = "moataz_session";
 export const SESSION_COOKIE = process.env.NODE_ENV === "production"
@@ -69,6 +73,18 @@ export async function createSession(input: {
 }
 
 export async function revokeCurrentSession() {
+  if (supabaseAuthConfigured()) {
+    const supabase = await createSupabaseServerClient();
+    const { data } = await supabase.auth.getClaims();
+    const sessionId = typeof data?.claims?.session_id === "string" ? data.claims.session_id : null;
+    if (sessionId) {
+      await runWithSystemDatabaseContext(() => db().update(sessions).set({ revokedAt: new Date() })
+        .where(eq(sessions.supabaseSessionId, sessionId)));
+    }
+    await supabase.auth.signOut({ scope: "local" });
+    await clearSessionCookies();
+    return;
+  }
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value
     ?? (SESSION_COOKIE !== LEGACY_SESSION_COOKIE ? store.get(LEGACY_SESSION_COOKIE)?.value : undefined);
@@ -84,6 +100,10 @@ export async function revokeAllSessions(userId: string) {
     isNull(sessions.revokedAt),
   )));
   await clearSessionCookies();
+  if (supabaseAuthConfigured()) {
+    const supabase = await createSupabaseServerClient();
+    await supabase.auth.signOut({ scope: "global" });
+  }
 }
 
 export async function setActiveOrganization(userId: string, sessionId: string, organizationId: string) {
@@ -94,22 +114,27 @@ export async function setActiveOrganization(userId: string, sessionId: string, o
       activeMembership(),
     )).limit(1);
     if (!membership) throw new ApiError(404, "MEMBERSHIP_NOT_FOUND", "المؤسسة غير متاحة لهذا الحساب.");
-    const nextToken = randomBytes(32).toString("base64url");
+    const [existing] = await db().select({ authSource: sessions.authSource }).from(sessions)
+      .where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId), isNull(sessions.revokedAt))).limit(1);
+    if (!existing) throw new ApiError(401, "SESSION_INVALID", "انتهت الجلسة أو أُبطلت.");
+    const nextToken = existing.authSource === "legacy" ? randomBytes(32).toString("base64url") : null;
     const [rotated] = await db().update(sessions).set({
       activeOrganizationId: organizationId,
-      tokenHash: hashToken(nextToken),
+      ...(nextToken ? { tokenHash: hashToken(nextToken) } : {}),
       lastSeenAt: new Date(),
     }).where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId), isNull(sessions.revokedAt)))
       .returning({ expiresAt: sessions.expiresAt });
     if (!rotated) throw new ApiError(401, "SESSION_INVALID", "انتهت الجلسة أو أُبطلت.");
-    const store = await cookies();
-    store.set(SESSION_COOKIE, nextToken, cookieOptions(rotated.expiresAt));
-    if (SESSION_COOKIE !== LEGACY_SESSION_COOKIE) store.delete(LEGACY_SESSION_COOKIE);
+    if (nextToken) {
+      const store = await cookies();
+      store.set(SESSION_COOKIE, nextToken, cookieOptions(rotated.expiresAt));
+      if (SESSION_COOKIE !== LEGACY_SESSION_COOKIE) store.delete(LEGACY_SESSION_COOKIE);
+    }
   });
   enterTenantDatabaseContext(organizationId, userId);
 }
 
-async function resolveCurrentSession() {
+async function resolveLegacyCurrentSession() {
   const store = await cookies();
   const primaryToken = store.get(SESSION_COOKIE)?.value;
   const legacyToken = SESSION_COOKIE !== LEGACY_SESSION_COOKIE ? store.get(LEGACY_SESSION_COOKIE)?.value : undefined;
@@ -124,7 +149,15 @@ async function resolveCurrentSession() {
     userId: users.id,
     email: users.email,
     name: users.name,
-  }).from(sessions).innerJoin(users, eq(users.id, sessions.userId)).where(and(
+    membershipOrganizationId: organizationMembers.organizationId,
+    organizationName: organizations.name,
+    role: organizationMembers.role,
+    membershipExpiresAt: organizationMembers.expiresAt,
+  }).from(sessions).innerJoin(users, eq(users.id, sessions.userId)).leftJoin(organizationMembers, and(
+    eq(organizationMembers.userId, users.id),
+    eq(organizationMembers.organizationId, sessions.activeOrganizationId),
+    activeMembership(),
+  )).leftJoin(organizations, eq(organizations.id, organizationMembers.organizationId)).where(and(
     eq(sessions.tokenHash, hashToken(token)),
     isNull(sessions.revokedAt),
     gt(sessions.expiresAt, new Date()),
@@ -133,6 +166,12 @@ async function resolveCurrentSession() {
   if (!base) return null;
 
   let activeOrganizationId = base.activeOrganizationId;
+  let membership = base.membershipOrganizationId ? {
+    organizationId: base.membershipOrganizationId,
+    organizationName: base.organizationName,
+    role: base.role,
+    expiresAt: base.membershipExpiresAt,
+  } : null;
   if (!activeOrganizationId) {
     const memberships = await db().select({ organizationId: organizationMembers.organizationId })
       .from(organizationMembers).where(and(eq(organizationMembers.userId, base.userId), activeMembership()))
@@ -145,11 +184,7 @@ async function resolveCurrentSession() {
     if (memberships.length === 1) {
       activeOrganizationId = memberships[0].organizationId;
       await db().update(sessions).set({ activeOrganizationId }).where(eq(sessions.id, base.sessionId));
-    }
-  }
-
-  const [membership] = activeOrganizationId
-    ? await db().select({
+      [membership] = await db().select({
         organizationId: organizations.id,
         organizationName: organizations.name,
         role: organizationMembers.role,
@@ -161,8 +196,10 @@ async function resolveCurrentSession() {
           eq(organizationMembers.organizationId, activeOrganizationId),
           activeMembership(),
         ))
-        .limit(1)
-    : [];
+        .limit(1);
+    }
+  }
+
   if (activeOrganizationId && !membership) {
     await db().update(sessions).set({ revokedAt: new Date() }).where(eq(sessions.id, base.sessionId));
     await clearSessionCookies();
@@ -187,8 +224,101 @@ async function resolveCurrentSession() {
   };
 }
 
+async function resolveSupabaseCurrentSession() {
+  const supabase = await createSupabaseServerClient();
+  const { data, error } = await supabase.auth.getClaims();
+  const claims = data?.claims as Record<string, unknown> | undefined;
+  const subject = typeof claims?.sub === "string" ? claims.sub : null;
+  const sessionId = typeof claims?.session_id === "string" ? claims.session_id : null;
+  const exp = typeof claims?.exp === "number" ? claims.exp : null;
+  if (error || !subject || !sessionId || !exp || exp * 1000 <= Date.now()) return null;
+
+  let [localUser] = await db().select({ id: users.id }).from(users).where(eq(users.supabaseUserId, subject)).limit(1);
+  if (!localUser) {
+    const { data: verified, error: userError } = await supabase.auth.getUser();
+    if (userError || !verified.user || verified.user.id !== subject) return null;
+    localUser = await ensureLocalIdentity(verified.user);
+  }
+
+  let [base] = await db().select({
+    sessionId: sessions.id,
+    activeOrganizationId: sessions.activeOrganizationId,
+    lastSeenAt: sessions.lastSeenAt,
+    userId: users.id,
+    email: users.email,
+    name: users.name,
+    membershipOrganizationId: organizationMembers.organizationId,
+    organizationName: organizations.name,
+    role: organizationMembers.role,
+    membershipExpiresAt: organizationMembers.expiresAt,
+  }).from(sessions).innerJoin(users, eq(users.id, sessions.userId)).leftJoin(organizationMembers, and(
+    eq(organizationMembers.userId, users.id),
+    eq(organizationMembers.organizationId, sessions.activeOrganizationId),
+    activeMembership(),
+  )).leftJoin(organizations, eq(organizations.id, organizationMembers.organizationId)).where(and(
+    eq(sessions.supabaseSessionId, sessionId),
+    eq(users.supabaseUserId, subject),
+    isNull(sessions.revokedAt),
+    gt(sessions.expiresAt, new Date()),
+  )).limit(1);
+
+  if (!base) {
+    let appSession;
+    try {
+      appSession = await upsertSupabaseAppSession({ userId: localUser.id, supabaseSessionId: sessionId, expiresAt: new Date(exp * 1000) });
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.code === "ACCOUNT_ACCESS_EXPIRED") {
+        await supabase.auth.signOut({ scope: "local" });
+        return null;
+      }
+      throw cause;
+    }
+    [base] = await db().select({
+      sessionId: sessions.id,
+      activeOrganizationId: sessions.activeOrganizationId,
+      lastSeenAt: sessions.lastSeenAt,
+      userId: users.id,
+      email: users.email,
+      name: users.name,
+      membershipOrganizationId: organizationMembers.organizationId,
+      organizationName: organizations.name,
+      role: organizationMembers.role,
+      membershipExpiresAt: organizationMembers.expiresAt,
+    }).from(sessions).innerJoin(users, eq(users.id, sessions.userId)).leftJoin(organizationMembers, and(
+      eq(organizationMembers.userId, users.id), eq(organizationMembers.organizationId, sessions.activeOrganizationId), activeMembership(),
+    )).leftJoin(organizations, eq(organizations.id, organizationMembers.organizationId))
+      .where(eq(sessions.id, appSession.id)).limit(1);
+  }
+  if (!base) return null;
+  if (base.activeOrganizationId && !base.membershipOrganizationId) {
+    await db().update(sessions).set({ revokedAt: new Date() }).where(eq(sessions.id, base.sessionId));
+    await supabase.auth.signOut({ scope: "local" });
+    return null;
+  }
+  const staleBefore = new Date(Date.now() - LAST_SEEN_WRITE_INTERVAL_MS);
+  if (base.lastSeenAt < staleBefore) {
+    await db().update(sessions).set({ lastSeenAt: new Date() }).where(and(eq(sessions.id, base.sessionId), lt(sessions.lastSeenAt, staleBefore)));
+  }
+  return {
+    sessionId: base.sessionId,
+    userId: base.userId,
+    email: base.email,
+    name: base.name,
+    organizationId: base.membershipOrganizationId ?? null,
+    organizationName: base.organizationName ?? null,
+    role: base.role ?? null,
+    accessExpiresAt: base.membershipExpiresAt?.toISOString() ?? null,
+  };
+}
+
+async function resolveCurrentSession() {
+  return supabaseAuthConfigured() ? resolveSupabaseCurrentSession() : resolveLegacyCurrentSession();
+}
+
+const resolveCachedCurrentSession = cache(() => runWithSystemDatabaseContext(resolveCurrentSession));
+
 export async function currentSession() {
-  const session = await runWithSystemDatabaseContext(resolveCurrentSession);
+  const session = await resolveCachedCurrentSession();
   if (session?.organizationId) enterTenantDatabaseContext(session.organizationId, session.userId);
   return session;
 }

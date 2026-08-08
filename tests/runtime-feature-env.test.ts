@@ -4,6 +4,7 @@ import { validateOptionalRuntimeEnvironment } from "../scripts/validate-runtime-
 const keys = [
   "TURNSTILE_ENABLED", "NEXT_PUBLIC_TURNSTILE_SITE_KEY", "TURNSTILE_SECRET_KEY", "TURNSTILE_EXPECTED_HOSTNAME",
   "OBJECT_STORAGE_DRIVER", "R2_ACCOUNT_ID", "R2_ENDPOINT", "R2_BUCKET_NAME", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY",
+  "NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SECRET_KEY",
   "CLOUDFLARE_AI_GATEWAY_ENABLED", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_AI_GATEWAY_ID", "CLOUDFLARE_AI_GATEWAY_TOKEN", "CLOUDFLARE_API_TOKEN",
   "AI_PROVIDER_FALLBACK_ENABLED", "AI_PROVIDER_DIRECT_FALLBACK_ENABLED",
   "WHATSAPP_INTEGRATION_ENABLED", "META_APP_ID", "META_APP_SECRET", "META_GRAPH_API_VERSION",
@@ -28,6 +29,12 @@ describe("optional production feature configuration", () => {
     process.env.OBJECT_STORAGE_DRIVER = "r2";
     process.env.R2_ACCOUNT_ID = "account";
     expect(() => validateOptionalRuntimeEnvironment()).toThrow("R2_BUCKET_NAME");
+  });
+
+  it("fails fast when Supabase Auth has only public configuration", () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://project.supabase.co";
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = "sb_publishable_test";
+    expect(() => validateOptionalRuntimeEnvironment()).toThrow("SUPABASE_SECRET_KEY");
   });
 
   it("fails fast when AI Gateway is enabled without account and gateway IDs", () => {

@@ -1,7 +1,7 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { FormEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   Archive,
   ArrowDown,
@@ -35,7 +35,7 @@ import {
 import { groupConversations } from "@/lib/chat/conversation-groups";
 import { splitServerEvents } from "@/lib/chat/sse";
 import { acceptedFileInput, humanFileSize, validateClientFile } from "@/lib/files/validation";
-import { apiErrorMessage, apiRequest } from "@/lib/http/client";
+import { ApiClientError, apiErrorMessage, apiRequest } from "@/lib/http/client";
 import { getPuterClient } from "@/lib/puter/client";
 import { streamPuterChat } from "@/lib/puter/chat";
 import { listPuterModels } from "@/lib/puter/models";
@@ -162,6 +162,42 @@ function messageStatusLabel(status: Message["status"]) {
   return null;
 }
 
+const ChatMessageItem = memo(function ChatMessageItem({ message, agentName, currentUserId, canManage, copied, onCopy, onAction }: {
+  message: Message;
+  agentName: string;
+  currentUserId: string;
+  canManage: boolean;
+  copied: boolean;
+  onCopy: (message: Message) => void;
+  onAction: (dialog: ActionDialog) => void;
+}) {
+  const statusLabel = messageStatusLabel(message.status);
+  const canMutate = (message.authorUserId === currentUserId || canManage) && !message.id.startsWith("stream-") && !message.id.startsWith("local-");
+  return (
+    <article className={`chat-message ${message.role === "user" ? "chat-message-user" : "chat-message-assistant"}`}>
+      <div className="message-author"><span>{message.role === "assistant" ? agentName : message.authorUserId === currentUserId ? "أنت" : message.authorName || message.authorEmail || "عضو"}</span>{message.role === "assistant" ? <span aria-hidden="true">✦</span> : null}</div>
+      <MessageContent content={message.content} pending={message.status === "streaming" || message.status === "sending"} />
+      {statusLabel ? <p className={`message-status message-status-${message.status}`} role={message.status === "failed" || message.status === "interrupted" ? "alert" : "status"}>{message.status === "streaming" ? <Loader2 size={13} className="animate-spin" /> : null}{statusLabel}</p> : null}
+      {message.attachments?.length ? <div className="message-attachments">{message.attachments.map((file) => <a key={file.id} href={`/api/dashboard/files?id=${encodeURIComponent(file.id)}`}><FileText size={14} /><span>{file.filename}</span><small>{file.processingStatus === "ready" ? "جاهز" : "ملف"}</small></a>)}</div> : null}
+      <footer className="message-footer">
+        <time>{new Date(message.createdAt).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" })}</time>
+        {message.content ? <button type="button" onClick={() => onCopy(message)} aria-label={copied ? "تم نسخ الرسالة" : "نسخ الرسالة"}>{copied ? <Check size={13} /> : <Copy size={13} />} {copied ? "تم النسخ" : "نسخ"}</button> : null}
+        {canMutate || message.role === "user" && !message.id.startsWith("local-") ? <details className="message-actions-menu"><summary aria-label="إجراءات الرسالة"><MoreHorizontal size={16} /></summary><div>{message.role === "user" && canMutate ? <button type="button" onClick={() => onAction({ kind: "edit-message", message, value: message.content })}><Pencil size={13} /> تعديل وإعادة توليد</button> : null}{canMutate ? <button type="button" className="danger-menu-action" onClick={() => onAction({ kind: "delete-message", message })}><Trash2 size={13} /> حذف</button> : null}</div></details> : null}
+      </footer>
+      <TechnicalDetails
+        model={message.model}
+        provider={metadataString(message, "provider")}
+        latencyMs={message.latencyMs}
+        inputTokens={message.inputTokens}
+        outputTokens={message.outputTokens}
+        runId={metadataString(message, "runId")}
+        errorCode={message.errorCode}
+        toolCalls={toolCallCount(message)}
+      />
+    </article>
+  );
+});
+
 export function ChatConsoleV2({ agents, initialConversations, initialConversationId, initialAgentId, initialNewChat, currentUser, initialAppearance, puterEnabled, knowledgeBases, ragEnabled, memoryEnabled }: {
   agents: Agent[];
   initialConversations: Conversation[];
@@ -175,7 +211,6 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
   ragEnabled: boolean;
   memoryEnabled: boolean;
 }) {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const [conversations, setConversations] = useState(initialConversations);
   const [conversationId, setConversationId] = useState(
@@ -225,6 +260,8 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
   const [dialogBusy, setDialogBusy] = useState(false);
 
   const streamController = useRef<AbortController | null>(null);
+  const activeGenerationId = useRef<string | null>(null);
+  const messageLoadSequence = useRef(0);
   const puterExecutionRef = useRef<{ executionId: string; userMessageId: string; model: string } | null>(null);
   const uploadRequests = useRef(new Map<string, XMLHttpRequest>());
   const cancelledUploads = useRef(new Set<string>());
@@ -250,11 +287,13 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
   const uploadsBusy = uploadTasks.some((task) => uploadBusy(task.state));
   const closeMembers = useCallback(() => setMembersOpen(false), []);
 
-  const loadMessages = useCallback(async (id: string) => {
+  const loadMessages = useCallback(async (id: string, signal?: AbortSignal) => {
+    const sequence = ++messageLoadSequence.current;
     setLoadingMessages(true);
     setMessageError(null);
     try {
-      const rows = await apiRequest<Message[]>(`/api/dashboard/chat?conversationId=${encodeURIComponent(id)}&limit=${MESSAGE_PAGE_SIZE}&page=1`);
+      const rows = await apiRequest<Message[]>(`/api/dashboard/chat?conversationId=${encodeURIComponent(id)}&limit=${MESSAGE_PAGE_SIZE}&page=1`, { signal });
+      if (signal?.aborted || sequence !== messageLoadSequence.current) return;
       setMessages(rows);
       setMessagePage(1);
       setHasOlderMessages(rows.length === MESSAGE_PAGE_SIZE);
@@ -262,9 +301,9 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
       setShowLatest(false);
       window.requestAnimationFrame(() => scrollAnchor.current?.scrollIntoView({ block: "end" }));
     } catch (cause) {
-      setMessageError(apiErrorMessage(cause, "تعذر تحميل الرسائل."));
+      if (!signal?.aborted && sequence === messageLoadSequence.current) setMessageError(apiErrorMessage(cause, "تعذر تحميل الرسائل."));
     } finally {
-      setLoadingMessages(false);
+      if (!signal?.aborted && sequence === messageLoadSequence.current) setLoadingMessages(false);
     }
   }, []);
 
@@ -342,9 +381,22 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
 
   useEffect(() => {
     if (!conversationId) return;
-    const timeout = window.setTimeout(() => { void loadMessages(conversationId); }, 0);
-    return () => window.clearTimeout(timeout);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => { void loadMessages(conversationId, controller.signal); }, 0);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
   }, [conversationId, loadMessages]);
+
+  useEffect(() => () => {
+    activeGenerationId.current = null;
+    streamController.current?.abort();
+    streamController.current = null;
+    messageLoadSequence.current += 1;
+    for (const request of uploadRequests.current.values()) request.abort();
+    uploadRequests.current.clear();
+  }, []);
 
   useEffect(() => {
     if (!conversationId || activeConversation?.canWrite === false) {
@@ -414,14 +466,26 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
     else params.delete("new");
     if (view === "archived") params.set("view", "archived");
     else params.delete("view");
-    router.push(`/dashboard/chat${params.size ? `?${params.toString()}` : ""}`, { scroll: false });
+    window.history.pushState(null, "", `/dashboard/chat${params.size ? `?${params.toString()}` : ""}`);
+  }
+
+  function cancelConversationWork() {
+    activeGenerationId.current = null;
+    streamController.current?.abort();
+    streamController.current = null;
+    messageLoadSequence.current += 1;
+    for (const request of uploadRequests.current.values()) request.abort();
+    uploadRequests.current.clear();
+    setLoading(false);
+    setRunId(null);
   }
 
   function selectConversation(id: string) {
-    if (id === conversationId || loading) {
+    if (id === conversationId) {
       setMobileListOpen(false);
       return;
     }
+    cancelConversationWork();
     setMessages([]);
     setRetryText(null);
     setMessageError(null);
@@ -434,7 +498,7 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
   }
 
   function startNewConversation() {
-    if (loading) return;
+    cancelConversationWork();
     setConversationId("");
     setMessages([]);
     setMessageError(null);
@@ -576,14 +640,27 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
     }
   }
 
-  async function readEventStream(response: Response, optimisticId: string, activeConversationId: string, pendingAssistantId: string) {
+  async function readEventStream(response: Response, optimisticId: string, activeConversationId: string, pendingAssistantId: string, generationId: string) {
     if (!response.body) throw new Error("لم يبدأ الخادم بث الاستجابة.");
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     let assistantId = pendingAssistantId;
     let sawServerMessage = false;
+    let pendingDelta = "";
+    let deltaFrame: number | null = null;
+    const isActive = () => activeGenerationId.current === generationId;
+    const flushDelta = () => {
+      if (deltaFrame !== null) window.cancelAnimationFrame(deltaFrame);
+      deltaFrame = null;
+      if (!pendingDelta || !isActive()) return;
+      const text = pendingDelta;
+      pendingDelta = "";
+      const targetId = assistantId;
+      setMessages((items) => items.map((item) => item.id === targetId ? { ...item, content: item.content + text } : item));
+    };
     const applyEvent = (event: string, dataText: string) => {
+      if (!isActive()) return;
       if (dataText === "[DONE]") return;
       const data = JSON.parse(dataText) as Record<string, unknown>;
       if (event === "message" && data.userMessage) {
@@ -592,31 +669,40 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
       } else if (event === "status" && typeof data.message === "string") {
         setNotice(data.message);
       } else if (event === "run" && typeof data.runId === "string") {
+        flushDelta();
         setRunId(data.runId);
         const nextAssistantId = `stream-${data.runId}`;
         setMessages((items) => items.map((item) => item.id === assistantId ? { ...item, id: nextAssistantId, metadata: { ...(item.metadata ?? {}), runId: data.runId } } : item));
         assistantId = nextAssistantId;
       } else if (event === "delta" && typeof data.text === "string") {
-        setMessages((items) => items.map((item) => item.id === assistantId ? { ...item, content: item.content + data.text } : item));
+        pendingDelta += data.text;
+        if (deltaFrame === null) deltaFrame = window.requestAnimationFrame(flushDelta);
       } else if (event === "complete" && typeof data.messageId === "string") {
+        flushDelta();
         const fallbackUsed = data.fallbackUsed === true;
         setMessages((items) => items.map((item) => item.id === assistantId ? { ...item, id: String(data.messageId), status: "completed", metadata: { ...(item.metadata ?? {}), fallbackUsed } } : item));
         setNotice(fallbackUsed ? "استخدم النظام مزوّدًا بديلًا لإكمال الرد وفق سياسة الاستمرارية المفعّلة." : null);
         setRetryText(null);
       } else if (event === "error") {
+        flushDelta();
         setMessages((items) => items.map((item) => item.id === assistantId ? { ...item, status: item.content.trim() ? "interrupted" : "failed", errorCode: typeof data.code === "string" ? data.code : "PROVIDER_REQUEST_FAILED" } : item));
         throw new Error(typeof data.message === "string" ? data.message : "تعذر تشغيل الوكيل.");
       }
     };
     while (true) {
       const { done, value } = await reader.read();
+      if (!isActive()) {
+        await reader.cancel().catch(() => undefined);
+        break;
+      }
       buffer += decoder.decode(value, { stream: !done });
       const parsed = splitServerEvents(buffer, done);
       buffer = parsed.remainder;
       for (const item of parsed.events) applyEvent(item.event, item.data);
       if (done) break;
     }
-    if (!sawServerMessage) {
+    flushDelta();
+    if (!sawServerMessage && isActive()) {
       const refreshed = await apiRequest<Message[]>(`/api/dashboard/chat?conversationId=${encodeURIComponent(activeConversationId)}&limit=${MESSAGE_PAGE_SIZE}&page=1`);
       setMessages(refreshed);
       setHasOlderMessages(refreshed.length === MESSAGE_PAGE_SIZE);
@@ -628,7 +714,7 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
     setUploadTasks((tasks) => tasks.map((task) => task.id === id ? { ...task, ...patch } : task));
   }
 
-  function uploadAttachment(taskId: string, file: File) {
+  function uploadThroughApplication(taskId: string, file: File) {
     return new Promise<Attachment>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       uploadRequests.current.set(taskId, xhr);
@@ -656,6 +742,50 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
       form.set("file", file);
       xhr.send(form);
     });
+  }
+
+  async function fileSha256(file: File) {
+    const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+
+  async function uploadAttachment(taskId: string, file: File) {
+    const sha256 = await fileSha256(file);
+    let reservation: { attachment: Attachment; uploadUrl: string; requiredHeaders: Record<string, string> };
+    try {
+      reservation = await apiRequest("/api/dashboard/files/presigned", {
+        method: "POST",
+        body: { conversationId, filename: file.name, mimeType: file.type || "application/octet-stream", sizeBytes: file.size, sha256 },
+      });
+    } catch (cause) {
+      if (cause instanceof ApiClientError && cause.code === "DIRECT_UPLOAD_UNAVAILABLE") return uploadThroughApplication(taskId, file);
+      throw cause;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      uploadRequests.current.set(taskId, xhr);
+      xhr.open("PUT", reservation.uploadUrl);
+      xhr.timeout = 120_000;
+      Object.entries(reservation.requiredHeaders).forEach(([name, value]) => xhr.setRequestHeader(name, value));
+      xhr.upload.onprogress = (event) => patchUpload(taskId, { state: "UPLOADING", progress: event.lengthComputable ? Math.min(99, Math.round((event.loaded / event.total) * 100)) : null });
+      xhr.onload = () => {
+        uploadRequests.current.delete(taskId);
+        if (xhr.status >= 200 && xhr.status < 300) resolve();
+        else reject(new Error("رفض R2 الملف المرفوع."));
+      };
+      xhr.onerror = () => { uploadRequests.current.delete(taskId); reject(new Error("تعذر الاتصال بـ R2 أثناء الرفع.")); };
+      xhr.ontimeout = () => { uploadRequests.current.delete(taskId); reject(new Error("انتهت مهلة الرفع المباشر.")); };
+      xhr.onabort = () => { uploadRequests.current.delete(taskId); reject(new DOMException("Upload cancelled", "AbortError")); };
+      xhr.send(file);
+    });
+    patchUpload(taskId, { state: "PROCESSING", progress: 100 });
+    let attachment = await apiRequest<Attachment>("/api/dashboard/files/presigned", { method: "PATCH", body: { attachmentId: reservation.attachment.id } });
+    for (let attempt = 0; attempt < 60 && attachment.processingStatus !== "ready" && attachment.processingStatus !== "failed"; attempt += 1) {
+      if (cancelledUploads.current.has(taskId)) throw new DOMException("Upload cancelled", "AbortError");
+      await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+      attachment = await apiRequest<Attachment>(`/api/dashboard/files/presigned?id=${encodeURIComponent(attachment.id)}`);
+    }
+    return attachment;
   }
 
   async function processUpload(taskId: string, file: File) {
@@ -757,6 +887,8 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
     setNotice(null);
     setRetryText(null);
     const controller = new AbortController();
+    const generationId = crypto.randomUUID();
+    activeGenerationId.current = generationId;
     streamController.current = controller;
     let responseStarted = false;
     let responseTimedOut = false;
@@ -788,10 +920,12 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
         const result = await response.json().catch(() => null) as Api<never> | null;
         throw new Error(result?.error?.message ?? "تعذر تشغيل الوكيل.");
       }
-      await readEventStream(response, optimisticId, activeId, pendingAssistantId);
+      await readEventStream(response, optimisticId, activeId, pendingAssistantId, generationId);
+      if (activeGenerationId.current !== generationId) return;
       setUploadTasks([]);
       setDraft("");
     } catch (cause) {
+      if (activeGenerationId.current !== generationId) return;
       if (cause instanceof DOMException && cause.name === "AbortError") {
         setMessages((items) => items.map((item) => item.id === optimisticId && item.status === "sending" ? { ...item, status: "cancelled" } : item.status === "streaming" ? { ...item, status: "cancelled" } : item));
         setComposerError(responseTimedOut ? "لم يبدأ الخادم الاستجابة خلال 30 ثانية. تحقق من المزود ثم أعد المحاولة." : "تم إيقاف التوليد.");
@@ -802,9 +936,12 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
       }
     } finally {
       window.clearTimeout(responseTimeout);
-      setLoading(false);
-      setRunId(null);
-      streamController.current = null;
+      if (activeGenerationId.current === generationId) {
+        activeGenerationId.current = null;
+        setLoading(false);
+        setRunId(null);
+        streamController.current = null;
+      }
     }
   }
 
@@ -826,6 +963,8 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
     setNotice(null);
     setRetryText(null);
     const controller = new AbortController();
+    const generationId = crypto.randomUUID();
+    activeGenerationId.current = generationId;
     streamController.current = controller;
     try {
       const client = await getPuterClient();
@@ -840,14 +979,28 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
       setMessages((items) => [...items.map((item) => item.id === optimisticId ? { ...result.userMessage, authorName: currentUser.name, authorEmail: currentUser.email } : item), {
         id: assistantId, role: "assistant", content: "", status: "streaming", model: puterModel, createdAt: new Date().toISOString(), metadata: { provider: "puter", executionSource: "client", runId: result.executionId },
       }]);
+      let pendingDelta = "";
+      let deltaFrame: number | null = null;
+      const flushDelta = () => {
+        if (deltaFrame !== null) window.cancelAnimationFrame(deltaFrame);
+        deltaFrame = null;
+        if (!pendingDelta || activeGenerationId.current !== generationId) return;
+        const value = pendingDelta;
+        pendingDelta = "";
+        setMessages((items) => items.map((item) => item.id === assistantId ? { ...item, content: item.content + value } : item));
+      };
       const finalText = await streamPuterChat({ client, messages: result.messages, model: puterModel, signal: controller.signal, onText(delta) {
-        setMessages((items) => items.map((item) => item.id === assistantId ? { ...item, content: item.content + delta } : item));
+        pendingDelta += delta;
+        if (deltaFrame === null) deltaFrame = window.requestAnimationFrame(flushDelta);
       } });
+      flushDelta();
+      if (activeGenerationId.current !== generationId) return;
       const saved = await finishPuterExecution(activeId, { ...execution, status: "completed", content: finalText });
       if (saved) setMessages((items) => items.map((item) => item.id === assistantId ? saved : item));
       setRetryText(null);
       setDraft("");
     } catch (cause) {
+      if (activeGenerationId.current !== generationId) return;
       const execution = puterExecutionRef.current;
       const cancelled = cause instanceof DOMException && cause.name === "AbortError";
       if (execution) await finishPuterExecution(activeId, { ...execution, status: cancelled ? "cancelled" : "failed" }).catch(() => undefined);
@@ -855,9 +1008,12 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
       setComposerError(cancelled ? "تم إيقاف استجابة Puter." : cause instanceof Error ? cause.message : "تعذر تشغيل Puter.");
       if (!cancelled) setRetryText(text.trim());
     } finally {
-      puterExecutionRef.current = null;
-      streamController.current = null;
-      setLoading(false);
+      if (activeGenerationId.current === generationId) {
+        activeGenerationId.current = null;
+        puterExecutionRef.current = null;
+        streamController.current = null;
+        setLoading(false);
+      }
     }
   }
 
@@ -932,7 +1088,7 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
     scrollAnchor.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }
 
-  async function copyMessage(message: Message) {
+  const copyMessage = useCallback(async (message: Message) => {
     try {
       await navigator.clipboard.writeText(message.content);
       setCopiedMessageId(message.id);
@@ -940,7 +1096,9 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
     } catch {
       setMessageError("تعذر نسخ الرسالة. اسمح للمتصفح بالوصول إلى الحافظة ثم حاول مجددًا.");
     }
-  }
+  }, []);
+
+  const openMessageAction = useCallback((dialog: ActionDialog) => setActionDialog(dialog), []);
 
   async function submitActionDialog(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1036,33 +1194,16 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
           {loadingMessages ? <div className="message-skeleton-stack">{[0, 1, 2].map((item) => <div key={item} className="skeleton message-skeleton" />)}</div> : null}
           {!loadingMessages && !messageError && conversationId && messages.length === 0 ? <div className="message-empty"><span>✦</span><h3>ابدأ المحادثة</h3><p>اكتب رسالتك، ويمكنك إضافة ملفات أو سياق متقدم عند الحاجة.</p></div> : null}
           {!conversationId ? <div className="message-empty new-chat-empty"><span>✦</span><h3>ابدأ مع وكيلك الذكي</h3><p>{agents.length ? "اختر الوكيل والنموذج، ثم اكتب رسالتك. سننشئ المحادثة تلقائيًا عند الإرسال." : "لا يوجد وكيل منشور. أنشئ وكيلًا واربطه بمزوّد متحقق أولًا."}</p>{agents.length ? <label><span>الوكيل</span><select className="form-control" value={agentId} onChange={(event) => setAgentId(event.target.value)}>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select></label> : <a className="primary-button" href="/dashboard/agents">إعداد وكيل ذكي</a>}</div> : null}
-          {messages.map((message) => {
-            const statusLabel = messageStatusLabel(message.status);
-            const canMutate = (message.authorUserId === currentUser.id || activeConversation?.canManage) && !message.id.startsWith("stream-") && !message.id.startsWith("local-");
-            return (
-              <article key={message.id} className={`chat-message ${message.role === "user" ? "chat-message-user" : "chat-message-assistant"}`}>
-                <div className="message-author"><span>{message.role === "assistant" ? activeConversation?.agentName ?? "الوكيل" : message.authorUserId === currentUser.id ? "أنت" : message.authorName || message.authorEmail || "عضو"}</span>{message.role === "assistant" ? <span aria-hidden="true">✦</span> : null}</div>
-                <MessageContent content={message.content} pending={message.status === "streaming" || message.status === "sending"} />
-                {statusLabel ? <p className={`message-status message-status-${message.status}`} role={message.status === "failed" || message.status === "interrupted" ? "alert" : "status"}>{message.status === "streaming" ? <Loader2 size={13} className="animate-spin" /> : null}{statusLabel}</p> : null}
-                {message.attachments?.length ? <div className="message-attachments">{message.attachments.map((file) => <a key={file.id} href={`/api/dashboard/files?id=${encodeURIComponent(file.id)}`}><FileText size={14} /><span>{file.filename}</span><small>{file.processingStatus === "ready" ? "جاهز" : "ملف"}</small></a>)}</div> : null}
-                <footer className="message-footer">
-                  <time>{new Date(message.createdAt).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" })}</time>
-                  {message.content ? <button type="button" onClick={() => void copyMessage(message)} aria-label={copiedMessageId === message.id ? "تم نسخ الرسالة" : "نسخ الرسالة"}>{copiedMessageId === message.id ? <Check size={13} /> : <Copy size={13} />} {copiedMessageId === message.id ? "تم النسخ" : "نسخ"}</button> : null}
-                  {canMutate || message.role === "user" && !message.id.startsWith("local-") ? <details className="message-actions-menu"><summary aria-label="إجراءات الرسالة"><MoreHorizontal size={16} /></summary><div>{message.role === "user" && canMutate ? <button type="button" onClick={() => setActionDialog({ kind: "edit-message", message, value: message.content })}><Pencil size={13} /> تعديل وإعادة توليد</button> : null}{canMutate ? <button type="button" className="danger-menu-action" onClick={() => setActionDialog({ kind: "delete-message", message })}><Trash2 size={13} /> حذف</button> : null}</div></details> : null}
-                </footer>
-                <TechnicalDetails
-                  model={message.model}
-                  provider={metadataString(message, "provider")}
-                  latencyMs={message.latencyMs}
-                  inputTokens={message.inputTokens}
-                  outputTokens={message.outputTokens}
-                  runId={metadataString(message, "runId")}
-                  errorCode={message.errorCode}
-                  toolCalls={toolCallCount(message)}
-                />
-              </article>
-            );
-          })}
+          {messages.map((message) => <ChatMessageItem
+            key={message.id}
+            message={message}
+            agentName={activeConversation?.agentName ?? "الوكيل"}
+            currentUserId={currentUser.id}
+            canManage={activeConversation?.canManage === true}
+            copied={copiedMessageId === message.id}
+            onCopy={copyMessage}
+            onAction={openMessageAction}
+          />)}
           <div ref={scrollAnchor} />
         </div>
 

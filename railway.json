@@ -6,7 +6,7 @@
   },
   "deploy": {
     "numReplicas": 1,
-    "preDeployCommand": "npm run db:migrate:all",
+    "preDeployCommand": "npm run db:migrate:all && npm run bootstrap:owner",
     "startCommand": "npm run start",
     "healthcheckPath": "/api/ready",
     "healthcheckTimeout": 120,

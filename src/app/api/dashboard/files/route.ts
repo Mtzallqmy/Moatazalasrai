@@ -8,6 +8,7 @@ import { requireConversationAccess } from "@/lib/chat/access";
 import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { paginationSchema, uuidSchema } from "@/lib/http/contracts";
 import { deleteAttachmentContent, readAttachmentContent, storeAttachment, MAX_ATTACHMENT_BYTES } from "@/lib/storage/attachments";
+import { objectStorage } from "@/lib/storage/object-storage";
 
 export const runtime = "nodejs";
 const SAFE_INLINE_PREVIEW_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf"]);
@@ -27,6 +28,10 @@ export async function GET(request: Request) {
       if (session.role === "member" && file.uploadedByUserId !== session.userId) {
         if (!file.conversationId) throw new ApiError(404, "FILE_NOT_FOUND", "الملف غير موجود.");
         await requireConversationAccess({ organizationId: session.organizationId, conversationId: file.conversationId, userId: session.userId, role: session.role, access: "read", includeArchived: true });
+      }
+      if (file.storageDriver === "r2" && file.objectKey) {
+        const location = await objectStorage("r2").createSignedDownloadUrl(file.objectKey, Number(process.env.R2_SIGNED_URL_TTL_SECONDS ?? 300));
+        return Response.redirect(location, 302);
       }
       const content = await readAttachmentContent(file);
       const preview = url.searchParams.get("preview") === "true" && SAFE_INLINE_PREVIEW_TYPES.has(file.mimeType);

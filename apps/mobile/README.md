@@ -20,31 +20,33 @@
 
 ```bash
 flutter pub get
-flutter run --dart-define=API_BASE_URL=https://moatazalalqami.online
+flutter run --dart-define=API_BASE_URL=https://moatazalalqami.online \
+  --dart-define=SUPABASE_URL=https://PROJECT.supabase.co \
+  --dart-define=SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
 ```
 
 ## بناء APK
 
 ```bash
 flutter build apk --release \
-  --dart-define=API_BASE_URL=https://moatazalalqami.online
+  --dart-define=API_BASE_URL=https://moatazalalqami.online \
+  --dart-define=SUPABASE_URL=https://PROJECT.supabase.co \
+  --dart-define=SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
 ```
 
 قبل النشر في المتجر، أضف أسرار التوقيع الموضحة في دليل الإصدار. يقرأ البناء
-`android/key.properties` دون حفظ المفتاح في Git. تحفظ رموز الوصول والتحديث في
-Android Keystore باستخدام `flutter_secure_storage`، ويُدوّر Refresh Token عند كل
-تحديث للجلسة.
+`android/key.properties` دون حفظ المفتاح في Git. يحفظ Supabase Flutter الجلسة الآمنة،
+ويحتفظ التطبيق بمعرّف المؤسسة فقط في `flutter_secure_storage`.
 
 يبني GitHub Actions إصدارًا واحدًا خاصًا بأجهزة `arm64-v8a` وينشره تلقائيًا في
 GitHub Releases. راجع [دليل الإصدار](../../docs/ANDROID_RELEASE.md).
 
 ## التدفق الأمني
 
-1. يسجل الجهاز الدخول عبر `/api/mobile/v1/auth/login` أو ينشئ عضوًا عبر
-   `/api/mobile/v1/auth/register`.
-2. يتلقى Access Token قصير العمر وRefresh Token دواراً مرتبطين بالمستخدم والجهاز ومساحة العمل.
-3. يضيف التطبيق Access Token لكل طلب API.
-4. عند `401` يجدد الرمزين مرة واحدة ويعيد الطلب.
+1. يسجل الجهاز الدخول أو ينشئ الحساب عبر Supabase Auth (Google أو البريد وكلمة المرور).
+2. يرسل Supabase Access Token إلى `/api/mobile/v1/auth/session` لربط الهوية بالمستخدم وعضويات Railway.
+3. يضيف التطبيق Access Token ومعرّف مساحة العمل لكل طلب API.
+4. عند `401` يجدد الجلسة مرة واحدة عبر Supabase SDK ويعيد الطلب.
 5. لا يُضمّن Platform API Key داخل التطبيق.
 
 إزالة التطبيق من Android تمسح بياناته المحلية بحسب نظام الجهاز؛ المحادثات نفسها

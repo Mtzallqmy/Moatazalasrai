@@ -13,6 +13,9 @@ import { anonymizeIp, clientIp } from "@/lib/security/client-ip";
 import { enforceRateLimit, requestClientKey } from "@/lib/security/rate-limit";
 import { verifyTurnstile } from "@/lib/security/turnstile";
 import { activeMembership } from "@/lib/auth/membership-access";
+import { supabaseAuthConfigured } from "@/lib/supabase/config";
+import { signInWithSupabasePassword } from "@/lib/auth/supabase-password";
+import { ensureLocalIdentity, supabaseSessionIdFromAccessToken, upsertSupabaseAppSession } from "@/lib/auth/supabase-identity";
 
 export const runtime = "nodejs";
 
@@ -30,7 +33,30 @@ export async function POST(request: Request) {
     await enforceRateLimit({ scope: "auth.login.email", key: body.email, limit: 8, windowMs: 15 * 60_000 });
     await verifyTurnstile({ request, token: body.turnstileToken, expectedAction: "login" });
 
-    const [user] = await db().select().from(users).where(eq(users.email, body.email)).limit(1);
+    if (supabaseAuthConfigured()) {
+      const authenticated = await signInWithSupabasePassword(body.email, body.password);
+      const local = await ensureLocalIdentity(authenticated.user);
+      const mfaVerified = await verifyMfaForLogin({ userId: local.id, code: body.mfaCode });
+      const appSession = await upsertSupabaseAppSession({
+        userId: local.id,
+        supabaseSessionId: supabaseSessionIdFromAccessToken(authenticated.session.access_token),
+        expiresAt: new Date((authenticated.session.expires_at ?? Math.floor(Date.now() / 1000) + 3600) * 1000),
+        ipAddress: anonymizeIp(clientIp(request).address),
+        userAgent: request.headers.get("user-agent") ?? undefined,
+      });
+      if (mfaVerified) await markCurrentSessionReauthenticated();
+      return apiSuccess({
+        user: { id: local.id, name: local.name, email: local.email },
+        organizationSelectionRequired: appSession.organizationSelectionRequired,
+      }, requestId);
+    }
+
+    const [user] = await db().select({
+      id: users.id,
+      email: users.email,
+      name: users.name,
+      passwordHash: users.passwordHash,
+    }).from(users).where(eq(users.email, body.email)).limit(1);
     if (!user?.passwordHash || !(await verifyPassword(body.password, user.passwordHash))) {
       throw new ApiError(401, "INVALID_CREDENTIALS", "بيانات الدخول غير صحيحة.");
     }

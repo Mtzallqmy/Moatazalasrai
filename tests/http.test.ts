@@ -35,8 +35,8 @@ describe("HTTP safety helpers", () => {
     await expect(parseJson(request, z.object({ value: z.literal("ok") }).strict())).resolves.toEqual({ value: "ok" });
   });
 
-  it("issues a nonce-based CSP without unsafe inline scripts", () => {
-    const response = proxy(new NextRequest("https://app.example.com/dashboard"));
+  it("issues a nonce-based CSP without unsafe inline scripts", async () => {
+    const response = await proxy(new NextRequest("https://app.example.com/dashboard"));
     const policy = response.headers.get("content-security-policy") ?? "";
     expect(policy).toMatch(/script-src 'self' 'nonce-[^']+' 'strict-dynamic'/);
     expect(policy).not.toMatch(/script-src[^;]*'unsafe-inline'/);
@@ -44,8 +44,8 @@ describe("HTTP safety helpers", () => {
     expect(response.headers.get("cache-control")).toContain("no-store");
   });
 
-  it("prevents Cloudflare caching for private API responses", () => {
-    const response = proxy(new NextRequest("https://app.example.com/api/dashboard/chat"));
+  it("prevents Cloudflare caching for private API responses", async () => {
+    const response = await proxy(new NextRequest("https://app.example.com/api/dashboard/chat"));
     expect(response.headers.get("cache-control")).toContain("private");
     expect(response.headers.get("cloudflare-cdn-cache-control")).toBe("no-store");
   });

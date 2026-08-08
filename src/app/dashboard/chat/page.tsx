@@ -17,6 +17,7 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
   if (!session) redirect("/login");
   if (!session.organizationId || !session.role) redirect("/select-organization");
   if (session.role === "viewer") redirect("/forbidden");
+  const role = session.role;
   const params = await searchParams;
   const archivedMode = params.view === "archived";
   const ragEnabled = aiFeatureEnabled("RAG");
@@ -73,8 +74,8 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
           agents={publishedAgents}
           initialConversations={rows.map((row) => ({
             ...row,
-            canWrite: canWriteConversation(session.role, row.createdByUserId, session.userId, row.memberRole),
-            canManage: canManageConversation(session.role, row.createdByUserId, session.userId, row.memberRole),
+            canWrite: canWriteConversation(role, row.createdByUserId, session.userId, row.memberRole),
+            canManage: canManageConversation(role, row.createdByUserId, session.userId, row.memberRole),
             pinnedAt: row.pinnedAt?.toISOString() ?? null,
             archivedAt: row.archivedAt?.toISOString() ?? null,
             lastMessageAt: row.lastMessageAt?.toISOString() ?? null,

@@ -8,6 +8,7 @@ import { mfaStatus } from "@/lib/auth/mfa";
 import { verifyPassword } from "@/lib/auth/password";
 import { apiSuccess, ApiError, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { enforceRateLimit, requestClientKey } from "@/lib/security/rate-limit";
+import { supabaseAuthConfigured } from "@/lib/supabase/config";
 
 const schema = z.object({
   email: z.string().trim().toLowerCase().email().max(320),
@@ -21,6 +22,7 @@ const schema = z.object({
 export async function POST(request: Request) {
   const requestId = getRequestId(request);
   try {
+    if (supabaseAuthConfigured()) throw new ApiError(410, "SUPABASE_AUTH_REQUIRED", "استخدم Supabase Auth في التطبيق ثم أرسل access token إلى /api/mobile/v1/auth/session.");
     const body = await parseJson(request, schema, 12 * 1024);
     await enforceRateLimit({ scope: "mobile.login.ip", key: requestClientKey(request), limit: 12, windowMs: 15 * 60_000 });
     await enforceRateLimit({ scope: "mobile.login.email", key: body.email, limit: 8, windowMs: 15 * 60_000 });

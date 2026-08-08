@@ -15,10 +15,12 @@ class TokenStore {
   static const _refreshKey = 'moataz_refresh_token';
   static const _deviceKey = 'moataz_device_id';
   static const _rememberKey = 'moataz_remember_session';
+  static const _organizationKey = 'moataz_active_organization';
   TokenPair? _volatilePair;
 
   Future<bool> rememberSession() async =>
       (await _storage.read(key: _rememberKey)) != 'false';
+  Future<void> setRememberSession(bool value) => _storage.write(key: _rememberKey, value: value.toString());
 
   Future<String> deviceId() async {
     final existing = await _storage.read(key: _deviceKey);
@@ -59,6 +61,12 @@ class TokenStore {
     await Future.wait([
       _storage.delete(key: _accessKey),
       _storage.delete(key: _refreshKey),
+      _storage.delete(key: _organizationKey),
     ]);
   }
+
+  Future<String?> activeOrganization() => _storage.read(key: _organizationKey);
+  Future<void> setActiveOrganization(String? id) => id == null
+      ? _storage.delete(key: _organizationKey)
+      : _storage.write(key: _organizationKey, value: id);
 }

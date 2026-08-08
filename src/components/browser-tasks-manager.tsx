@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Bot, CircleAlert, Globe2, Loader2, Play, RefreshCw, Square } from "lucide-react";
 import { Badge, Button, Card, EmptyState, Select, Textarea } from "@/components/ui";
 
@@ -83,14 +83,15 @@ export function BrowserTasksManager() {
     availableConnections.find((item) => item.id === connectionId)?.agents.filter((agent) => agent.enabled) ?? [],
   [availableConnections, connectionId]);
 
-  async function load() {
+  const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setError("");
     try {
       const [taskRows, connectionRows] = await Promise.all([
-        api<BrowserTask[]>("/api/dashboard/browser-tasks?limit=100"),
-        api<SiteConnection[]>("/api/dashboard/site-connections"),
+        api<BrowserTask[]>("/api/dashboard/browser-tasks?limit=100", { signal }),
+        api<SiteConnection[]>("/api/dashboard/site-connections", { signal }),
       ]);
+      if (signal?.aborted) return;
       setTasks(taskRows);
       setConnections(connectionRows);
       const nextConnection = connectionRows.find((item) =>
@@ -98,33 +99,36 @@ export function BrowserTasksManager() {
       setConnectionId((current) => connectionRows.some((item) => item.id === current) ? current : nextConnection?.id ?? "");
       setSelectedId((current) => taskRows.some((item) => item.id === current) ? current : taskRows[0]?.id ?? "");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "تعذر تحميل مهام المتصفح.");
+      if (!signal?.aborted) setError(cause instanceof Error ? cause.message : "تعذر تحميل مهام المتصفح.");
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
-  }
+  }, []);
 
-  async function loadTask(id: string) {
+  const loadTask = useCallback(async (id: string, signal?: AbortSignal) => {
     if (!id) {
       setSelected(null);
       return;
     }
     try {
-      setSelected(await api<BrowserTask>(`/api/dashboard/browser-tasks?id=${encodeURIComponent(id)}`));
+      const task = await api<BrowserTask>(`/api/dashboard/browser-tasks?id=${encodeURIComponent(id)}`, { signal });
+      if (!signal?.aborted) setSelected(task);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "تعذر تحميل تفاصيل المهمة.");
+      if (!signal?.aborted) setError(cause instanceof Error ? cause.message : "تعذر تحميل تفاصيل المهمة.");
     }
-  }
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => { void load(); }, 0);
-    return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => { void loadTask(selectedId); }, 0);
-    return () => window.clearTimeout(timer);
-  }, [selectedId]);
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => { void load(controller.signal); }, 0);
+    return () => { controller.abort(); window.clearTimeout(timer); };
+  }, [load]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => { void loadTask(selectedId, controller.signal); }, 0);
+    return () => { controller.abort(); window.clearTimeout(timer); };
+  }, [loadTask, selectedId]);
 
   useEffect(() => {
     if (availableAgents.some((agent) => agent.agentId === agentId)) return;
@@ -175,8 +179,7 @@ export function BrowserTasksManager() {
     }
   }
 
-  return <main className="dashboard-root block min-h-screen p-4 sm:p-6 lg:p-8">
-    <div className="mx-auto max-w-[1500px] space-y-5">
+  return <div className="mx-auto max-w-[1500px] space-y-5">
       <Card className="p-5 sm:p-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
@@ -251,6 +254,5 @@ export function BrowserTasksManager() {
           </Card>
         </section>
       </div>
-    </div>
-  </main>;
+  </div>;
 }

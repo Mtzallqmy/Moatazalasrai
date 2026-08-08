@@ -33,7 +33,8 @@ docker run --rm -p 3000:3000 --env-file .env moataz-agent-platform
 - في خدمة التطبيق، اجعل `DATABASE_URL` مرجعًا إلى متغير خدمة PostgreSQL (عادةً `${{Postgres.DATABASE_URL}}`) بدل نسخ بيانات الاتصال يدويًا.
 - اضبط `APP_URL`, `CREDENTIAL_ENCRYPTION_KEY` و`NODE_ENV=production`.
 - يستخدم التطبيق مشغّل PostgreSQL TCP مباشرًا ومتوافقًا مع عنوان Railway الداخلي.
-- يشغّل `railway.json` الأمر `npm run db:migrate:all` كـPre-deploy Command مرة واحدة قبل بدء النسخة الجديدة.
+- يشغّل `railway.json` migrations ثم `bootstrap:owner` كـPre-deploy Command. يتجاوز سكربت المالك التنفيذ عند غياب متغيراته.
+- لاستعادة مالك موجود اضبط `OWNER_EMAIL` و`OWNER_INITIAL_PASSWORD` مؤقتًا، واجعل `OWNER_ROTATE_PASSWORD=true` لنشر واحد فقط؛ سيُلغى انتهاء عضويته وتُبطل جلساته القديمة. أعد المتغير إلى `false` واحذف كلمة المرور بعد نجاح الدخول.
 - بعد نجاح الـmigration يبدأ التطبيق، ثم يستخدم Railway `/api/ready` قبل تحويل المرور.
 - إذا فشلت خطوة Pre-deploy فتحقق من `DATABASE_URL` وسجل migration؛ لا تستبدل readiness بفحص سطحي لإخفاء قاعدة غير مهيأة.
 - يمكن زيادة مهلة جملة migration عبر `MIGRATION_TIMEOUT_MS` عند وجود قاعدة بعيدة بطيئة.
@@ -42,7 +43,7 @@ docker run --rm -p 3000:3000 --env-file .env moataz-agent-platform
 
 Railway/Docker هو runtime الأساسي. لا تُنقل PostgreSQL أو Graphile Worker أو Next.js إلى Cloudflare Workers في هذه المرحلة. يُستخدم Cloudflare DNS/Proxy وTurnstile وR2 وAI Gateway الاختياري فقط. راجع [دليل Cloudflare](CLOUDFLARE.md).
 
-عند استخدام التخزين المحلي داخل Docker اربط volume دائمًا إلى `/app/.data`; لا تستخدمه مع عدة replicas. للإنتاج اختر `OBJECT_STORAGE_DRIVER=r2`. يبقى pre-deploy هو `npm run db:migrate:all` مرة واحدة، ولا ينفذ Web أو Worker migrations عند البدء.
+عند استخدام التخزين المحلي داخل Docker اربط volume دائمًا إلى `/app/.data`; لا تستخدمه مع عدة replicas. للإنتاج اختر `OBJECT_STORAGE_DRIVER=r2`. يشغّل Web pre-deploy migrations ثم تهيئة المالك المشروطة، ولا يكرر Worker migrations عند البدء.
 
 ### تفعيل منصة مزوّدي Cloudflare تدريجيًا
 

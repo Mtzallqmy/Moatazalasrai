@@ -11,12 +11,14 @@ export function OrganizationSwitcher({ activeOrganizationId }: { activeOrganizat
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    fetch("/api/auth/organization")
+    const controller = new AbortController();
+    fetch("/api/auth/organization", { signal: controller.signal })
       .then((response) => response.json())
       .then((payload) => {
         if (payload?.success && Array.isArray(payload.data?.organizations)) setOrganizations(payload.data.organizations);
       })
       .catch(() => undefined);
+    return () => controller.abort();
   }, []);
 
   if (organizations.length <= 1) return null;

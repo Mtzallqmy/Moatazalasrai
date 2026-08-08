@@ -1,7 +1,7 @@
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
-  DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client,
+  DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client,
   type S3ClientConfig,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -14,6 +14,8 @@ export interface ObjectStorage {
   get(key: string): Promise<Uint8Array>;
   delete(key: string): Promise<void>;
   createSignedDownloadUrl(key: string, expiresInSeconds: number): Promise<string>;
+  createSignedUploadUrl(input: { key: string; contentType: string; sizeBytes: number; sha256: string; expiresInSeconds: number }): Promise<string>;
+  head(key: string): Promise<{ sizeBytes: number; contentType: string | null; sha256: string | null }>;
 }
 
 const SAFE_KEY = /^[0-9a-f-]{36}\/[0-9a-f-]{36}$/i;
@@ -51,6 +53,11 @@ class LocalObjectStorage implements ObjectStorage {
   }
   async createSignedDownloadUrl(): Promise<string> {
     throw new Error("LOCAL_STORAGE_SIGNED_URL_UNSUPPORTED");
+  }
+  async createSignedUploadUrl(): Promise<string> { throw new Error("LOCAL_STORAGE_SIGNED_URL_UNSUPPORTED"); }
+  async head(key: string) {
+    const value = await readFile(this.filename(key));
+    return { sizeBytes: value.byteLength, contentType: null, sha256: null };
   }
 }
 
@@ -115,6 +122,25 @@ export class R2ObjectStorage implements ObjectStorage {
     return getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.config.bucket, Key: key }), {
       expiresIn: Math.min(Math.max(Math.floor(expiresInSeconds), 30), 900),
     });
+  }
+  async createSignedUploadUrl(input: { key: string; contentType: string; sizeBytes: number; sha256: string; expiresInSeconds: number }) {
+    assertKey(input.key);
+    return getSignedUrl(this.client, new PutObjectCommand({
+      Bucket: this.config.bucket,
+      Key: input.key,
+      ContentType: input.contentType,
+      ContentLength: input.sizeBytes,
+      Metadata: { sha256: input.sha256 },
+    }), { expiresIn: Math.min(Math.max(Math.floor(input.expiresInSeconds), 30), 900) });
+  }
+  async head(key: string) {
+    assertKey(key);
+    const response = await this.client.send(new HeadObjectCommand({ Bucket: this.config.bucket, Key: key }));
+    return {
+      sizeBytes: response.ContentLength ?? -1,
+      contentType: response.ContentType ?? null,
+      sha256: response.Metadata?.sha256 ?? null,
+    };
   }
 }
 

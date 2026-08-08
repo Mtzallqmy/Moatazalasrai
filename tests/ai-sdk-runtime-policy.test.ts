@@ -134,6 +134,7 @@ describe("runtime limits and observability safety", () => {
     expect(Object.keys(taskList).sort()).toEqual([
       "agent-run-resume",
       "agent-team-run",
+      "attachment-process",
       "browser-task-execute",
       "browser-task-resume",
       "document-parse",

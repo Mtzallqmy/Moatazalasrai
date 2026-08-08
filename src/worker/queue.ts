@@ -82,6 +82,10 @@ export function enqueueDocumentParse(payload: DocumentParsePayload) {
   return addJob("document-parse", payload, { queueName: "rag", jobKey: `document-parse:${payload.documentId}`, jobKeyMode: "replace" });
 }
 
+export function enqueueAttachmentProcess(payload: { organizationId: string; attachmentId: string }) {
+  return addJob("attachment-process", payload, { queueName: `files:${payload.organizationId}`, maxAttempts: 3, jobKey: `attachment-process:${payload.attachmentId}`, jobKeyMode: "replace" });
+}
+
 export function enqueueAgentRunResume(payload: AgentRunResumePayload) {
   return addJob("agent-run-resume", payload, { queueName: "agent-approvals", jobKey: `agent-run-resume:${payload.approvalId}` });
 }

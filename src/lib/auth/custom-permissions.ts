@@ -1,40 +1,38 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { cache } from "react";
+import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { customRolePermissions, customRoles, memberCustomRoles } from "@/db/control-plane-schema";
-import { organizationMembers } from "@/db/schema";
+import { databaseRows } from "@/db/result";
 import { ALL_PERMISSIONS, type Permission } from "@/lib/auth/permissions";
 
 const knownPermissions = new Set<string>(ALL_PERMISSIONS);
 
-export async function loadCustomPermissions(organizationId: string, userId: string): Promise<Permission[]> {
-  const [membership, rows] = await Promise.all([
-    db().select({ permissions: organizationMembers.customPermissions })
-      .from(organizationMembers)
-      .where(and(
-        eq(organizationMembers.organizationId, organizationId),
-        eq(organizationMembers.userId, userId),
-      ))
-      .limit(1),
-    db()
-    .select({ permission: customRolePermissions.permission })
-    .from(organizationMembers)
-    .innerJoin(memberCustomRoles, eq(memberCustomRoles.organizationMemberId, organizationMembers.id))
-    .innerJoin(customRoles, eq(customRoles.id, memberCustomRoles.roleId))
-    .innerJoin(customRolePermissions, eq(customRolePermissions.roleId, customRoles.id))
-    .where(and(
-      eq(organizationMembers.organizationId, organizationId),
-      eq(organizationMembers.userId, userId),
-      eq(memberCustomRoles.organizationId, organizationId),
-      eq(customRoles.organizationId, organizationId),
-      eq(customRoles.enabled, true),
-      isNull(customRoles.deletedAt),
-      eq(customRolePermissions.allowed, true),
-    )),
-  ]);
+const resolveCustomPermissions = cache(async (organizationId: string, userId: string): Promise<Permission[]> => {
+  const result = await db().execute(sql`
+    SELECT DISTINCT permission
+    FROM (
+      SELECT jsonb_array_elements_text(COALESCE(om.custom_permissions, '[]'::jsonb)) AS permission
+      FROM organization_members om
+      WHERE om.organization_id = ${organizationId} AND om.user_id = ${userId}
+      UNION ALL
+      SELECT crp.permission
+      FROM organization_members om
+      INNER JOIN member_custom_roles mcr ON mcr.organization_member_id = om.id
+      INNER JOIN custom_roles cr ON cr.id = mcr.role_id
+      INNER JOIN custom_role_permissions crp ON crp.role_id = cr.id
+      WHERE om.organization_id = ${organizationId}
+        AND om.user_id = ${userId}
+        AND mcr.organization_id = ${organizationId}
+        AND cr.organization_id = ${organizationId}
+        AND cr.enabled = true
+        AND cr.deleted_at IS NULL
+        AND crp.allowed = true
+    ) resolved_permissions
+  `);
+  return databaseRows(result)
+    .map((row) => row.permission)
+    .filter((permission): permission is Permission => typeof permission === "string" && knownPermissions.has(permission));
+});
 
-  return [...new Set([
-    ...(membership[0]?.permissions ?? []),
-    ...rows.map((row) => row.permission),
-  ]
-    .filter((permission): permission is Permission => knownPermissions.has(permission)))];
+export function loadCustomPermissions(organizationId: string, userId: string): Promise<Permission[]> {
+  return resolveCustomPermissions(organizationId, userId);
 }

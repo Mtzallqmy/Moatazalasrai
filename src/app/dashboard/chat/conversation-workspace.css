@@ -398,6 +398,8 @@
 }
 
 .chat-message {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 180px;
   width: fit-content;
   max-width: min(46rem, 88%);
   border: 1px solid var(--chat-border, var(--border));
