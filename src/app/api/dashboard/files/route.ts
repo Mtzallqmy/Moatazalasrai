@@ -10,7 +10,7 @@ import { paginationSchema, uuidSchema } from "@/lib/http/contracts";
 import { deleteAttachmentContent, readAttachmentContent, storeAttachment, MAX_ATTACHMENT_BYTES } from "@/lib/storage/attachments";
 
 export const runtime = "nodejs";
-
+const SAFE_INLINE_PREVIEW_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf"]);
 const fileActionSchema = z.object({ id: uuidSchema, action: z.enum(["archive", "restore"]) }).strict();
 const fileDeleteSchema = z.object({ id: uuidSchema }).strict();
 
@@ -29,12 +29,13 @@ export async function GET(request: Request) {
         await requireConversationAccess({ organizationId: session.organizationId, conversationId: file.conversationId, userId: session.userId, role: session.role, access: "read", includeArchived: true });
       }
       const content = await readAttachmentContent(file);
-      const preview = url.searchParams.get("preview") === "true" && (file.mimeType.startsWith("image/") || file.mimeType === "application/pdf");
+      const preview = url.searchParams.get("preview") === "true" && SAFE_INLINE_PREVIEW_TYPES.has(file.mimeType);
       return new Response(new Uint8Array(Buffer.from(content)), {
         headers: {
           "content-type": file.mimeType, "content-length": String(file.sizeBytes),
           "content-disposition": `${preview ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
           "cache-control": "private, no-store", "x-content-type-options": "nosniff", "x-request-id": requestId,
+          ...(file.mimeType === "image/svg+xml" ? { "content-security-policy": "default-src 'none'; sandbox" } : {}),
         },
       });
     }
