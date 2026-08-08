@@ -145,6 +145,7 @@ describe("runtime limits and observability safety", () => {
       "execution-reconcile",
       "execution-run-step",
       "notification-dispatch",
+      "operational-tool-execute",
       "sandbox-artifact-cleanup",
       "sandbox-cleanup",
       "sandbox-create",
