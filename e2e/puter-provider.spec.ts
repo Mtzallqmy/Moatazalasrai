@@ -9,6 +9,18 @@ const enabled = process.env.E2E_BASE_URL
 
 const baseUrl = process.env.E2E_BASE_URL ?? "http://127.0.0.1:3000";
 
+const responsiveViewports = [
+  { name: "320x568", width: 320, height: 568, capture: false },
+  { name: "360x800", width: 360, height: 800, capture: false },
+  { name: "375x812", width: 375, height: 812, capture: true },
+  { name: "390x844", width: 390, height: 844, capture: true },
+  { name: "412x915", width: 412, height: 915, capture: false },
+  { name: "430x932", width: 430, height: 932, capture: true },
+  { name: "768x1024", width: 768, height: 1024, capture: true },
+  { name: "1024x768", width: 1024, height: 768, capture: false },
+  { name: "1440x900", width: 1440, height: 900, capture: true },
+] as const;
+
 test.describe("Puter browser provider", () => {
   test.skip(!enabled, "Puter E2E requires an isolated deployment with the explicit browser mock enabled.");
 
@@ -95,26 +107,41 @@ test.describe("Puter browser provider", () => {
     await page.evaluate(() => localStorage.removeItem("moataz:puter:e2e-auth-fail"));
     await card.getByRole("button", { name: "الاتصال بحساب Puter" }).click();
     await expect(card.getByText("Puter E2E Model")).toBeVisible();
-    await page.screenshot({ path: "artifacts/puter-ui/providers-desktop.png", fullPage: true });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.screenshot({ path: "artifacts/puter-ui/providers-1440x900.png", fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.screenshot({ path: "artifacts/puter-ui/providers-mobile.png", fullPage: true });
-    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.screenshot({ path: "artifacts/puter-ui/providers-390x844.png", fullPage: true });
+    await page.setViewportSize({ width: 1440, height: 900 });
 
     await page.goto("/dashboard/chat");
-    await page.getByRole("button", { name: "محادثة جديدة" }).click();
-    await page.getByLabel("مصدر تنفيذ الدردشة").selectOption("puter");
+    const draftLoaded = page.waitForResponse((response) => response.request().method() === "GET"
+      && response.url().includes("/api/dashboard/chat/draft?conversationId=")
+      && response.status() === 200);
+    await page.locator(".conversation-empty").getByRole("button", { name: "محادثة جديدة" }).click();
+    await draftLoaded;
+    await page.getByRole("button", { name: "أدوات" }).click();
+    await page.getByLabel("مصدر التنفيذ").selectOption("puter");
     await expect(page.getByLabel("نموذج Puter").locator('option[value="puter-e2e-model"]')).toHaveCount(1);
     await page.getByLabel("نموذج Puter").selectOption("puter-e2e-model");
-    const composer = page.getByPlaceholder("اكتب طلبك… Enter للإرسال وShift+Enter لسطر جديد");
+    const composer = page.getByLabel("رسالة المحادثة");
     await expect(composer).toBeEnabled();
     await composer.fill("ابدأ اختبار Puter");
-    await page.getByRole("button", { name: "إرسال" }).click();
+    const sendButton = page.getByRole("button", { name: "إرسال الرسالة" });
+    await expect(sendButton).toBeEnabled();
+    await sendButton.click();
     await page.getByRole("button", { name: "أفهم وأتابع" }).click();
     await expect(page.getByText("نجح بث Puter التجريبي")).toBeVisible();
-    await page.screenshot({ path: "artifacts/puter-ui/chat-desktop.png", fullPage: true });
     await page.reload();
     await expect(page.getByText("نجح بث Puter التجريبي")).toBeVisible();
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.screenshot({ path: "artifacts/puter-ui/chat-mobile.png", fullPage: true });
+
+    for (const viewport of responsiveViewports) {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      const hasNoHorizontalOverflow = await page.evaluate(() => {
+        const root = document.documentElement;
+        return Math.max(root.scrollWidth, document.body.scrollWidth) <= root.clientWidth + 1;
+      });
+      expect(hasNoHorizontalOverflow, `horizontal overflow at ${viewport.name}`).toBe(true);
+      if (viewport.capture) await page.screenshot({ path: `artifacts/puter-ui/chat-${viewport.name}.png`, fullPage: true });
+    }
   });
 });

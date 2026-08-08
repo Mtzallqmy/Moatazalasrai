@@ -7,8 +7,9 @@ import { requireSession } from "@/lib/auth/authorization";
 import { requireConversationAccess } from "@/lib/chat/access";
 import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { paginationSchema, runCancelSchema, uuidSchema } from "@/lib/http/contracts";
+import { redactRunEventPayload } from "@/lib/runs/redaction";
 
-const runStatusSchema = z.enum(["queued", "running", "completed", "failed", "cancelled"]);
+const runStatusSchema = z.enum(["queued", "running", "waiting_approval", "completed", "failed", "cancelled"]);
 
 export async function GET(request: Request) {
   const requestId = getRequestId(request);
@@ -32,7 +33,7 @@ export async function GET(request: Request) {
         includeArchived: true,
       });
       const events = await getRunEvents(session.organizationId, parsedRunId);
-      return apiSuccess(events, requestId);
+      return apiSuccess(events.map((event) => ({ ...event, payload: redactRunEventPayload(event.payload) })), requestId);
     }
     const query = paginationSchema.parse(Object.fromEntries(url.searchParams));
     const rawStatus = url.searchParams.get("status");

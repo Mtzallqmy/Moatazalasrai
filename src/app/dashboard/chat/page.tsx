@@ -1,7 +1,6 @@
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull } from "drizzle-orm";
 import { redirect } from "next/navigation";
-import { ChatConsole } from "@/components/chat-console";
-import { ChatExperienceToolbar } from "@/components/chat-experience-toolbar";
+import { ChatConsoleV2 } from "@/components/chat-console-v2";
 import { DashboardShell } from "@/components/dashboard-shell";
 import { db } from "@/db";
 import { agents, conversationMembers, conversations, knowledgeBases, userPreferences } from "@/db/schema";
@@ -11,12 +10,15 @@ import { defaultChatAppearance, normalizeChatAppearance } from "@/lib/chat/appea
 import { canManageConversation, canWriteConversation, conversationAccessFilter } from "@/lib/chat/access";
 import { isPuterEnabled } from "@/lib/puter/feature";
 import "./chat-experience.css";
+import "./conversation-workspace.css";
 
-export default async function ChatPage({ searchParams }: { searchParams: Promise<{ conversationId?: string; agentId?: string }> }) {
+export default async function ChatPage({ searchParams }: { searchParams: Promise<{ conversationId?: string; agentId?: string; view?: string }> }) {
   const session = await currentSession();
   if (!session) redirect("/login");
   if (!session.organizationId || !session.role) redirect("/select-organization");
   if (session.role === "viewer") redirect("/forbidden");
+  const params = await searchParams;
+  const archivedMode = params.view === "archived";
   const ragEnabled = aiFeatureEnabled("RAG");
   const memoryEnabled = aiFeatureEnabled("MEMORY");
   const [publishedAgents, rows, [storedAppearance], bases] = await Promise.all([
@@ -44,11 +46,13 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
         eq(conversationMembers.userId, session.userId),
       ))
       .where(and(
-      eq(conversations.organizationId, session.organizationId),
-      conversationAccessFilter({ role: session.role, userId: session.userId, access: "read" }),
-      isNull(conversations.deletedAt),
-      isNull(conversations.archivedAt),
-    )).orderBy(desc(conversations.pinnedAt), desc(conversations.lastMessageAt), desc(conversations.updatedAt)).limit(100),
+        eq(conversations.organizationId, session.organizationId),
+        conversationAccessFilter({ role: session.role, userId: session.userId, access: "read" }),
+        isNull(conversations.deletedAt),
+        archivedMode ? isNotNull(conversations.archivedAt) : isNull(conversations.archivedAt),
+      ))
+      .orderBy(desc(conversations.pinnedAt), desc(conversations.lastMessageAt), desc(conversations.updatedAt))
+      .limit(50),
     db().select({
       theme: userPreferences.chatTheme,
       wallpaper: userPreferences.chatWallpaper,
@@ -57,17 +61,15 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
       ? db().select({ id: knowledgeBases.id, name: knowledgeBases.name }).from(knowledgeBases).where(eq(knowledgeBases.organizationId, session.organizationId)).orderBy(desc(knowledgeBases.updatedAt)).limit(100)
       : Promise.resolve([]),
   ]);
-  const params = await searchParams;
   return (
     <DashboardShell
       session={session}
       activePath="/dashboard/chat"
-      title="الدردشة"
-      description="مركز موحد للمحادثات والوكلاء والقنوات والتكاملات والملفات، مع مظهر قابل للتخصيص."
+      title="المحادثات"
+      description="محادثات الوكلاء وملفاتها وسياقها في مساحة عمل بسيطة، مع التفاصيل المتقدمة عند الحاجة."
     >
       <div className="chat-workspace-shell">
-        <ChatExperienceToolbar />
-        <ChatConsole
+        <ChatConsoleV2
           agents={publishedAgents}
           initialConversations={rows.map((row) => ({
             ...row,

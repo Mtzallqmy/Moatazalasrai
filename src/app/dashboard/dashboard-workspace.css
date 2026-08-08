@@ -1,0 +1,210 @@
+.workspace-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.workspace-metric {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-16);
+  padding: var(--space-4);
+  background: var(--surface);
+  color: var(--text-primary);
+  box-shadow: 0 1px 2px rgb(17 24 39 / 0.03);
+}
+
+.workspace-metric:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-soft);
+}
+
+.workspace-metric-icon {
+  display: grid;
+  width: 2.6rem;
+  height: 2.6rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: var(--radius-12);
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.workspace-metric-icon.metric-danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.workspace-metric-icon.metric-warning {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.workspace-metric > div {
+  display: grid;
+  min-width: 0;
+  gap: 0.1rem;
+}
+
+.workspace-metric strong {
+  font-size: var(--type-xl);
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-metric span:last-child {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--type-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-home-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+.workspace-recent-section .page-section-header > a {
+  color: var(--primary);
+  font-size: var(--type-xs);
+  font-weight: 800;
+}
+
+.workspace-recent-list,
+.workspace-run-list {
+  display: grid;
+}
+
+.workspace-recent-row,
+.workspace-run-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 4.25rem;
+  border-top: 1px solid var(--border);
+  padding: var(--space-3) var(--space-4);
+}
+
+.workspace-recent-row:hover,
+.workspace-run-row:hover {
+  background: var(--surface-soft);
+}
+
+.workspace-row-avatar {
+  display: grid;
+  width: 2.25rem;
+  height: 2.25rem;
+  place-items: center;
+  border-radius: var(--radius-12);
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-size: var(--type-xs);
+  font-weight: 900;
+}
+
+.workspace-row-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.16rem;
+}
+
+.workspace-row-copy b,
+.workspace-row-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-row-copy b {
+  color: var(--text-primary);
+  font-size: var(--type-sm);
+  font-weight: 800;
+}
+
+.workspace-row-copy small,
+.workspace-recent-row time,
+.workspace-run-row time {
+  color: var(--text-secondary);
+  font-size: var(--type-xs);
+}
+
+.workspace-recent-row time,
+.workspace-run-row time {
+  white-space: nowrap;
+}
+
+.workspace-empty-inline {
+  display: flex;
+  min-height: 8rem;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-5);
+  color: var(--text-secondary);
+  font-size: var(--type-sm);
+  text-align: center;
+}
+
+.workspace-empty-inline a {
+  color: var(--primary);
+  font-weight: 800;
+}
+
+@media (max-width: 1024px) {
+  .workspace-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 820px) {
+  .workspace-home-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .workspace-metrics {
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-2);
+  }
+
+  .workspace-metric {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
+  }
+
+  .workspace-metric-icon {
+    width: 2.25rem;
+    height: 2.25rem;
+  }
+
+  .workspace-metric strong {
+    font-size: var(--type-lg);
+  }
+
+  .workspace-recent-row,
+  .workspace-run-row {
+    grid-template-columns: auto minmax(0, 1fr);
+    padding-inline: var(--space-3);
+  }
+
+  .workspace-recent-row time,
+  .workspace-run-row time {
+    display: none;
+  }
+
+  .workspace-run-row .status-badge {
+    grid-row: 1;
+    align-self: center;
+  }
+}

@@ -1,0 +1,40 @@
+.settings-subnav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0 auto var(--space-3);
+  padding-inline: clamp(var(--space-4), 4vw, var(--space-8));
+}
+
+.settings-subnav a {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  gap: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding-inline: var(--space-3);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: var(--type-xs);
+  font-weight: 800;
+}
+
+.settings-subnav a:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-soft);
+  color: var(--text-primary);
+}
+
+@media (max-width: 520px) {
+  .settings-subnav {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding-inline: var(--space-4);
+  }
+
+  .settings-subnav a {
+    justify-content: center;
+    padding-inline: var(--space-2);
+  }
+}

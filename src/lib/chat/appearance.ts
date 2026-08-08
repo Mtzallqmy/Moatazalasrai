@@ -27,11 +27,12 @@ export const chatThemeOptions: ReadonlyArray<{
 export const chatWallpaperOptions: ReadonlyArray<{
   id: ChatWallpaperId;
   label: string;
+  description: string;
 }> = [
-  { id: "clean", label: "نظيفة" },
-  { id: "soft-grid", label: "شبكة ناعمة" },
-  { id: "doodles", label: "نقوش" },
-  { id: "bubbles", label: "فقاعات" },
+  { id: "clean", label: "نظيفة", description: "سطح هادئ بلا زخارف" },
+  { id: "soft-grid", label: "شبكة ناعمة", description: "شبكة خفيفة تحافظ على هدوء مساحة القراءة" },
+  { id: "doodles", label: "نقوش", description: "نقوش خفيفة تضيف شخصية دون تشتيت" },
+  { id: "bubbles", label: "فقاعات", description: "نمط دائري خفيف مستوحى من المحادثات" },
 ];
 
 export function normalizeChatAppearance(value?: { theme?: string | null; wallpaper?: string | null } | null): ChatAppearance {
