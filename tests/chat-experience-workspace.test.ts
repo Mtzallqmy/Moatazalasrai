@@ -34,4 +34,28 @@ describe("chat experience workspace", () => {
     expect(css).toContain(".chat-message");
     expect(css).toContain(".chat-composer");
   });
+
+  it("keeps new chat usable before a conversation record exists", async () => {
+    const chat = await readFile("src/components/chat-console-v2.tsx", "utf8");
+    expect(chat).toContain("startNewConversation");
+    expect(chat).toContain("conversationId || (await createConversation())?.id");
+    expect(chat).toContain("اكتب أول رسالة لبدء المحادثة");
+    expect(chat).toContain("stream-pending-");
+    expect(chat).not.toContain("const sendDisabled = !conversationId");
+  });
+
+  it("shows verified provider models and streams preparation status immediately", async () => {
+    const [chat, modelRoute, streamRoute, runtime] = await Promise.all([
+      readFile("src/components/chat-console-v2.tsx", "utf8"),
+      readFile("src/app/api/dashboard/models/route.ts", "utf8"),
+      readFile("src/app/api/dashboard/chat/stream/route.ts", "utf8"),
+      readFile("src/lib/agents/runtime.ts", "utf8"),
+    ]);
+    expect(chat).toContain("modelGroups.map");
+    expect(modelRoute).toContain("credential.allowedModels");
+    expect(modelRoute).toContain("credential.discoveredModels");
+    expect(runtime).toContain("...credential.allowedModels");
+    expect(streamRoute).toContain('sse("status", { stage: "preparing"');
+    expect(streamRoute.indexOf('stage: "preparing"')).toBeLessThan(streamRoute.indexOf("resolveAttachmentContext({"));
+  });
 });

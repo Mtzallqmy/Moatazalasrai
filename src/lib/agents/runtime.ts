@@ -344,7 +344,11 @@ export async function prepareAgentRun(input: {
     `${entry.providerCredentialId}:${entry.model}`,
     entry,
   ]));
-  const routable = usableCredentials.flatMap((credential) => credential.discoveredModels.map((model) => {
+  const routable = usableCredentials.flatMap((credential) => [...new Set([
+    ...(credential.defaultModel ? [credential.defaultModel] : []),
+    ...credential.allowedModels,
+    ...credential.discoveredModels,
+  ].map((model) => model.trim()).filter(Boolean))].map((model) => {
     const catalogEntry = catalogByModel.get(`${credential.id}:${model}`);
     return {
       providerCredentialId: credential.id,

@@ -120,6 +120,25 @@
   margin-top: var(--space-4);
 }
 
+.new-chat-empty {
+  width: min(31rem, 100%);
+  margin: auto;
+}
+
+.new-chat-empty label {
+  display: grid;
+  width: min(22rem, 100%);
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  text-align: start;
+}
+
+.new-chat-empty label > span {
+  color: var(--text-secondary);
+  font-size: var(--type-xs);
+  font-weight: 800;
+}
+
 .conversation-group > h3 {
   margin-bottom: var(--space-1);
   padding-inline: var(--space-2);

@@ -162,11 +162,12 @@ function messageStatusLabel(status: Message["status"]) {
   return null;
 }
 
-export function ChatConsoleV2({ agents, initialConversations, initialConversationId, initialAgentId, currentUser, initialAppearance, puterEnabled, knowledgeBases, ragEnabled, memoryEnabled }: {
+export function ChatConsoleV2({ agents, initialConversations, initialConversationId, initialAgentId, initialNewChat, currentUser, initialAppearance, puterEnabled, knowledgeBases, ragEnabled, memoryEnabled }: {
   agents: Agent[];
   initialConversations: Conversation[];
   initialConversationId?: string;
   initialAgentId?: string;
+  initialNewChat?: boolean;
   currentUser: { id: string; name: string; email: string };
   initialAppearance: ChatAppearance;
   puterEnabled: boolean;
@@ -178,15 +179,15 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
   const searchParams = useSearchParams();
   const [conversations, setConversations] = useState(initialConversations);
   const [conversationId, setConversationId] = useState(
-    initialConversations.some((item) => item.id === initialConversationId)
+    !initialNewChat && initialConversations.some((item) => item.id === initialConversationId)
       ? initialConversationId ?? ""
-      : initialConversations[0]?.id ?? "",
+      : initialNewChat ? "" : initialConversations[0]?.id ?? "",
   );
   const [agentId, setAgentId] = useState(agents.some((agent) => agent.id === initialAgentId) ? initialAgentId ?? "" : agents[0]?.id ?? "");
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagePage, setMessagePage] = useState(1);
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
-  const [loadingMessages, setLoadingMessages] = useState(Boolean(initialConversations.length));
+  const [loadingMessages, setLoadingMessages] = useState(Boolean(initialConversations.length && !initialNewChat));
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [loading, setLoading] = useState(false);
   const [conversationError, setConversationError] = useState<string | null>(null);
@@ -200,6 +201,7 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
   const [loadingConversations, setLoadingConversations] = useState(false);
   const [draft, setDraft] = useState("");
   const [models, setModels] = useState<ModelOption[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(true);
   const [selectedModel, setSelectedModel] = useState("auto");
   const [knowledgeBaseId, setKnowledgeBaseId] = useState("");
   const [useMemory, setUseMemory] = useState(false);
@@ -216,7 +218,7 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
   const [membersOpen, setMembersOpen] = useState(false);
   const [savingAppearance, setSavingAppearance] = useState(false);
   const [uploadTasks, setUploadTasks] = useState<UploadTask[]>([]);
-  const [mobileListOpen, setMobileListOpen] = useState(!conversationId);
+  const [mobileListOpen, setMobileListOpen] = useState(false);
   const [showLatest, setShowLatest] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [actionDialog, setActionDialog] = useState<ActionDialog | null>(null);
@@ -236,6 +238,14 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
   const conversationGroups = useMemo(() => groupConversations(conversations), [conversations]);
   const activeConversation = useMemo(() => conversations.find((item) => item.id === conversationId), [conversations, conversationId]);
   const selectedModelInfo = useMemo(() => selectedModel === "auto" ? null : models.find((item) => `${item.providerCredentialId}:${item.model}` === selectedModel) ?? null, [models, selectedModel]);
+  const modelGroups = useMemo(() => {
+    const groups = new Map<string, ModelOption[]>();
+    for (const model of models.filter((item) => item.available)) {
+      const key = `${model.providerName} · ${model.provider}`;
+      groups.set(key, [...(groups.get(key) ?? []), model]);
+    }
+    return [...groups.entries()];
+  }, [models]);
   const readyAttachments = useMemo(() => uploadTasks.filter((task) => uploadReady(task.state) && task.attachment).map((task) => task.attachment!), [uploadTasks]);
   const uploadsBusy = uploadTasks.some((task) => uploadBusy(task.state));
   const closeMembers = useCallback(() => setMembersOpen(false), []);
@@ -299,11 +309,23 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
     return () => { controller.abort(); window.clearTimeout(timeout); };
   }, [archivedMode, search]);
 
-  useEffect(() => {
-    apiRequest<ModelOption[]>("/api/dashboard/models")
-      .then(setModels)
-      .catch((cause) => setComposerError(apiErrorMessage(cause, "تعذر تحميل النماذج المتاحة.")));
+  const refreshModels = useCallback(async () => {
+    setModelsLoading(true);
+    try {
+      const available = await apiRequest<ModelOption[]>("/api/dashboard/models");
+      setModels(available);
+      setSelectedModel((current) => current === "auto" || available.some((item) => `${item.providerCredentialId}:${item.model}` === current) ? current : "auto");
+    } catch (cause) {
+      setComposerError(apiErrorMessage(cause, "تعذر تحميل النماذج المتاحة."));
+    } finally {
+      setModelsLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => { void refreshModels(); }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [refreshModels]);
 
   useEffect(() => {
     if (!actionDialog) return;
@@ -384,10 +406,12 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
     };
   }, []);
 
-  function updateUrl(nextConversationId: string | null, view = archivedMode ? "archived" : "active") {
+  function updateUrl(nextConversationId: string | null, view = archivedMode ? "archived" : "active", newChat = false) {
     const params = new URLSearchParams(searchParams.toString());
     if (nextConversationId) params.set("conversationId", nextConversationId);
     else params.delete("conversationId");
+    if (newChat) params.set("new", "true");
+    else params.delete("new");
     if (view === "archived") params.set("view", "archived");
     else params.delete("view");
     router.push(`/dashboard/chat${params.size ? `?${params.toString()}` : ""}`, { scroll: false });
@@ -409,12 +433,27 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
     updateUrl(id);
   }
 
+  function startNewConversation() {
+    if (loading) return;
+    setConversationId("");
+    setMessages([]);
+    setMessageError(null);
+    setComposerError(null);
+    setNotice(null);
+    setRetryText(null);
+    setUploadTasks([]);
+    setArchivedMode(false);
+    setMobileListOpen(false);
+    updateUrl(null, "active", true);
+    window.requestAnimationFrame(() => composerRef.current?.focus());
+  }
+
   function conversationAction(body: Record<string, unknown>) {
     return apiRequest<Conversation & { deleted?: boolean }>("/api/dashboard/chat", { method: "POST", body });
   }
 
   async function createConversation() {
-    if (!agentId || loading) return;
+    if (!agentId || loading) return null;
     setLoading(true);
     setConversationError(null);
     try {
@@ -427,8 +466,10 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
       setConversationId(row.id);
       setMobileListOpen(false);
       updateUrl(row.id, "active");
+      return row;
     } catch (cause) {
       setConversationError(apiErrorMessage(cause, "تعذر إنشاء المحادثة."));
+      return null;
     } finally {
       setLoading(false);
     }
@@ -535,12 +576,12 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
     }
   }
 
-  async function readEventStream(response: Response, optimisticId: string) {
+  async function readEventStream(response: Response, optimisticId: string, activeConversationId: string, pendingAssistantId: string) {
     if (!response.body) throw new Error("لم يبدأ الخادم بث الاستجابة.");
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    let assistantId = `stream-${Date.now()}`;
+    let assistantId = pendingAssistantId;
     let sawServerMessage = false;
     const applyEvent = (event: string, dataText: string) => {
       if (dataText === "[DONE]") return;
@@ -548,10 +589,13 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
       if (event === "message" && data.userMessage) {
         sawServerMessage = true;
         setMessages((items) => items.map((item) => item.id === optimisticId ? data.userMessage as Message : item));
+      } else if (event === "status" && typeof data.message === "string") {
+        setNotice(data.message);
       } else if (event === "run" && typeof data.runId === "string") {
         setRunId(data.runId);
-        assistantId = `stream-${data.runId}`;
-        setMessages((items) => [...items, { id: assistantId, role: "assistant", content: "", status: "streaming", createdAt: new Date().toISOString(), metadata: { runId: data.runId } }]);
+        const nextAssistantId = `stream-${data.runId}`;
+        setMessages((items) => items.map((item) => item.id === assistantId ? { ...item, id: nextAssistantId, metadata: { ...(item.metadata ?? {}), runId: data.runId } } : item));
+        assistantId = nextAssistantId;
       } else if (event === "delta" && typeof data.text === "string") {
         setMessages((items) => items.map((item) => item.id === assistantId ? { ...item, content: item.content + data.text } : item));
       } else if (event === "complete" && typeof data.messageId === "string") {
@@ -573,7 +617,7 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
       if (done) break;
     }
     if (!sawServerMessage) {
-      const refreshed = await apiRequest<Message[]>(`/api/dashboard/chat?conversationId=${encodeURIComponent(conversationId)}&limit=${MESSAGE_PAGE_SIZE}&page=1`);
+      const refreshed = await apiRequest<Message[]>(`/api/dashboard/chat?conversationId=${encodeURIComponent(activeConversationId)}&limit=${MESSAGE_PAGE_SIZE}&page=1`);
       setMessages(refreshed);
       setHasOlderMessages(refreshed.length === MESSAGE_PAGE_SIZE);
       setMessagePage(1);
@@ -686,13 +730,16 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
   }
 
   async function sendServerText(text: string) {
-    if (!conversationId || activeConversation?.canWrite === false || loading || !text.trim() || uploadsBusy) return;
+    if (!agentId || activeConversation?.canWrite === false || loading || !text.trim() || uploadsBusy) return;
+    const activeId = conversationId || (await createConversation())?.id;
+    if (!activeId) return;
     const hasImage = readyAttachments.some((file) => file.mimeType.startsWith("image/"));
     if (hasImage && selectedModelInfo && selectedModelInfo.capabilities?.vision !== true) {
       setComposerError("النموذج المختار لا يعلن دعم الصور. اختر نموذجًا مناسبًا أو استخدم الاختيار التلقائي.");
       return;
     }
     const optimisticId = `local-${crypto.randomUUID()}`;
+    const pendingAssistantId = `stream-pending-${crypto.randomUUID()}`;
     setMessages((current) => [...current, {
       id: optimisticId,
       role: "user",
@@ -703,7 +750,7 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
       createdAt: new Date().toISOString(),
       attachments: [...readyAttachments],
       status: "sending",
-    }]);
+    }, { id: pendingAssistantId, role: "assistant", content: "", status: "streaming", createdAt: new Date().toISOString() }]);
     nearBottom.current = true;
     setLoading(true);
     setComposerError(null);
@@ -711,12 +758,20 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
     setRetryText(null);
     const controller = new AbortController();
     streamController.current = controller;
+    let responseStarted = false;
+    let responseTimedOut = false;
+    const responseTimeout = window.setTimeout(() => {
+      if (!responseStarted) {
+        responseTimedOut = true;
+        controller.abort();
+      }
+    }, 30_000);
     try {
       const response = await fetch("/api/dashboard/chat/stream", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          conversationId,
+          conversationId: activeId,
           message: text.trim(),
           attachmentIds: readyAttachments.map((file) => file.id),
           clientRequestId: crypto.randomUUID(),
@@ -727,36 +782,41 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
         }),
         signal: controller.signal,
       });
+      responseStarted = true;
+      window.clearTimeout(responseTimeout);
       if (!response.ok) {
         const result = await response.json().catch(() => null) as Api<never> | null;
         throw new Error(result?.error?.message ?? "تعذر تشغيل الوكيل.");
       }
-      await readEventStream(response, optimisticId);
+      await readEventStream(response, optimisticId, activeId, pendingAssistantId);
       setUploadTasks([]);
       setDraft("");
     } catch (cause) {
       if (cause instanceof DOMException && cause.name === "AbortError") {
         setMessages((items) => items.map((item) => item.id === optimisticId && item.status === "sending" ? { ...item, status: "cancelled" } : item.status === "streaming" ? { ...item, status: "cancelled" } : item));
-        setComposerError("تم إيقاف التوليد.");
+        setComposerError(responseTimedOut ? "لم يبدأ الخادم الاستجابة خلال 30 ثانية. تحقق من المزود ثم أعد المحاولة." : "تم إيقاف التوليد.");
       } else {
         setMessages((items) => items.map((item) => item.id === optimisticId && item.status === "sending" ? { ...item, status: "failed" } : item.status === "streaming" ? { ...item, status: item.content.trim() ? "interrupted" : "failed" } : item));
         setComposerError(cause instanceof Error ? cause.message : "تعذر تشغيل الوكيل.");
         setRetryText(text.trim());
       }
     } finally {
+      window.clearTimeout(responseTimeout);
       setLoading(false);
       setRunId(null);
       streamController.current = null;
     }
   }
 
-  async function finishPuterExecution(input: { executionId: string; userMessageId: string; model: string; status: "completed" | "failed" | "cancelled"; content?: string }) {
-    const result = await apiRequest<{ assistantMessage: Message | null }>("/api/dashboard/chat/puter", { method: "PATCH", body: { conversationId, ...input } });
+  async function finishPuterExecution(activeConversationId: string, input: { executionId: string; userMessageId: string; model: string; status: "completed" | "failed" | "cancelled"; content?: string }) {
+    const result = await apiRequest<{ assistantMessage: Message | null }>("/api/dashboard/chat/puter", { method: "PATCH", body: { conversationId: activeConversationId, ...input } });
     return result.assistantMessage;
   }
 
   async function sendPuterText(text: string) {
-    if (!conversationId || activeConversation?.canWrite === false || loading || !text.trim() || !puterModel || uploadTasks.length) return;
+    if (!agentId || activeConversation?.canWrite === false || loading || !text.trim() || !puterModel || uploadTasks.length) return;
+    const activeId = conversationId || (await createConversation())?.id;
+    if (!activeId) return;
     const optimisticId = `local-${crypto.randomUUID()}`;
     const assistantId = `stream-puter-${crypto.randomUUID()}`;
     setMessages((current) => [...current, { id: optimisticId, role: "user", authorUserId: currentUser.id, authorName: currentUser.name, authorEmail: currentUser.email, content: text.trim(), status: "sending", createdAt: new Date().toISOString(), attachments: [] }]);
@@ -772,7 +832,7 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
       if (!client.auth.isSignedIn()) throw new Error("اتصل بحساب Puter قبل بدء الدردشة.");
       const result = await apiRequest<{ executionId: string; userMessage: Message; messages: PuterChatMessage[] }>("/api/dashboard/chat/puter", {
         method: "POST",
-        body: { conversationId, message: text.trim(), model: puterModel, clientRequestId: crypto.randomUUID() },
+        body: { conversationId: activeId, message: text.trim(), model: puterModel, clientRequestId: crypto.randomUUID() },
         signal: controller.signal,
       });
       const execution = { executionId: result.executionId, userMessageId: result.userMessage.id, model: puterModel };
@@ -783,14 +843,14 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
       const finalText = await streamPuterChat({ client, messages: result.messages, model: puterModel, signal: controller.signal, onText(delta) {
         setMessages((items) => items.map((item) => item.id === assistantId ? { ...item, content: item.content + delta } : item));
       } });
-      const saved = await finishPuterExecution({ ...execution, status: "completed", content: finalText });
+      const saved = await finishPuterExecution(activeId, { ...execution, status: "completed", content: finalText });
       if (saved) setMessages((items) => items.map((item) => item.id === assistantId ? saved : item));
       setRetryText(null);
       setDraft("");
     } catch (cause) {
       const execution = puterExecutionRef.current;
       const cancelled = cause instanceof DOMException && cause.name === "AbortError";
-      if (execution) await finishPuterExecution({ ...execution, status: cancelled ? "cancelled" : "failed" }).catch(() => undefined);
+      if (execution) await finishPuterExecution(activeId, { ...execution, status: cancelled ? "cancelled" : "failed" }).catch(() => undefined);
       setMessages((items) => items.map((item) => item.id === assistantId ? { ...item, status: cancelled ? "cancelled" : item.content.trim() ? "interrupted" : "failed" } : item));
       setComposerError(cancelled ? "تم إيقاف استجابة Puter." : cause instanceof Error ? cause.message : "تعذر تشغيل Puter.");
       if (!cancelled) setRetryText(text.trim());
@@ -898,7 +958,7 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
     }
   }
 
-  const sendDisabled = !conversationId || activeConversation?.canWrite === false || !draft.trim() || uploadsBusy
+  const sendDisabled = !agents.length || activeConversation?.canWrite === false || !draft.trim() || uploadsBusy || loading
     || executionMode === "puter" && (!puterModel || !puterConnected || uploadTasks.length > 0);
 
   return (
@@ -906,7 +966,7 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
       <aside className="conversation-sidebar" aria-label="قائمة المحادثات">
         <header className="conversation-sidebar-header">
           <div><p className="eyebrow">مساحة العمل</p><h2>المحادثات</h2></div>
-          <button type="button" className="icon-button" aria-label="محادثة جديدة" disabled={loading || !agents.length} onClick={() => void createConversation()}><FilePlus2 size={19} /></button>
+          <button type="button" className="icon-button" aria-label="محادثة جديدة" disabled={loading || !agents.length} onClick={startNewConversation}><FilePlus2 size={19} /></button>
         </header>
         <div className="conversation-sidebar-controls">
           <input value={search} onChange={(event) => setSearch(event.target.value)} className="form-control" placeholder="ابحث في المحادثات…" aria-label="بحث في المحادثات" />
@@ -914,7 +974,7 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
             <select value={agentId} onChange={(event) => setAgentId(event.target.value)} className="form-control" aria-label="وكيل المحادثة الجديدة">
               {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
             </select>
-            <button type="button" className="primary-button" disabled={loading || !agents.length} onClick={() => void createConversation()}>جديدة</button>
+            <button type="button" className="primary-button" disabled={loading || !agents.length} onClick={startNewConversation}>جديدة</button>
           </div>
           <div className="segmented-control" aria-label="عرض المحادثات">
             <button type="button" aria-pressed={!archivedMode} onClick={() => setArchivedView(false)}>النشطة</button>
@@ -953,7 +1013,7 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
               ))}
             </section>
           ))}
-          {!loadingConversations && !conversationError && conversations.length === 0 ? <div className="conversation-empty"><p>{archivedMode ? "لا توجد محادثات مؤرشفة." : "ابدأ محادثة جديدة مع أحد الوكلاء المنشورين."}</p>{!archivedMode && agents.length ? <button type="button" className="primary-button" onClick={() => void createConversation()}>محادثة جديدة</button> : null}</div> : null}
+          {!loadingConversations && !conversationError && conversations.length === 0 ? <div className="conversation-empty"><p>{archivedMode ? "لا توجد محادثات مؤرشفة." : "ابدأ محادثة جديدة مع أحد الوكلاء المنشورين."}</p>{!archivedMode && agents.length ? <button type="button" className="primary-button" onClick={startNewConversation}>محادثة جديدة</button> : null}</div> : null}
         </div>
       </aside>
 
@@ -962,7 +1022,7 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
           <div className="conversation-header-title">
             <button type="button" className="icon-button chat-mobile-list-button" onClick={() => setMobileListOpen(true)} aria-label="العودة إلى المحادثات"><ArrowRight size={19} /></button>
             <span className="conversation-agent-avatar" aria-hidden="true">{activeConversation?.agentName?.slice(0, 1) ?? "AI"}</span>
-            <div className="min-w-0"><h2>{activeConversation?.title?.trim() || "دردشة الوكيل"}</h2><p>{activeConversation?.agentName ? activeConversation.agentName : "اختر محادثة أو أنشئ واحدة"}</p></div>
+            <div className="min-w-0"><h2>{activeConversation?.title?.trim() || "محادثة جديدة"}</h2><p>{activeConversation?.agentName ?? agents.find((agent) => agent.id === agentId)?.name ?? "يلزم نشر وكيل للبدء"}</p></div>
           </div>
           <div className="conversation-header-actions">
             <button type="button" className="icon-button" disabled={!conversationId} onClick={() => setMembersOpen(true)} aria-label="أعضاء المحادثة"><Users size={18} /></button>
@@ -975,7 +1035,7 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
           {messageError ? <div className="message-error" role="alert"><p>{messageError}</p>{conversationId ? <button type="button" className="secondary-button" onClick={() => void loadMessages(conversationId)}>إعادة المحاولة</button> : null}</div> : null}
           {loadingMessages ? <div className="message-skeleton-stack">{[0, 1, 2].map((item) => <div key={item} className="skeleton message-skeleton" />)}</div> : null}
           {!loadingMessages && !messageError && conversationId && messages.length === 0 ? <div className="message-empty"><span>✦</span><h3>ابدأ المحادثة</h3><p>اكتب رسالتك، ويمكنك إضافة ملفات أو سياق متقدم عند الحاجة.</p></div> : null}
-          {!conversationId ? <div className="message-empty"><span>✦</span><h3>اختر محادثة</h3><p>على الهاتف ارجع للقائمة واختر محادثة، أو أنشئ واحدة جديدة.</p><button type="button" className="secondary-button chat-mobile-list-button" onClick={() => setMobileListOpen(true)}>فتح المحادثات</button></div> : null}
+          {!conversationId ? <div className="message-empty new-chat-empty"><span>✦</span><h3>ابدأ مع وكيلك الذكي</h3><p>{agents.length ? "اختر الوكيل والنموذج، ثم اكتب رسالتك. سننشئ المحادثة تلقائيًا عند الإرسال." : "لا يوجد وكيل منشور. أنشئ وكيلًا واربطه بمزوّد متحقق أولًا."}</p>{agents.length ? <label><span>الوكيل</span><select className="form-control" value={agentId} onChange={(event) => setAgentId(event.target.value)}>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select></label> : <a className="primary-button" href="/dashboard/agents">إعداد وكيل ذكي</a>}</div> : null}
           {messages.map((message) => {
             const statusLabel = messageStatusLabel(message.status);
             const canMutate = (message.authorUserId === currentUser.id || activeConversation?.canManage) && !message.id.startsWith("stream-") && !message.id.startsWith("local-");
@@ -1022,8 +1082,8 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
                 event.currentTarget.form?.requestSubmit();
               }
             }}
-            disabled={!conversationId || activeConversation?.canWrite === false || loading}
-            placeholder={activeConversation?.canWrite === false ? "هذه المحادثة للقراءة فقط" : "اكتب رسالة…"}
+            disabled={!agents.length || activeConversation?.canWrite === false || loading}
+            placeholder={activeConversation?.canWrite === false ? "هذه المحادثة للقراءة فقط" : conversationId ? "اكتب رسالة…" : "اكتب أول رسالة لبدء المحادثة…"}
             aria-label="رسالة المحادثة"
           />
 
@@ -1059,7 +1119,8 @@ export function ChatConsoleV2({ agents, initialConversations, initialConversatio
                 <span>ملف</span>
                 <input type="file" multiple className="sr-only" disabled={!conversationId || activeConversation?.canWrite === false || loading || executionMode === "puter" || uploadTasks.length >= MAX_COMPOSER_ATTACHMENTS} accept={acceptedFileInput} onChange={(event) => { uploadFiles(event.target.files); event.target.value = ""; }} />
               </label>
-              {executionMode === "server" ? <select className="composer-model-select" value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} aria-label="النموذج"><option value="auto">النموذج: تلقائي</option>{models.filter((item) => item.available).map((item) => <option key={`${item.providerCredentialId}:${item.model}`} value={`${item.providerCredentialId}:${item.model}`}>{friendlyModelName(item.model)}{item.freeTierEligible ? " · مجاني" : ""}</option>)}</select> : <span className="composer-model-label">{puterModel ? friendlyModelName(puterModel) : "Puter"}</span>}
+              {executionMode === "server" ? <select className="composer-model-select" value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} aria-label="النموذج" disabled={modelsLoading}><option value="auto">{modelsLoading ? "جارٍ تحميل النماذج…" : "النموذج: تلقائي"}</option>{modelGroups.map(([provider, items]) => <optgroup key={provider} label={provider}>{items.map((item) => <option key={`${item.providerCredentialId}:${item.model}`} value={`${item.providerCredentialId}:${item.model}`}>{friendlyModelName(item.model)}{item.freeTierEligible ? " · مجاني" : ""}</option>)}</optgroup>)}</select> : <span className="composer-model-label">{puterModel ? friendlyModelName(puterModel) : "Puter"}</span>}
+              {executionMode === "server" && !modelsLoading && models.length === 0 ? <button type="button" className="composer-icon-action" onClick={() => void refreshModels()} aria-label="إعادة تحميل النماذج"><RefreshCw size={16} /><span>تحديث النماذج</span></button> : null}
               <button type="button" className={toolsOpen ? "composer-icon-action is-active" : "composer-icon-action"} onClick={() => setToolsOpen((value) => !value)} aria-expanded={toolsOpen}><Wrench size={17} /><span>أدوات</span></button>
             </div>
             {loading ? <button type="button" onClick={() => void stop()} className="composer-send composer-stop" aria-label="إيقاف التوليد"><Square size={17} fill="currentColor" /><span>إيقاف</span></button> : <button type="submit" disabled={sendDisabled} className="composer-send" aria-label="إرسال الرسالة"><Send size={18} /><span>إرسال</span></button>}
