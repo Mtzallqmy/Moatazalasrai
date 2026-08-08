@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { and, asc, eq, gt, isNull, lt } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { db } from "@/db";
+import { enterTenantDatabaseContext, runWithSystemDatabaseContext } from "@/db/tenant-context";
 import { organizationMembers, organizations, sessions, users } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
 
@@ -84,28 +85,31 @@ export async function revokeAllSessions(userId: string) {
 }
 
 export async function setActiveOrganization(userId: string, sessionId: string, organizationId: string) {
-  const [membership] = await db()
-    .select({ id: organizationMembers.id })
-    .from(organizationMembers)
-    .where(and(
-      eq(organizationMembers.userId, userId),
-      eq(organizationMembers.organizationId, organizationId),
-    ))
-    .limit(1);
-  if (!membership) throw new ApiError(404, "MEMBERSHIP_NOT_FOUND", "المؤسسة غير متاحة لهذا الحساب.");
-  const nextToken = randomBytes(32).toString("base64url");
-  const [rotated] = await db()
-    .update(sessions)
-    .set({ activeOrganizationId: organizationId, tokenHash: hashToken(nextToken), lastSeenAt: new Date() })
-    .where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId), isNull(sessions.revokedAt)))
-    .returning({ expiresAt: sessions.expiresAt });
-  if (!rotated) throw new ApiError(401, "SESSION_INVALID", "انتهت الجلسة أو أُبطلت.");
-  const store = await cookies();
-  store.set(SESSION_COOKIE, nextToken, cookieOptions(rotated.expiresAt));
-  if (SESSION_COOKIE !== LEGACY_SESSION_COOKIE) store.delete(LEGACY_SESSION_COOKIE);
+  await runWithSystemDatabaseContext(async () => {
+    const [membership] = await db()
+      .select({ id: organizationMembers.id })
+      .from(organizationMembers)
+      .where(and(
+        eq(organizationMembers.userId, userId),
+        eq(organizationMembers.organizationId, organizationId),
+      ))
+      .limit(1);
+    if (!membership) throw new ApiError(404, "MEMBERSHIP_NOT_FOUND", "المؤسسة غير متاحة لهذا الحساب.");
+    const nextToken = randomBytes(32).toString("base64url");
+    const [rotated] = await db()
+      .update(sessions)
+      .set({ activeOrganizationId: organizationId, tokenHash: hashToken(nextToken), lastSeenAt: new Date() })
+      .where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId), isNull(sessions.revokedAt)))
+      .returning({ expiresAt: sessions.expiresAt });
+    if (!rotated) throw new ApiError(401, "SESSION_INVALID", "انتهت الجلسة أو أُبطلت.");
+    const store = await cookies();
+    store.set(SESSION_COOKIE, nextToken, cookieOptions(rotated.expiresAt));
+    if (SESSION_COOKIE !== LEGACY_SESSION_COOKIE) store.delete(LEGACY_SESSION_COOKIE);
+  });
+  enterTenantDatabaseContext(organizationId, userId);
 }
 
-export async function currentSession() {
+async function resolveCurrentSession() {
   const store = await cookies();
   const primaryToken = store.get(SESSION_COOKIE)?.value;
   const legacyToken = SESSION_COOKIE !== LEGACY_SESSION_COOKIE
@@ -186,4 +190,10 @@ export async function currentSession() {
     organizationName: membership?.organizationName ?? null,
     role: membership?.role ?? null,
   };
+}
+
+export async function currentSession() {
+  const session = await runWithSystemDatabaseContext(resolveCurrentSession);
+  if (session?.organizationId) enterTenantDatabaseContext(session.organizationId, session.userId);
+  return session;
 }
