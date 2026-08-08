@@ -89,7 +89,6 @@ export default async function ChannelsPage() {
       <div className="space-y-6">
         <WhatsAppPolicyManager
           canManage={canManage}
-          role={session.role}
           initialData={initialWhatsAppData}
           options={{
             agents: agentRows.map(({ id, name }) => ({ id, name })),
