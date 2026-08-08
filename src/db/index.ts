@@ -5,9 +5,10 @@ import * as channelSchema from "./channel-schema";
 import * as controlPlaneSchema from "./control-plane-schema";
 import * as adminSchema from "./admin-schema";
 import * as executionSchema from "./execution-schema";
+import * as fileIntelligenceSchema from "./file-intelligence-schema";
 import * as toolRunSchema from "./tool-run-schema";
 
-const schema = { ...coreSchema, ...channelSchema, ...controlPlaneSchema, ...adminSchema, ...executionSchema, ...toolRunSchema };
+const schema = { ...coreSchema, ...channelSchema, ...controlPlaneSchema, ...adminSchema, ...executionSchema, ...fileIntelligenceSchema, ...toolRunSchema };
 type DatabaseSchema = typeof schema;
 let database: ReturnType<typeof drizzle<DatabaseSchema>> | null = null;
 
@@ -40,6 +41,8 @@ const requiredTables = [
   "whatsapp_link_tokens",
   "whatsapp_webhook_events",
   "attachments",
+  "attachment_intelligence",
+  "attachment_chunks",
   "agent_memories",
   "knowledge_bases",
   "knowledge_documents",
