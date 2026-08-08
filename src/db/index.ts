@@ -1,5 +1,6 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import { getPostgresPool } from "@/db/pool";
+import { databaseQueryLogger } from "@/db/query-observability";
 import * as coreSchema from "./schema";
 import * as channelSchema from "./channel-schema";
 import * as controlPlaneSchema from "./control-plane-schema";
@@ -17,7 +18,7 @@ export function db() {
   const pool = getPostgresPool();
   const existing = databasesByPool.get(pool);
   if (existing) return existing;
-  const database = drizzle(pool, { schema });
+  const database = drizzle(pool, { schema, logger: databaseQueryLogger });
   databasesByPool.set(pool, database);
   return database;
 }

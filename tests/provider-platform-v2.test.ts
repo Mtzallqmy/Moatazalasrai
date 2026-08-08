@@ -78,7 +78,7 @@ describe("provider platform v2", () => {
 
   it("honors provider and model selection in both dashboard and public API chat", async () => {
     const [dashboardChat, apiChat] = await Promise.all([
-      readFile("src/components/chat-console.tsx", "utf8"),
+      readFile("src/components/chat/chat-composer.tsx", "utf8"),
       readFile("src/app/api/v1/chat/route.ts", "utf8"),
     ]);
     expect(dashboardChat).toContain("providerCredentialId");

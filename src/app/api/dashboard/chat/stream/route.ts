@@ -1,5 +1,6 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
+import { runWithDatabaseQueryMetrics } from "@/db/query-observability";
 import { agentMemories, agents, attachments, conversations, messages } from "@/db/schema";
 import { aiFeatureEnabled } from "@/ai/config";
 import { buildMcpChatContext } from "@/ai/mcp/context";
@@ -24,13 +25,17 @@ function base64Bytes(value: string) {
 }
 
 export async function POST(request: Request) {
+  return runWithDatabaseQueryMetrics(async (queryMetrics) => {
   const routeStartedAt = performance.now();
   const requestId = getRequestId(request);
+  const authTimings: { sessionLatencyMs?: number; permissionLatencyMs?: number } = {};
+  let conversationLookupMs: number | null = null;
   try {
     assertSameOrigin(request);
-    const session = await requireSession("agents:run");
+    const session = await requireSession("agents:run", authTimings);
     await enforceRateLimit({ scope: "chat.send", key: `${session.organizationId}:${session.userId}`, limit: 30, windowMs: 60_000 });
     const body = await parseJson(request, chatStreamSchema, 96 * 1024);
+    const conversationStartedAt = performance.now();
     const [conversation] = await db().select({ id: conversations.id, agentId: conversations.agentId })
       .from(conversations)
       .innerJoin(agents, and(eq(agents.id, conversations.agentId), eq(agents.organizationId, session.organizationId)))
@@ -42,12 +47,18 @@ export async function POST(request: Request) {
         isNull(conversations.deletedAt),
         eq(agents.status, "published"),
       )).limit(1);
+    conversationLookupMs = Math.round(performance.now() - conversationStartedAt);
     if (!conversation) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة أو الوكيل غير متاح.");
 
     const encoder = new TextEncoder();
     const streamStartedAt = performance.now();
     let contextDurationMs: number | null = null;
-    let providerFirstEventMs: number | null = null;
+    let providerConnectMs: number | null = null;
+    let providerFirstTokenMs: number | null = null;
+    let attachmentContextMs: number | null = null;
+    let ragLatencyMs: number | null = null;
+    let memoryLatencyMs: number | null = null;
+    let mcpLatencyMs: number | null = null;
     let streamFailed = false;
     const streamAbort = new AbortController();
     const abortFromRequest = () => streamAbort.abort(request.signal.reason);
@@ -57,24 +68,29 @@ export async function POST(request: Request) {
         try {
           controller.enqueue(encoder.encode(sse("status", { stage: "preparing", message: "جارٍ تجهيز سياق المحادثة…" })));
           const contextStartedAt = performance.now();
+          const measured = async <T,>(task: Promise<T>, record: (durationMs: number) => void) => {
+            const startedAt = performance.now();
+            try { return await task; }
+            finally { record(Math.round(performance.now() - startedAt)); }
+          };
           const [attachmentData, mcpContext, knowledge, memoryRows] = await Promise.all([
-            resolveAttachmentContext({
+            measured(resolveAttachmentContext({
               organizationId: session.organizationId,
               conversationId: conversation.id,
               userId: session.userId,
               explicitAttachmentIds: body.attachmentIds,
               userQuery: body.message,
-            }),
-            buildMcpChatContext({ organizationId: session.organizationId, userId: session.userId, resources: body.mcpResources, prompt: body.mcpPrompt }),
+            }), (value) => { attachmentContextMs = value; }),
+            measured(buildMcpChatContext({ organizationId: session.organizationId, userId: session.userId, resources: body.mcpResources, prompt: body.mcpPrompt }), (value) => { mcpLatencyMs = value; }),
             body.knowledgeBaseId && aiFeatureEnabled("RAG")
-              ? retrieveKnowledge({ organizationId: session.organizationId, knowledgeBaseId: body.knowledgeBaseId, query: body.message })
+              ? measured(retrieveKnowledge({ organizationId: session.organizationId, knowledgeBaseId: body.knowledgeBaseId, query: body.message }), (value) => { ragLatencyMs = value; })
               : Promise.resolve({ text: "", citations: [] }),
             body.useMemory && aiFeatureEnabled("MEMORY")
-              ? db().select({ content: agentMemories.content }).from(agentMemories).where(and(
+              ? measured(db().select({ content: agentMemories.content }).from(agentMemories).where(and(
                 eq(agentMemories.organizationId, session.organizationId),
                 eq(agentMemories.userId, session.userId),
                 eq(agentMemories.enabled, true),
-              )).limit(10)
+              )).limit(10), (value) => { memoryLatencyMs = value; })
               : Promise.resolve([]),
           ]);
           contextDurationMs = Math.round(performance.now() - contextStartedAt);
@@ -172,9 +188,8 @@ export async function POST(request: Request) {
             inputKind: effectiveInputKind,
             media: combinedMedia,
           })) {
-            if (providerFirstEventMs === null && (event.type === "delta" || event.type === "complete")) {
-              providerFirstEventMs = Math.round(performance.now() - providerStartedAt);
-            }
+            if (providerConnectMs === null) providerConnectMs = Math.round(performance.now() - providerStartedAt);
+            if (providerFirstTokenMs === null && event.type === "delta") providerFirstTokenMs = Math.round(performance.now() - providerStartedAt);
             controller.enqueue(encoder.encode(sse(event.type, event)));
           }
         } catch (error) {
@@ -192,10 +207,31 @@ export async function POST(request: Request) {
             requestId,
             status: streamAbort.signal.aborted ? "cancelled" : streamFailed ? "error" : "ok",
             contextDurationMs,
-            providerFirstEventMs,
+            sessionLatencyMs: authTimings.sessionLatencyMs ?? null,
+            permissionLatencyMs: authTimings.permissionLatencyMs ?? null,
+            conversationLookupMs,
+            attachmentContextMs,
+            ragLatencyMs,
+            memoryLatencyMs,
+            mcpLatencyMs,
+            providerConnectMs,
+            providerFirstTokenMs,
             streamDurationMs,
+            dbQueryCount: queryMetrics.count,
           }));
-          if (!streamFailed) completeRequestTiming(requestId, 200, { contextDurationMs, providerFirstEventMs, streamDurationMs });
+          if (!streamFailed) completeRequestTiming(requestId, 200, {
+            sessionLatencyMs: authTimings.sessionLatencyMs ?? null,
+            permissionLatencyMs: authTimings.permissionLatencyMs ?? null,
+            conversationLookupMs,
+            attachmentContextMs,
+            ragLatencyMs,
+            memoryLatencyMs,
+            mcpLatencyMs,
+            providerConnectMs,
+            providerFirstTokenMs,
+            streamDurationMs,
+            dbQueryCount: queryMetrics.count,
+          });
           request.signal.removeEventListener("abort", abortFromRequest);
           try { controller.close(); } catch { /* The consumer cancelled the stream. */ }
         }
@@ -219,4 +255,5 @@ export async function POST(request: Request) {
   } catch (error) {
     return handleApiError(error, requestId, "/api/dashboard/chat/stream");
   }
+  });
 }

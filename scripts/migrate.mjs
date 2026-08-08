@@ -38,10 +38,10 @@ async function withTimeout(action, label) {
   }
 }
 
-async function applyMigration(name, digest, statements) {
+async function applyMigration(name, digest, statements, noTransaction = false) {
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    if (!noTransaction) await client.query("BEGIN");
     for (const statement of statements) {
       await client.query(statement);
     }
@@ -49,9 +49,9 @@ async function applyMigration(name, digest, statements) {
       'INSERT INTO "_platform_migrations" ("name", "checksum") VALUES ($1, $2)',
       [name, digest],
     );
-    await client.query("COMMIT");
+    if (!noTransaction) await client.query("COMMIT");
   } catch (error) {
-    await client.query("ROLLBACK").catch(() => undefined);
+    if (!noTransaction) await client.query("ROLLBACK").catch(() => undefined);
     throw error;
   } finally {
     client.release();
@@ -82,6 +82,7 @@ try {
   for (const name of migrationFiles) {
     const content = await readFile(path.join(migrationDirectory, name), "utf8");
     const digest = checksum(content);
+    const noTransaction = /^\s*--\s*migrate:no-transaction\b/m.test(content);
     const existing = await withTimeout(
       () => pool.query('SELECT "checksum" FROM "_platform_migrations" WHERE "name" = $1 LIMIT 1', [name]),
       `Reading migration ${name}`,
@@ -101,7 +102,7 @@ try {
     }
 
     await withTimeout(
-      () => applyMigration(name, digest, statements),
+      () => applyMigration(name, digest, statements, noTransaction),
       `Applying migration ${name}`,
     );
 
