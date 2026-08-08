@@ -64,6 +64,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     }
   }
 
+  Future<void> _googleLogin() async {
+    try { await ref.read(authStateProvider.notifier).loginWithGoogle(); }
+    catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(ApiClient.userMessage(error))));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final loading = ref.watch(authStateProvider).isLoading;
@@ -86,6 +94,15 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
+                            OutlinedButton.icon(
+                              onPressed: loading ? null : _googleLogin,
+                              icon: const FaIcon(FontAwesomeIcons.google, size: 18),
+                              label: const Text('الدخول باستخدام Google'),
+                            ),
+                            const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 14),
+                              child: Row(children: [Expanded(child: Divider()), Padding(padding: EdgeInsets.symmetric(horizontal: 10), child: Text('أو بالبريد')), Expanded(child: Divider())]),
+                            ),
                             SegmentedButton<bool>(
                               segments: const [
                                 ButtonSegment(value: false, label: Text('تسجيل الدخول'), icon: Icon(Icons.login)),

@@ -75,6 +75,12 @@ function validateExecutionKernel() {
 }
 
 export function validateOptionalRuntimeEnvironment() {
+  const supabaseValues = ["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "SUPABASE_SECRET_KEY"];
+  if (supabaseValues.some((name) => process.env[name]?.trim())) {
+    requireAll("Supabase Auth", supabaseValues);
+    const url = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL);
+    if (url.protocol !== "https:" || !url.hostname.endsWith(".supabase.co")) throw new Error("NEXT_PUBLIC_SUPABASE_URL must be a Supabase HTTPS project URL.");
+  }
   if (enabled("TURNSTILE_ENABLED")) {
     requireAll("Turnstile", ["NEXT_PUBLIC_TURNSTILE_SITE_KEY", "TURNSTILE_SECRET_KEY"]);
     if (process.env.NODE_ENV === "production") requireAll("Turnstile", ["TURNSTILE_EXPECTED_HOSTNAME"]);

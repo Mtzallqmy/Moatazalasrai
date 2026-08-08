@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { rm } from "node:fs/promises";
 import { readFile } from "node:fs/promises";
-import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, type S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, type S3Client } from "@aws-sdk/client-s3";
 import { objectStorage, resetObjectStorageForTests, R2ObjectStorage } from "@/lib/storage/object-storage";
 
 const organizationId = "00000000-0000-4000-8000-000000000001";
@@ -37,6 +37,7 @@ describe("attachment object storage", () => {
   it("uses only the configured R2 bucket and passes non-secret integrity metadata", async () => {
     const send = vi.fn(async (command: unknown) => {
       if (command instanceof GetObjectCommand) return { Body: { transformToByteArray: async () => new Uint8Array([1, 2, 3]) } };
+      if (command instanceof HeadObjectCommand) return { ContentLength: 3, ContentType: "image/png", Metadata: { sha256: "abc123" } };
       return {};
     });
     const client = { send } as unknown as S3Client;
@@ -45,7 +46,8 @@ describe("attachment object storage", () => {
     expect(send.mock.calls[0]?.[0]).toBeInstanceOf(PutObjectCommand);
     expect((send.mock.calls[0]?.[0] as PutObjectCommand).input).toMatchObject({ Bucket: "private-attachments", Key: key, ContentType: "image/png", Metadata: { sha256: "abc123" } });
     expect(await storage.get(key)).toEqual(new Uint8Array([1, 2, 3]));
+    expect(await storage.head(key)).toEqual({ sizeBytes: 3, contentType: "image/png", sha256: "abc123" });
     await storage.delete(key);
-    expect(send.mock.calls[2]?.[0]).toBeInstanceOf(DeleteObjectCommand);
+    expect(send.mock.calls[3]?.[0]).toBeInstanceOf(DeleteObjectCommand);
   });
 });

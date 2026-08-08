@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:moataz_ai_mobile/src/core/api_config.dart';
 import 'package:moataz_ai_mobile/src/core/token_store.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 final tokenStoreProvider = Provider<TokenStore>(
   (ref) => TokenStore(const FlutterSecureStorage(
@@ -22,15 +23,12 @@ class ApiClient {
       receiveTimeout: const Duration(seconds: 60),
       headers: const {'accept': 'application/json'},
     ));
-    _refreshDio = Dio(BaseOptions(
-      baseUrl: ApiConfig.baseUrl,
-      connectTimeout: const Duration(seconds: 15),
-      receiveTimeout: const Duration(seconds: 20),
-    ));
     _dio.interceptors.add(InterceptorsWrapper(
       onRequest: (options, handler) async {
-        final pair = await _tokens.read();
-        if (pair != null) options.headers['authorization'] = 'Bearer ${pair.accessToken}';
+        final session = Supabase.instance.client.auth.currentSession;
+        if (session != null) options.headers['authorization'] = 'Bearer ${session.accessToken}';
+        final organizationId = await _tokens.activeOrganization();
+        if (organizationId != null) options.headers['x-organization-id'] = organizationId;
         options.headers['x-request-id'] ??= _requestId();
         handler.next(options);
       },
@@ -39,16 +37,16 @@ class ApiClient {
           handler.next(error);
           return;
         }
-        final pair = await _tokens.read();
-        if (pair == null) {
+        if (Supabase.instance.client.auth.currentSession == null) {
           handler.next(error);
           return;
         }
-        late final TokenPair refreshed;
+        late final Session refreshed;
         try {
-          refreshed = await _refreshSession(pair);
+          refreshed = await _refreshSession();
         } catch (_) {
-          await _tokens.clear();
+          await Supabase.instance.client.auth.signOut(scope: SignOutScope.local);
+          await _tokens.setActiveOrganization(null);
           handler.next(error);
           return;
         }
@@ -66,15 +64,14 @@ class ApiClient {
 
   final TokenStore _tokens;
   late final Dio _dio;
-  late final Dio _refreshDio;
-  Future<TokenPair>? _refreshing;
+  Future<Session>? _refreshing;
 
   Dio get dio => _dio;
 
-  Future<TokenPair> _refreshSession(TokenPair current) async {
+  Future<Session> _refreshSession() async {
     final active = _refreshing;
     if (active != null) return active;
-    final operation = _performRefresh(current);
+    final operation = _performRefresh();
     _refreshing = operation;
     try {
       return await operation;
@@ -83,19 +80,10 @@ class ApiClient {
     }
   }
 
-  Future<TokenPair> _performRefresh(TokenPair current) async {
-    final response = await _refreshDio.post<Map<String, dynamic>>(
-      '/api/mobile/v1/auth/refresh',
-      data: {'refreshToken': current.refreshToken},
-    );
-    final data = response.data?['data'] as Map<String, dynamic>?;
-    final tokenData = data?['tokens'] as Map<String, dynamic>?;
-    if (tokenData == null) throw StateError('Missing refreshed token payload');
-    final refreshed = TokenPair(
-      accessToken: tokenData['accessToken'] as String,
-      refreshToken: tokenData['refreshToken'] as String,
-    );
-    await _tokens.write(refreshed);
+  Future<Session> _performRefresh() async {
+    final response = await Supabase.instance.client.auth.refreshSession();
+    final refreshed = response.session;
+    if (refreshed == null) throw StateError('Missing refreshed Supabase session');
     return refreshed;
   }
 

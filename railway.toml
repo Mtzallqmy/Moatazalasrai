@@ -2,7 +2,7 @@
 builder = "DOCKERFILE"
 
 [deploy]
-preDeployCommand = ["npm run db:migrate:all"]
+preDeployCommand = ["npm run db:migrate:all && npm run bootstrap:owner"]
 startCommand = "node scripts/start-production.mjs"
 healthcheckPath = "/api/ready"
 healthcheckTimeout = 300

@@ -7,7 +7,7 @@ import { retrieveKnowledge } from "@/ai/rag/retriever";
 import { streamAgentRun } from "@/lib/agents/runtime";
 import { requireSession } from "@/lib/auth/authorization";
 import { conversationAccessFilter } from "@/lib/chat/access";
-import { ApiError, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
+import { ApiError, assertSameOrigin, completeRequestTiming, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { chatStreamSchema } from "@/lib/http/contracts";
 import { enforceRateLimit } from "@/lib/security/rate-limit";
 import { resolveAttachmentContext } from "@/lib/storage/attachment-context-resolver";
@@ -24,6 +24,7 @@ function base64Bytes(value: string) {
 }
 
 export async function POST(request: Request) {
+  const routeStartedAt = performance.now();
   const requestId = getRequestId(request);
   try {
     assertSameOrigin(request);
@@ -44,10 +45,18 @@ export async function POST(request: Request) {
     if (!conversation) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة أو الوكيل غير متاح.");
 
     const encoder = new TextEncoder();
+    const streamStartedAt = performance.now();
+    let contextDurationMs: number | null = null;
+    let providerFirstEventMs: number | null = null;
+    let streamFailed = false;
+    const streamAbort = new AbortController();
+    const abortFromRequest = () => streamAbort.abort(request.signal.reason);
+    request.signal.addEventListener("abort", abortFromRequest, { once: true });
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         try {
           controller.enqueue(encoder.encode(sse("status", { stage: "preparing", message: "جارٍ تجهيز سياق المحادثة…" })));
+          const contextStartedAt = performance.now();
           const [attachmentData, mcpContext, knowledge, memoryRows] = await Promise.all([
             resolveAttachmentContext({
               organizationId: session.organizationId,
@@ -68,6 +77,7 @@ export async function POST(request: Request) {
               )).limit(10)
               : Promise.resolve([]),
           ]);
+          contextDurationMs = Math.round(performance.now() - contextStartedAt);
           const combinedMedia = [...attachmentData.media, ...mcpContext.media];
           if (combinedMedia.reduce((sum, item) => sum + (item.type === "image" ? base64Bytes(item.data) : 0), 0) > 20 * 1024 * 1024) {
             throw new ApiError(413, "PROVIDER_ATTACHMENT_UNSUPPORTED", "إجمالي الصور والمصادر المرسلة للنموذج يتجاوز الحد الآمن.");
@@ -147,6 +157,7 @@ export async function POST(request: Request) {
             attachments: attachmentData.attachments.map(({ id, filename, status, warnings, chunkCount }) => ({ id, filename, status, warnings, chunkCount })),
           })));
           controller.enqueue(encoder.encode(sse("status", { stage: "generating", message: "يتولى الوكيل الذكي إنشاء الرد…" })));
+          const providerStartedAt = performance.now();
           for await (const event of streamAgentRun({
             organizationId: session.organizationId,
             userId: session.userId,
@@ -155,22 +166,46 @@ export async function POST(request: Request) {
             conversationId: conversation.id,
             message: `${body.message}${attachmentData.text}${mcpContext.text}${memoryText}${knowledge.text ? `\n\n[سياق معرفة موثق]\n${knowledge.text}` : ""}`,
             requestId,
-            requestSignal: request.signal,
+            requestSignal: streamAbort.signal,
             providerCredentialId: body.providerCredentialId,
             model: body.model,
             inputKind: effectiveInputKind,
             media: combinedMedia,
-          })) controller.enqueue(encoder.encode(sse(event.type, event)));
+          })) {
+            if (providerFirstEventMs === null && (event.type === "delta" || event.type === "complete")) {
+              providerFirstEventMs = Math.round(performance.now() - providerStartedAt);
+            }
+            controller.enqueue(encoder.encode(sse(event.type, event)));
+          }
         } catch (error) {
-          const response = handleApiError(error, requestId, "/api/dashboard/chat/stream");
-          const payload = await response.json();
-          controller.enqueue(encoder.encode(sse("error", payload.error)));
+          streamFailed = true;
+          if (!streamAbort.signal.aborted) {
+            const response = handleApiError(error, requestId, "/api/dashboard/chat/stream");
+            const payload = await response.json();
+            controller.enqueue(encoder.encode(sse("error", payload.error)));
+          }
         } finally {
-          controller.close();
+          const streamDurationMs = Math.round(performance.now() - streamStartedAt);
+          console.info(JSON.stringify({
+            level: streamFailed ? "warn" : "info",
+            event: "chat.stream.completed",
+            requestId,
+            status: streamAbort.signal.aborted ? "cancelled" : streamFailed ? "error" : "ok",
+            contextDurationMs,
+            providerFirstEventMs,
+            streamDurationMs,
+          }));
+          if (!streamFailed) completeRequestTiming(requestId, 200, { contextDurationMs, providerFirstEventMs, streamDurationMs });
+          request.signal.removeEventListener("abort", abortFromRequest);
+          try { controller.close(); } catch { /* The consumer cancelled the stream. */ }
         }
+      },
+      cancel() {
+        streamAbort.abort(new DOMException("Stream cancelled", "AbortError"));
       },
     });
 
+    const routeSetupMs = Math.round(performance.now() - routeStartedAt);
     return new Response(stream, {
       headers: {
         "content-type": "text/event-stream; charset=utf-8",
@@ -178,6 +213,7 @@ export async function POST(request: Request) {
         connection: "keep-alive",
         "x-accel-buffering": "no",
         "x-request-id": requestId,
+        "server-timing": `route;dur=${routeSetupMs}`,
       },
     });
   } catch (error) {

@@ -21,7 +21,7 @@ async function railwayConfig(path = "railway.json"): Promise<RailwayConfig> {
 describe("Railway deployment configuration", () => {
   it("runs platform and Graphile migrations once before the web release", async () => {
     const config = await railwayConfig();
-    expect(config.deploy?.preDeployCommand).toBe("npm run db:migrate:all");
+    expect(config.deploy?.preDeployCommand).toBe("npm run db:migrate:all && npm run bootstrap:owner");
     expect(config.deploy?.startCommand).toBe("npm run start");
   });
 

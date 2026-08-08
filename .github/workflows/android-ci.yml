@@ -57,5 +57,7 @@ jobs:
           --target-platform android-arm64
           --split-per-abi
           --dart-define=API_BASE_URL=https://moatazalalqami.online
+          --dart-define=SUPABASE_URL=${{ vars.SUPABASE_URL }}
+          --dart-define=SUPABASE_PUBLISHABLE_KEY=${{ vars.SUPABASE_PUBLISHABLE_KEY }}
       - name: Verify APK exists
         run: test -f build/app/outputs/flutter-apk/app-arm64-v8a-release.apk

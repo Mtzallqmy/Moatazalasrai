@@ -144,6 +144,8 @@ jobs:
           --build-name=${{ steps.release.outputs.version }}
           --build-number=${{ github.run_number }}
           --dart-define=API_BASE_URL=${{ steps.release.outputs.api_base_url }}
+          --dart-define=SUPABASE_URL=${{ vars.SUPABASE_URL }}
+          --dart-define=SUPABASE_PUBLISHABLE_KEY=${{ vars.SUPABASE_PUBLISHABLE_KEY }}
 
       - name: Prepare checksum and artifact
         shell: bash

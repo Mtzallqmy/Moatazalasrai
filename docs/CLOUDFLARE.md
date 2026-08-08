@@ -24,7 +24,7 @@ TURNSTILE_SECRET_KEY=<server-secret>
 TURNSTILE_EXPECTED_HOSTNAME=moatazalalqami.online
 ```
 
-التحقق يتم عبر Siteverify من الخادم، ويفحص `success` و`hostname` و`action` وعمر التحدي، مع مهلة خمس ثوانٍ ومنع إعادة استخدام hash التوكن. السر ليس `NEXT_PUBLIC_*` ولا يسجل. تطبيق Flutter لا يتغير؛ تظل مسارات الهاتف محمية بالـrate limit والجلسات ولا تستخدم widget الويب.
+التحقق يتم عبر Siteverify من الخادم، ويفحص `success` و`hostname` و`action` وعمر التحدي، مع مهلة خمس ثوانٍ ومنع إعادة استخدام hash التوكن. السر ليس `NEXT_PUBLIC_*` ولا يسجل. تطبيق Flutter يستخدم Supabase Auth مباشرة ولا يستخدم widget الويب.
 
 لاختبارات Playwright المعزولة فقط استخدم `.env.playwright.example` الذي يحتوي مفاتيح Cloudflare الوهمية المنشورة رسميًا. لا تضعها في Railway production ولا تخلطها بمفاتيح widget الحقيقي. راجع [توثيق Siteverify](https://developers.cloudflare.com/turnstile/get-started/server-side-validation/) و[مفاتيح الاختبار الرسمية](https://developers.cloudflare.com/turnstile/troubleshooting/testing/).
 
@@ -45,7 +45,13 @@ MAX_ATTACHMENT_BYTES=10485760
 R2_SIGNED_URL_TTL_SECONDS=300
 ```
 
-يُنشأ المفتاح بالشكل `<organization UUID>/<random UUID>`، ويُفحص النوع الفعلي والـSHA-256 قبل الرفع. عند اختيار R2 لا تحفظ الملفات الجديدة في PostgreSQL؛ تبقى الملفات القديمة قابلة للقراءة عبر `storage_driver=database`. إذا كان المتغير غير موجود أصلًا يحتفظ الإصدار مؤقتًا بسلوك database القديم كي لا يكسر نشر Railway قائمًا؛ اضبط `r2` صراحة بعد migration. التنزيل الحالي يمر عبر endpoint مصادق ومقيد بالمؤسسة/المالك. الروابط الموقعة متاحة في abstraction ولكن ليست واجهة عامة افتراضيًا لأنها bearer URLs. راجع [توثيق R2 S3 والموقع](https://developers.cloudflare.com/r2/api/s3/presigned-urls/).
+أضف إلى CORS في الـbucket أصل الإنتاج فقط (وأصل التطوير عند الحاجة):
+
+```json
+[{"AllowedOrigins":["https://moatazalalqami.online"],"AllowedMethods":["GET","HEAD","PUT"],"AllowedHeaders":["content-type","x-amz-meta-sha256"],"ExposeHeaders":["etag"],"MaxAgeSeconds":3600}]
+```
+
+يُنشأ المفتاح بالشكل `<organization UUID>/<random UUID>`. يحجز Web metadata ثم يرفع المتصفح مباشرةً برابط PUT موقّع، ويتحقق الخادم من HEAD قبل إدراج مهمة Worker. يعيد Worker حساب SHA-256 الفعلي ويعالج الملف ويفهرسه. تبقى الملفات القديمة قابلة للقراءة عبر `storage_driver=database`، والتنزيلات الجديدة تستخدم رابط GET موقّع بعد فحص الصلاحية في Railway. راجع [توثيق R2 S3 والموقع](https://developers.cloudflare.com/r2/api/s3/presigned-urls/).
 
 ## منصة مزوّدي الذكاء الاصطناعي
 

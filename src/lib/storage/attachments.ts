@@ -39,7 +39,7 @@ export const ALLOWED_ATTACHMENT_TYPES = new Set([
   "text/plain", "text/markdown", "text/csv", "text/tab-separated-values", "text/html", "text/css", "text/xml",
 ]);
 
-function cleanFilename(value: string) {
+export function cleanFilename(value: string) {
   return value.replace(/[^\p{L}\p{N}._ -]/gu, "_").slice(0, 180) || "file";
 }
 function filenameExtension(filename: string) {
@@ -175,6 +175,35 @@ export async function deleteAttachmentContent(file: { content: Buffer | null; st
   if (file.storageDriver === "database" || !file.objectKey) return;
   if (file.storageDriver !== "local" && file.storageDriver !== "r2") throw new ApiError(500, "FILE_PROCESSING_FAILED", "مرجع تخزين الملف غير صالح.");
   await objectStorage(file.storageDriver).delete(file.objectKey);
+}
+
+export async function processStoredAttachment(attachmentId: string, organizationId: string) {
+  const [file] = await db().select().from(attachments).where(and(
+    eq(attachments.id, attachmentId), eq(attachments.organizationId, organizationId), isNull(attachments.deletedAt),
+  )).limit(1);
+  if (!file) throw new ApiError(404, "FILE_NOT_FOUND", "الملف غير موجود.");
+  try {
+    await db().update(attachments).set({ processingStatus: "processing", processingErrorCode: null, updatedAt: new Date() })
+      .where(and(eq(attachments.id, attachmentId), eq(attachments.organizationId, organizationId)));
+    const content = Buffer.from(await readAttachmentContent(file));
+    const actualSha256 = createHash("sha256").update(content).digest("hex");
+    if (content.byteLength !== file.sizeBytes || actualSha256 !== file.sha256) throw new ApiError(422, "FILE_INTEGRITY_FAILED", "فشل التحقق من سلامة الملف المرفوع.");
+    const processed = processFile(file.filename, file.mimeType, content);
+    const indexed = await indexProcessedAttachment({ attachmentId, organizationId, conversationId: file.conversationId ?? undefined, processed });
+    await db().update(attachments).set({
+      detectedType: processed.detectedType,
+      extractedText: processed.extractedText || null,
+      archiveEntryCount: processed.archiveEntryCount,
+      processingStatus: indexed.status === "unsupported" ? "failed" : "ready",
+      processingErrorCode: indexed.status === "unsupported" ? processed.warnings[0] ?? "UNSUPPORTED_FILE_TYPE" : null,
+      updatedAt: new Date(),
+    }).where(and(eq(attachments.id, attachmentId), eq(attachments.organizationId, organizationId)));
+    return { status: indexed.status, chunkCount: indexed.chunkCount, indexedAt: indexed.indexedAt, warnings: processed.warnings };
+  } catch (error) {
+    await db().update(attachments).set({ processingStatus: "failed", processingErrorCode: error instanceof ApiError ? error.code : "FILE_PROCESSING_FAILED", updatedAt: new Date() })
+      .where(and(eq(attachments.id, attachmentId), eq(attachments.organizationId, organizationId)));
+    throw error;
+  }
 }
 
 /** Legacy explicit-only context helper retained for non-chat callers. New chat requests use resolveAttachmentContext. */

@@ -1,10 +1,12 @@
 import { and, eq, gt, isNull, lt, or } from "drizzle-orm";
 import { db } from "@/db";
 import { enterTenantDatabaseContext, runWithSystemDatabaseContext } from "@/db/tenant-context";
-import { mobileSessions, organizationMembers, platformApiKeys } from "@/db/schema";
+import { mobileSessions, organizationMembers, organizations, platformApiKeys, sessions, users } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
 import { hashApiKey, secureHashEquals } from "@/lib/security/encryption";
 import { activeMembership } from "@/lib/auth/membership-access";
+import { supabaseAuthConfigured } from "@/lib/supabase/config";
+import { createSupabaseBearerClient } from "@/lib/supabase/server";
 
 export type ApiScope =
   | "agents:read" | "agents:write"
@@ -35,7 +37,7 @@ export type ApiPrincipal = {
   organizationId: string;
   apiKeyId: string;
   principalId: string;
-  kind: "api_key" | "mobile_session";
+  kind: "api_key" | "mobile_session" | "supabase_user";
   userId: string | null;
   role: string | null;
   scopes: ApiScope[];
@@ -45,6 +47,34 @@ async function resolveApiPrincipal(request: Request): Promise<ApiPrincipal | nul
   const authorization = request.headers.get("authorization");
   const token = authorization?.startsWith("Bearer ") ? authorization.slice(7).trim() : null;
   if (!token) return null;
+  if (supabaseAuthConfigured() && token.split(".").length === 3) {
+    const supabase = createSupabaseBearerClient(token);
+    const { data, error } = await supabase.auth.getClaims(token);
+    const subject = typeof data?.claims?.sub === "string" ? data.claims.sub : null;
+    const sessionId = typeof data?.claims?.session_id === "string" ? data.claims.session_id : null;
+    if (error || !subject || !sessionId) return null;
+    const requestedOrganization = request.headers.get("x-organization-id")?.trim();
+    const [context] = await db().select({ activeOrganizationId: sessions.activeOrganizationId })
+      .from(sessions).innerJoin(users, eq(users.id, sessions.userId))
+      .where(and(eq(users.supabaseUserId, subject), eq(sessions.supabaseSessionId, sessionId), isNull(sessions.revokedAt))).limit(1);
+    const memberships = await db().select({ userId: users.id, organizationId: organizationMembers.organizationId, role: organizationMembers.role })
+      .from(users).innerJoin(organizationMembers, eq(organizationMembers.userId, users.id))
+      .innerJoin(organizations, eq(organizations.id, organizationMembers.organizationId))
+      .where(and(
+        eq(users.supabaseUserId, subject),
+        requestedOrganization ? eq(organizationMembers.organizationId, requestedOrganization) : context?.activeOrganizationId ? eq(organizationMembers.organizationId, context.activeOrganizationId) : undefined,
+        activeMembership(),
+      )).limit(requestedOrganization || context?.activeOrganizationId ? 1 : 2);
+    if (memberships.length !== 1) return null;
+    const identity = memberships[0];
+    const scopes = identity.role === "owner" || identity.role === "admin"
+      ? ALL_API_SCOPES.slice()
+      : identity.role === "developer"
+        ? normalizeApiScopes(["agents:read", "agents:write", "chat:write", "conversations:read", "conversations:write", "events:read", "events:write", "files:read", "files:write", "runs:read", "runs:write", "integrations:read", "providers:read", "mcp:read", "teams:read"])
+        : normalizeApiScopes(["agents:read", "chat:write", "conversations:read", "conversations:write", "events:read", "files:read", "files:write", "runs:read", "runs:write", "teams:read"]);
+    return { organizationId: identity.organizationId, apiKeyId: sessionId, principalId: sessionId, kind: "supabase_user", userId: identity.userId, role: identity.role, scopes };
+  }
+
   const tokenHash = hashApiKey(token);
   const [key] = await db().select().from(platformApiKeys).where(eq(platformApiKeys.keyHash, tokenHash)).limit(1);
   if (key && !key.revoked && (!key.expiresAt || key.expiresAt > new Date())) {
@@ -64,6 +94,7 @@ async function resolveApiPrincipal(request: Request): Promise<ApiPrincipal | nul
     };
   }
 
+  if (supabaseAuthConfigured()) return null;
   const [mobile] = await db().select({
     id: mobileSessions.id,
     userId: mobileSessions.userId,

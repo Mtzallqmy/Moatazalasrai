@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import { TurnstileWidget } from "@/components/turnstile-widget";
 
@@ -19,12 +19,14 @@ function validationMessage(result: unknown) {
   return null;
 }
 
-export function AuthForm({ mode, turnstileSiteKey }: { mode: Mode; turnstileSiteKey?: string }) {
+export function AuthForm({ mode, turnstileSiteKey, googleEnabled = false }: { mode: Mode; turnstileSiteKey?: string; googleEnabled?: boolean }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mfaRequired, setMfaRequired] = useState(false);
   const [turnstileReset, setTurnstileReset] = useState(0);
+  const [turnstileReady, setTurnstileReady] = useState(!turnstileSiteKey);
+  const handleTurnstileStatus = useCallback((ready: boolean) => setTurnstileReady(ready), []);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -44,11 +46,17 @@ export function AuthForm({ mode, turnstileSiteKey }: { mode: Mode; turnstileSite
         if (mode === "login" && result?.error?.code === "MFA_REQUIRED") {
           setMfaRequired(true);
           setTurnstileReset((value) => value + 1);
+          setTurnstileReady(false);
           setError("أدخل رمز تطبيق المصادقة أو أحد رموز الاسترداد.");
           return;
         }
         setTurnstileReset((value) => value + 1);
+        setTurnstileReady(false);
         throw new Error(validationMessage(result) ?? result?.error?.message ?? "تعذر إكمال العملية.");
+      }
+      if (result?.data?.confirmationRequired) {
+        setError("أُرسل رابط تأكيد إلى بريدك. افتحه لإكمال التسجيل.");
+        return;
       }
       setMfaRequired(false);
       router.push(result?.data?.organizationSelectionRequired ? "/select-organization" : "/dashboard");
@@ -61,7 +69,15 @@ export function AuthForm({ mode, turnstileSiteKey }: { mode: Mode; turnstileSite
   }
 
   return (
-    <form onSubmit={submit} className="space-y-5">
+    <div className="space-y-5">
+      {googleEnabled ? (
+        <a href="/api/auth/oauth/google" className="flex w-full items-center justify-center gap-3 rounded-2xl border border-stone-700 bg-white px-4 py-3 font-bold text-stone-900 transition hover:bg-stone-100 focus:outline-none focus:ring-4 focus:ring-emerald-100/20">
+          <span aria-hidden="true" className="font-latin text-lg">G</span>
+          {mode === "login" ? "الدخول باستخدام Google" : "التسجيل باستخدام Google"}
+        </a>
+      ) : null}
+      {googleEnabled ? <div className="flex items-center gap-3 text-xs text-stone-500"><span className="h-px flex-1 bg-stone-800" /><span>أو بالبريد الإلكتروني</span><span className="h-px flex-1 bg-stone-800" /></div> : null}
+      <form onSubmit={submit} className="space-y-5">
       {mode === "register" && (
         <Field name="name" label="الاسم الكامل" minLength={2} maxLength={100} autoComplete="name" />
       )}
@@ -79,14 +95,15 @@ export function AuthForm({ mode, turnstileSiteKey }: { mode: Mode; turnstileSite
           autoFocus
         />
       ) : null}
-      {turnstileSiteKey ? <TurnstileWidget key={`${mode}-${turnstileReset}`} siteKey={turnstileSiteKey} action={mode} /> : null}
+      {turnstileSiteKey ? <TurnstileWidget key={`${mode}-${turnstileReset}`} siteKey={turnstileSiteKey} action={mode} onStatusChange={handleTurnstileStatus} /> : null}
 
       {error && <p role="alert" className="rounded-2xl border border-rose-200/20 bg-rose-200/10 px-4 py-3 text-sm text-rose-100">{error}</p>}
 
-      <button disabled={loading} className="primary-button w-full disabled:cursor-not-allowed disabled:opacity-60">
-        {loading ? "جارٍ التنفيذ..." : mfaRequired ? "تحقق وسجّل الدخول" : mode === "login" ? "تسجيل الدخول" : "إنشاء حساب مستخدم"}
+      <button disabled={loading || !turnstileReady} className="primary-button w-full disabled:cursor-not-allowed disabled:opacity-60">
+        {loading ? "جارٍ التنفيذ..." : !turnstileReady ? "انتظر التحقق الأمني…" : mfaRequired ? "تحقق وسجّل الدخول" : mode === "login" ? "تسجيل الدخول" : "إنشاء حساب مستخدم"}
       </button>
-    </form>
+      </form>
+    </div>
   );
 }
 

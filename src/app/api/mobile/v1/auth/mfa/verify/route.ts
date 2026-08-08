@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { mobileMe } from "@/lib/auth/mobile";
 import { verifyMobileMfaChallenge } from "@/lib/auth/mobile-mfa";
-import { apiSuccess, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
+import { apiSuccess, ApiError, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { enforceRateLimit, requestClientKey } from "@/lib/security/rate-limit";
+import { supabaseAuthConfigured } from "@/lib/supabase/config";
 
 const schema = z.object({
   challengeToken: z.string().trim().min(20).max(200),
@@ -12,6 +13,7 @@ const schema = z.object({
 export async function POST(request: Request) {
   const requestId = getRequestId(request);
   try {
+    if (supabaseAuthConfigured()) throw new ApiError(410, "SUPABASE_AUTH_REQUIRED", "أكمل MFA من خلال Supabase Auth SDK.");
     const body = await parseJson(request, schema, 4 * 1024);
     await enforceRateLimit({ scope: "mobile.mfa.verify.ip", key: requestClientKey(request), limit: 15, windowMs: 15 * 60_000 });
     await enforceRateLimit({ scope: "mobile.mfa.verify.challenge", key: body.challengeToken.slice(0, 32), limit: 8, windowMs: 15 * 60_000 });

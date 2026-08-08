@@ -170,6 +170,22 @@ export function getPostgresPool(): Pool {
   return getSystemPostgresPool();
 }
 
+export function postgresPoolSnapshot() {
+  const entries = [
+    ["system", globalForPostgres.__moatazPostgresSystemPool],
+    ["tenant", globalForPostgres.__moatazPostgresTenantPool],
+    ["platform", globalForPostgres.__moatazPostgresPlatformPool],
+    ["worker", globalForPostgres.__moatazPostgresWorkerPool],
+  ] as const;
+  return entries.flatMap(([name, pool]) => pool ? [{
+    name,
+    total: pool.totalCount,
+    idle: pool.idleCount,
+    waiting: pool.waitingCount,
+    max: pool.options.max,
+  }] : []);
+}
+
 export async function closePostgresPool() {
   const pools = [
     globalForPostgres.__moatazPostgresSystemPool,

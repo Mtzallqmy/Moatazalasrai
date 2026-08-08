@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { ExecutionKernelConsole } from "@/components/execution-kernel-console";
+import { DashboardShell } from "@/components/dashboard-shell";
 import { requireSession } from "@/lib/auth/authorization";
 import { loadCustomPermissions } from "@/lib/auth/custom-permissions";
 import { can } from "@/lib/auth/permissions";
@@ -18,5 +19,9 @@ export default async function ExecutionsPage() {
     page: 1,
     limit: 25,
   });
-  return <ExecutionKernelConsole initialJobs={initial.rows} canRun={canRun} />;
+  return (
+    <DashboardShell session={session} activePath="/dashboard/executions" title="Execution Kernel" description="تشغيلات معزولة قابلة للتتبع والإلغاء مع أحداث ونتائج محفوظة.">
+      <ExecutionKernelConsole initialJobs={initial.rows} canRun={canRun} />
+    </DashboardShell>
+  );
 }

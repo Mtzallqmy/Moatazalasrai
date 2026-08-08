@@ -6,6 +6,7 @@ import { issueMobileSession } from "@/lib/auth/mobile";
 import { hashPassword } from "@/lib/auth/password";
 import { ApiError, apiSuccess, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { enforceRateLimit, requestClientKey } from "@/lib/security/rate-limit";
+import { supabaseAuthConfigured } from "@/lib/supabase/config";
 
 export const runtime = "nodejs";
 
@@ -21,6 +22,7 @@ const schema = z.object({
 export async function POST(request: Request) {
   const requestId = getRequestId(request);
   try {
+    if (supabaseAuthConfigured()) throw new ApiError(410, "SUPABASE_AUTH_REQUIRED", "سجّل الحساب بواسطة Supabase Auth ثم تحقق من جلسة التطبيق.");
     const body = await parseJson(request, schema, 16 * 1024);
     const clientKey = requestClientKey(request);
     await enforceRateLimit({ scope: "mobile.register.ip", key: clientKey, limit: 5, windowMs: 60 * 60_000 });

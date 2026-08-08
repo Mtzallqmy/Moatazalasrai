@@ -1,7 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { createServerClient } from "@supabase/ssr";
 import { isPuterEnabled } from "@/lib/puter/feature";
+import { supabaseAuthConfigured } from "@/lib/supabase/config";
 
-export function proxy(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const requestHeaders = new Headers(request.headers);
   const nonce = btoa(crypto.randomUUID());
   const existing = requestHeaders.get("x-request-id");
@@ -12,7 +14,25 @@ export function proxy(request: NextRequest) {
   requestHeaders.set("x-nonce", nonce);
   const cfRay = request.headers.get("cf-ray")?.trim();
   if (cfRay && /^[a-zA-Z0-9-]{1,100}$/.test(cfRay)) requestHeaders.set("x-cf-ray", cfRay);
-  const response = NextResponse.next({ request: { headers: requestHeaders } });
+  let response = NextResponse.next({ request: { headers: requestHeaders } });
+  if (supabaseAuthConfigured()) {
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+      {
+        cookies: {
+          getAll: () => request.cookies.getAll(),
+          setAll(values, headers) {
+            values.forEach(({ name, value }) => request.cookies.set(name, value));
+            response = NextResponse.next({ request: { headers: requestHeaders } });
+            values.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
+            Object.entries(headers).forEach(([name, value]) => response.headers.set(name, value));
+          },
+        },
+      },
+    );
+    await supabase.auth.getClaims();
+  }
   response.headers.set("x-request-id", requestId);
   response.headers.set("content-security-policy", [
     "default-src 'self'",
@@ -24,7 +44,7 @@ export function proxy(request: NextRequest) {
     "font-src 'self' data:",
     "style-src 'self' 'unsafe-inline'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' https://challenges.cloudflare.com${process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""}`,
-    `connect-src 'self' https://api.openai.com https://api.anthropic.com https://generativelanguage.googleapis.com https://challenges.cloudflare.com${isPuterEnabled() ? " https://api.puter.com wss://api.puter.com" : ""}`,
+    `connect-src 'self' https://api.openai.com https://api.anthropic.com https://generativelanguage.googleapis.com https://challenges.cloudflare.com${process.env.NEXT_PUBLIC_SUPABASE_URL ? ` ${new URL(process.env.NEXT_PUBLIC_SUPABASE_URL).origin}` : ""}${isPuterEnabled() ? " https://api.puter.com wss://api.puter.com" : ""}`,
     "frame-src https://challenges.cloudflare.com",
     ...(process.env.NODE_ENV === "production" ? ["upgrade-insecure-requests"] : []),
   ].join("; "));

@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { providerCredentialHealthEvents } from "@/db/provider-health-schema";
 import {
@@ -423,6 +423,13 @@ export async function prepareAgentRun(input: {
 
   const context = await contextMessages(conversation.id, version.instructions, version.maxOutputTokens, input.media);
   const [run] = await db().transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${conversation.id}, 0))`);
+    const [activeRun] = await tx.select({ id: runs.id }).from(runs).where(and(
+      eq(runs.organizationId, input.organizationId),
+      eq(runs.conversationId, conversation.id),
+      inArray(runs.status, ["queued", "running", "waiting_approval"]),
+    )).limit(1);
+    if (activeRun) throw new ApiError(409, "RUN_ALREADY_ACTIVE", "يوجد رد قيد التنفيذ لهذه المحادثة. أوقفه أو انتظر اكتماله قبل إرسال طلب جديد.");
     const [created] = await tx.insert(runs).values({
       organizationId: input.organizationId,
       agentId: agent.id,

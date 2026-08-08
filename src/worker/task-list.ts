@@ -20,8 +20,10 @@ import { sandboxResetTask } from "@/worker/tasks/sandbox-reset";
 import { sandboxResumeTask } from "@/worker/tasks/sandbox-resume";
 import { telegramUpdateProcessTask } from "@/worker/tasks/telegram-update-process";
 import { whatsappChannelUpdateTask } from "@/worker/tasks/whatsapp-channel-update";
+import { attachmentProcessTask } from "@/worker/tasks/attachment-process";
 
 export const taskList = {
+  "attachment-process": attachmentProcessTask,
   "agent-run-resume": agentRunResumeTask,
   "agent-team-run": agentTeamRunTask,
   "browser-task-execute": browserTaskExecuteTask,

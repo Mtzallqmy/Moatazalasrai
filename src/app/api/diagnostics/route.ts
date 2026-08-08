@@ -1,6 +1,7 @@
 import { and, count, eq, gte, inArray, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { db } from "@/db";
+import { postgresPoolSnapshot } from "@/db/pool";
 import { integrations, providerCredentials, runs } from "@/db/schema";
 import { currentSession } from "@/lib/auth/session";
 import { env } from "@/lib/config/env";
@@ -68,6 +69,7 @@ export async function GET(request: Request) {
       { status: 403 },
     );
   }
+  const organizationId = session.organizationId;
 
   const checks = await Promise.all([
     runCheck("runtime-environment", () => {
@@ -77,6 +79,11 @@ export async function GET(request: Request) {
     runCheck("database", async () => {
       await db().execute(sql`select 1`);
       return "PostgreSQL متاح ويستجيب";
+    }),
+    runCheck("database-pool", () => {
+      const pools = postgresPoolSnapshot();
+      if (pools.some((pool) => pool.waiting > 0)) throw new Error(`طلبات تنتظر اتصالًا: ${pools.map((pool) => `${pool.name}=${pool.waiting}`).join(", ")}`);
+      return pools.map((pool) => `${pool.name}: ${pool.total}/${pool.max} total, ${pool.idle} idle`).join("; ") || "لم يُنشأ pool بعد";
     }),
     runCheck("cloudflare-features", async () => {
       const gateway = await llmGateway.reachability();
@@ -96,18 +103,18 @@ export async function GET(request: Request) {
     }),
     runCheck("encryption", () => {
       const sample = `diagnostic-${crypto.randomUUID()}`;
-      const context = `diagnostics:${session.organizationId}`;
+      const context = `diagnostics:${organizationId}`;
       const envelope = encryptSecret(sample, context);
       if (decryptSecret(envelope, context) !== sample) throw new Error("فشل تحقق التشفير");
       return "AES-256-GCM يعمل بصورة صحيحة";
     }),
     runCheck("session", () => `جلسة صالحة للمستخدم ${session.email}`),
-    runCheck("tenant-scope", () => `المؤسسة الحالية: ${session.organizationId}`),
+    runCheck("tenant-scope", () => `المؤسسة الحالية: ${organizationId}`),
     runCheck("providers", async () => {
       const [totalRows, degradedRows] = await Promise.all([
-        db().select({ value: count() }).from(providerCredentials).where(eq(providerCredentials.organizationId, session.organizationId)),
+        db().select({ value: count() }).from(providerCredentials).where(eq(providerCredentials.organizationId, organizationId)),
         db().select({ value: count() }).from(providerCredentials).where(and(
-          eq(providerCredentials.organizationId, session.organizationId),
+          eq(providerCredentials.organizationId, organizationId),
           inArray(providerCredentials.validationStatus, ["pending", "failed"]),
         )),
       ]);
@@ -115,9 +122,9 @@ export async function GET(request: Request) {
     }),
     runCheck("integrations", async () => {
       const [totalRows, failedRows] = await Promise.all([
-        db().select({ value: count() }).from(integrations).where(eq(integrations.organizationId, session.organizationId)),
+        db().select({ value: count() }).from(integrations).where(eq(integrations.organizationId, organizationId)),
         db().select({ value: count() }).from(integrations).where(and(
-          eq(integrations.organizationId, session.organizationId),
+          eq(integrations.organizationId, organizationId),
           eq(integrations.status, "failed"),
         )),
       ]);
@@ -126,9 +133,9 @@ export async function GET(request: Request) {
     runCheck("runs-24h", async () => {
       const since = new Date(Date.now() - 24 * 60 * 60_000);
       const [totalRows, failedRows] = await Promise.all([
-        db().select({ value: count() }).from(runs).where(and(eq(runs.organizationId, session.organizationId), gte(runs.createdAt, since))),
+        db().select({ value: count() }).from(runs).where(and(eq(runs.organizationId, organizationId), gte(runs.createdAt, since))),
         db().select({ value: count() }).from(runs).where(and(
-          eq(runs.organizationId, session.organizationId),
+          eq(runs.organizationId, organizationId),
           gte(runs.createdAt, since),
           inArray(runs.status, ["failed", "cancelled"]),
         )),

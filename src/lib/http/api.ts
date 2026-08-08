@@ -27,8 +27,9 @@ function rememberRequest(request: Request, requestId: string) {
   });
 }
 
-function logCompletion(requestId: string, status: number) {
+export function completeRequestTiming(requestId: string, status: number, metrics: Record<string, number | string | boolean | null> = {}) {
   const timing = requestTimings.get(requestId);
+  if (!timing) return;
   requestTimings.delete(requestId);
   console.log(JSON.stringify({
     level: status >= 500 ? "error" : status >= 400 ? "warn" : "info",
@@ -38,6 +39,7 @@ function logCompletion(requestId: string, status: number) {
     status,
     durationMs: timing ? Math.max(0, Math.round(performance.now() - timing.startedAt)) : null,
     ...(timing?.cfRay ? { cfRay: timing.cfRay } : {}),
+    ...metrics,
   }));
 }
 
@@ -56,7 +58,7 @@ function responseHeaders(requestId: string) {
 }
 
 export function apiSuccess<T>(data: T, requestId: string, status = 200, meta?: Record<string, unknown>) {
-  logCompletion(requestId, status);
+  completeRequestTiming(requestId, status);
   return NextResponse.json(
     { success: true as const, data, meta: { requestId, ...meta } },
     { status, headers: responseHeaders(requestId) },
@@ -70,7 +72,7 @@ export function apiFailure(
   requestId: string,
   details?: unknown,
 ) {
-  logCompletion(requestId, status);
+  completeRequestTiming(requestId, status);
   const descriptor = errorDescriptor(code);
   return NextResponse.json(
     {
