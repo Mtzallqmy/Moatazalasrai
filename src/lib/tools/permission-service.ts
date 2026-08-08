@@ -1,7 +1,8 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { featureFlags, platformModules } from "@/db/control-plane-schema";
-import { can, type Role } from "@/lib/auth/permissions";
+import { loadCustomPermissions } from "@/lib/auth/custom-permissions";
+import { can, type Permission, type Role } from "@/lib/auth/permissions";
 import type { ToolManifest } from "./contracts";
 
 function booleanEnv(name: string): boolean {
@@ -16,6 +17,7 @@ export type ToolAvailability = {
 
 export async function getToolAvailability(input: {
   organizationId: string;
+  userId: string;
   role: Role;
   manifest: ToolManifest;
   runnerHealthy?: boolean;
@@ -23,7 +25,7 @@ export async function getToolAvailability(input: {
   migrationsApplied?: boolean;
 }): Promise<ToolAvailability> {
   const reasons: string[] = [];
-  const [moduleRow, flagRow] = await Promise.all([
+  const [moduleRow, flagRow, customPermissions] = await Promise.all([
     db().select({ status: platformModules.status }).from(platformModules).where(and(
       eq(platformModules.organizationId, input.organizationId),
       eq(platformModules.key, input.manifest.requiredModule),
@@ -32,11 +34,13 @@ export async function getToolAvailability(input: {
       eq(featureFlags.organizationId, input.organizationId),
       eq(featureFlags.key, input.manifest.id),
     )).limit(1),
+    loadCustomPermissions(input.organizationId, input.userId),
   ]);
 
+  const allowed = (permission: Permission) => can(input.role, permission) || customPermissions.includes(permission);
   if (!booleanEnv("TOOLS_RUNTIME_ENABLED")) reasons.push("TOOLS_RUNTIME_DISABLED");
   if (!booleanEnv(input.manifest.featureFlag)) reasons.push("TOOL_FEATURE_DISABLED");
-  if (!can(input.role, "tools:read") || !can(input.role, input.manifest.requiredPermission)) reasons.push("PERMISSION_DENIED");
+  if (!allowed("tools:read") || !allowed(input.manifest.requiredPermission)) reasons.push("PERMISSION_DENIED");
   if (moduleRow[0]?.status !== "active") reasons.push("MODULE_DISABLED");
   if (flagRow[0]?.enabled !== true) reasons.push("ORGANIZATION_FLAG_DISABLED");
   if (input.migrationsApplied !== true) reasons.push("MIGRATIONS_NOT_VERIFIED");
@@ -45,7 +49,7 @@ export async function getToolAvailability(input: {
 
   return {
     visible: reasons.length === 0,
-    runnable: reasons.length === 0 && can(input.role, "tools:run"),
+    runnable: reasons.length === 0 && allowed("tools:run"),
     reasons,
   };
 }
