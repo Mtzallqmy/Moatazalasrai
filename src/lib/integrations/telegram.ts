@@ -15,6 +15,16 @@ export type TelegramBot = {
   first_name: string;
 };
 
+export type TelegramWebhookInfo = {
+  url: string;
+  has_custom_certificate?: boolean;
+  pending_update_count?: number;
+  last_error_date?: number;
+  last_error_message?: string;
+  max_connections?: number;
+  allowed_updates?: string[];
+};
+
 export type TelegramInlineButton = {
   title: string;
   id?: string;
@@ -32,6 +42,14 @@ export const CENTRAL_TELEGRAM_COMMANDS = [
   { command: "approvals", description: "عرض الموافقات المعلقة" },
   { command: "cancel", description: "إلغاء العملية الحالية" },
   { command: "unlink", description: "فصل حساب Telegram" },
+] as const;
+
+export const CHANNEL_TELEGRAM_COMMANDS = [
+  { command: "start", description: "بدء المحادثة مع وكيل المنصة" },
+  { command: "help", description: "عرض طريقة استخدام البوت" },
+  { command: "new", description: "بدء محادثة جديدة" },
+  { command: "human", description: "طلب التحويل لموظف" },
+  { command: "status", description: "عرض حالة القناة" },
 ] as const;
 
 async function telegramCall<T>(
@@ -73,15 +91,50 @@ export function configureTelegramWebhook(input: {
     secret_token: input.secretToken,
     allowed_updates: ["message", "edited_message", "callback_query"],
     drop_pending_updates: false,
+    max_connections: 40,
+  });
+}
+
+export function getTelegramWebhookInfo(token: string) {
+  return telegramCall<TelegramWebhookInfo>(token, "getWebhookInfo");
+}
+
+function registerTelegramCommands(token: string, commands: readonly { command: string; description: string }[]) {
+  return telegramCall<boolean>(token, "setMyCommands", {
+    commands,
+    scope: { type: "all_private_chats" },
+    language_code: "ar",
   });
 }
 
 export function registerCentralTelegramCommands(token: string) {
-  return telegramCall<boolean>(token, "setMyCommands", {
-    commands: CENTRAL_TELEGRAM_COMMANDS,
-    scope: { type: "all_private_chats" },
-    language_code: "ar",
-  });
+  return registerTelegramCommands(token, CENTRAL_TELEGRAM_COMMANDS);
+}
+
+export function registerChannelTelegramCommands(token: string) {
+  return registerTelegramCommands(token, CHANNEL_TELEGRAM_COMMANDS);
+}
+
+export async function configureAndVerifyTelegramWebhook(input: {
+  token: string;
+  url: string;
+  secretToken: string;
+  mode: "central" | "channel";
+}) {
+  await configureTelegramWebhook(input);
+  if (input.mode === "central") await registerCentralTelegramCommands(input.token);
+  else await registerChannelTelegramCommands(input.token);
+  const info = await getTelegramWebhookInfo(input.token);
+  if (info.url !== input.url) {
+    throw new ApiError(502, "TELEGRAM_WEBHOOK_URL_MISMATCH", "لم يؤكد Telegram عنوان Webhook المطلوب.");
+  }
+  const allowed = new Set(info.allowed_updates ?? []);
+  for (const update of ["message", "edited_message", "callback_query"]) {
+    if (!allowed.has(update)) {
+      throw new ApiError(502, "TELEGRAM_WEBHOOK_UPDATES_INCOMPLETE", "Webhook في Telegram لا يقبل جميع أنواع الرسائل المطلوبة.");
+    }
+  }
+  return info;
 }
 
 export function sendTelegramMessage(input: {
