@@ -10,10 +10,15 @@ import * as toolRunSchema from "./tool-run-schema";
 
 const schema = { ...coreSchema, ...channelSchema, ...controlPlaneSchema, ...adminSchema, ...executionSchema, ...fileIntelligenceSchema, ...toolRunSchema };
 type DatabaseSchema = typeof schema;
-let database: ReturnType<typeof drizzle<DatabaseSchema>> | null = null;
+type DatabaseClient = ReturnType<typeof drizzle<DatabaseSchema>>;
+const databasesByPool = new WeakMap<object, DatabaseClient>();
 
 export function db() {
-  database ??= drizzle(getPostgresPool(), { schema });
+  const pool = getPostgresPool();
+  const existing = databasesByPool.get(pool);
+  if (existing) return existing;
+  const database = drizzle(pool, { schema });
+  databasesByPool.set(pool, database);
   return database;
 }
 
