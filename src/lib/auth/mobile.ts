@@ -1,7 +1,9 @@
 import { randomBytes } from "node:crypto";
+import type { PoolClient } from "pg";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { mobileSessions, organizationMembers, organizations, users } from "@/db/schema";
+import { getPostgresPool } from "@/db/pool";
 import { ApiError } from "@/lib/http/api";
 import { hashApiKey } from "@/lib/security/encryption";
 
@@ -16,50 +18,70 @@ function expiresIn(ms: number) {
   return new Date(Date.now() + ms);
 }
 
-export async function issueMobileSession(input: {
+type IssueMobileSessionInput = {
   userId: string;
   organizationId: string;
   deviceId: string;
   deviceName?: string;
   rememberSession?: boolean;
-}) {
+};
+
+function mobileSessionMaterial(input: IssueMobileSessionInput) {
   const accessToken = token("mat");
   const refreshToken = token("mrt");
   const accessExpiresAt = expiresIn(ACCESS_MINUTES * 60_000);
   const refreshDays = input.rememberSession === false ? 1 : REFRESH_DAYS;
   const refreshExpiresAt = expiresIn(refreshDays * 24 * 60 * 60_000);
-  const [session] = await db().insert(mobileSessions).values({
-    userId: input.userId,
-    organizationId: input.organizationId,
-    accessTokenHash: hashApiKey(accessToken),
-    accessExpiresAt,
-    refreshTokenHash: hashApiKey(refreshToken),
-    refreshExpiresAt,
-    deviceId: input.deviceId,
-    deviceName: input.deviceName,
-  }).onConflictDoUpdate({
-    target: [mobileSessions.userId, mobileSessions.deviceId],
-    set: {
-      organizationId: input.organizationId,
-      accessTokenHash: hashApiKey(accessToken),
-      accessExpiresAt,
-      refreshTokenHash: hashApiKey(refreshToken),
-      refreshExpiresAt,
-      deviceName: input.deviceName,
-      revokedAt: null,
-      lastUsedAt: new Date(),
-      updatedAt: new Date(),
-    },
-  }).returning({ id: mobileSessions.id });
+  return { accessToken, refreshToken, accessExpiresAt, refreshExpiresAt, refreshDays };
+}
+
+export async function issueMobileSessionWithClient(client: PoolClient, input: IssueMobileSessionInput) {
+  const material = mobileSessionMaterial(input);
+  const result = await client.query<{ id: string }>(`
+    INSERT INTO mobile_sessions (
+      user_id, organization_id, access_token_hash, access_expires_at,
+      refresh_token_hash, refresh_expires_at, device_id, device_name
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    ON CONFLICT (user_id, device_id) DO UPDATE SET
+      organization_id = EXCLUDED.organization_id,
+      access_token_hash = EXCLUDED.access_token_hash,
+      access_expires_at = EXCLUDED.access_expires_at,
+      refresh_token_hash = EXCLUDED.refresh_token_hash,
+      refresh_expires_at = EXCLUDED.refresh_expires_at,
+      device_name = EXCLUDED.device_name,
+      revoked_at = NULL,
+      last_used_at = now(),
+      updated_at = now()
+    RETURNING id
+  `, [
+    input.userId,
+    input.organizationId,
+    hashApiKey(material.accessToken),
+    material.accessExpiresAt,
+    hashApiKey(material.refreshToken),
+    material.refreshExpiresAt,
+    input.deviceId,
+    input.deviceName ?? null,
+  ]);
+  const session = result.rows[0];
   if (!session) throw new Error("MOBILE_SESSION_CREATE_FAILED");
   return {
     sessionId: session.id,
-    accessToken,
-    refreshToken,
+    accessToken: material.accessToken,
+    refreshToken: material.refreshToken,
     tokenType: "Bearer" as const,
     expiresIn: ACCESS_MINUTES * 60,
-    refreshExpiresIn: refreshDays * 24 * 60 * 60,
+    refreshExpiresIn: material.refreshDays * 24 * 60 * 60,
   };
+}
+
+export async function issueMobileSession(input: IssueMobileSessionInput) {
+  const client = await getPostgresPool().connect();
+  try {
+    return await issueMobileSessionWithClient(client, input);
+  } finally {
+    client.release();
+  }
 }
 
 export async function rotateMobileSession(refreshToken: string) {

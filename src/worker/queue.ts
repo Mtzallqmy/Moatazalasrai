@@ -1,5 +1,5 @@
 import { makeWorkerUtils, type WorkerUtils } from "graphile-worker";
-import { getPostgresPool } from "@/db/pool";
+import { getPostgresPool, getSystemPostgresPool } from "@/db/pool";
 import type {
   AgentRunResumePayload,
   AgentTeamRunPayload,
@@ -17,21 +17,27 @@ import type {
   WhatsAppChannelUpdatePayload,
 } from "@/worker/schemas";
 
-let workerUtilsPromise: Promise<WorkerUtils> | null = null;
+let integrationWorkerUtilsPromise: Promise<WorkerUtils> | null = null;
 
+/**
+ * Integration-test compatibility only. Production enqueue paths below use the
+ * SECURITY DEFINER boundary instead of exposing Graphile Worker internals to
+ * the tenant/application database role.
+ */
 export function getWorkerUtils() {
-  if (!workerUtilsPromise) {
-    workerUtilsPromise = makeWorkerUtils({ pgPool: getPostgresPool() }).catch((error) => {
-      workerUtilsPromise = null;
-      throw error;
-    });
+  if (process.env.NODE_ENV !== "test") {
+    throw new Error("WORKER_UTILS_TEST_ONLY");
   }
-  return workerUtilsPromise;
+  integrationWorkerUtilsPromise ??= makeWorkerUtils({ pgPool: getSystemPostgresPool() }).catch((error) => {
+    integrationWorkerUtilsPromise = null;
+    throw error;
+  });
+  return integrationWorkerUtilsPromise;
 }
 
 export async function releaseWorkerUtils() {
-  const promise = workerUtilsPromise;
-  workerUtilsPromise = null;
+  const promise = integrationWorkerUtilsPromise;
+  integrationWorkerUtilsPromise = null;
   if (promise) await (await promise).release();
 }
 
@@ -42,15 +48,30 @@ async function addJob(name: string, payload: unknown, options: {
   jobKeyMode?: "replace" | "preserve_run_at" | "unsafe_dedupe";
   runAt?: Date;
 }) {
-  const worker = await getWorkerUtils();
-  const job = await worker.addJob(name, payload, {
-    queueName: options.queueName,
-    maxAttempts: options.maxAttempts ?? 5,
-    jobKey: options.jobKey,
-    jobKeyMode: options.jobKeyMode ?? "unsafe_dedupe",
-    runAt: options.runAt,
-  });
-  return { jobId: String(job.id) };
+  const result = await getPostgresPool().query<{ id: string }>(`
+    SELECT app_security.enqueue_job(
+      $1::text,
+      $2::json,
+      $3::text,
+      $4::timestamptz,
+      $5::integer,
+      $6::text,
+      $7::integer,
+      $8::text
+    )::text AS id
+  `, [
+    name,
+    JSON.stringify(payload),
+    options.queueName,
+    options.runAt ?? new Date(),
+    options.maxAttempts ?? 5,
+    options.jobKey,
+    0,
+    options.jobKeyMode ?? "unsafe_dedupe",
+  ]);
+  const jobId = result.rows[0]?.id;
+  if (!jobId) throw new Error("GRAPHILE_JOB_ENQUEUE_FAILED");
+  return { jobId };
 }
 
 export function enqueueAgentTeamRun(payload: AgentTeamRunPayload) {
@@ -70,7 +91,13 @@ export function enqueueNotificationDispatch(payload: NotificationDispatchPayload
 }
 
 export function enqueueTelegramUpdate(payload: TelegramUpdatePayload) {
-  return addJob("telegram-update-process", payload, { queueName: "telegram-central", maxAttempts: 5, jobKey: `telegram-update:${payload.updateId}`, jobKeyMode: "unsafe_dedupe" });
+  const scope = payload.integrationId ?? "central";
+  return addJob("telegram-update-process", payload, {
+    queueName: payload.organizationId ? `telegram:${payload.organizationId}` : "telegram-central",
+    maxAttempts: 5,
+    jobKey: `telegram-update:${scope}:${payload.updateId}`,
+    jobKeyMode: "unsafe_dedupe",
+  });
 }
 
 export function enqueueWhatsAppChannelUpdate(payload: WhatsAppChannelUpdatePayload) {

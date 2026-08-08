@@ -48,7 +48,6 @@ const commonPolicy = {
 };
 
 export const whatsappPolicyUpdateSchema = z.discriminatedUnion("scope", [
-  z.object({ scope: z.literal("platform"), defaultOrganizationId: optionalUuid, ...commonPolicy }).strict(),
   z.object({ scope: z.literal("organization"), ...commonPolicy }).strict(),
   z.object({ scope: z.literal("user"), userId: uuid, ...commonPolicy }).strict(),
 ]);
@@ -166,52 +165,6 @@ export async function updateWhatsAppPolicy(input: {
   actorRole: string;
   update: PolicyUpdate;
 }) {
-  if (input.update.scope === "platform") {
-    if (input.actorRole !== "owner") throw new ApiError(403, "OWNER_REQUIRED", "إعدادات واتساب الافتراضية للمنصة تتطلب دور المالك.");
-    await validateReferences(input.organizationId, input.update);
-    const patch = values(input.update, input.actorUserId);
-    const [row] = await db().insert(platformWhatsAppDefaults).values({
-      id: "primary",
-      defaultAgentId: input.update.agentId ?? null,
-      defaultProviderCredentialId: input.update.providerCredentialId ?? null,
-      defaultModel: input.update.modelId ?? null,
-      defaultPermissions: input.update.permissions ?? ["ai.chat", "agent.use", "conversation.open"],
-      defaultAllowedTools: input.update.allowedTools ?? [],
-      defaultAllowedActions: input.update.allowedActions ?? [],
-      monthlyLimit: input.update.monthlyLimit ?? null,
-      autoReplyEnabled: input.update.autoReplyEnabled ?? true,
-      humanHandoffEnabled: input.update.humanHandoffEnabled ?? true,
-      memoryEnabled: input.update.memoryEnabled ?? true,
-      filesEnabled: input.update.filesEnabled ?? true,
-      updatedByUserId: input.actorUserId,
-      updatedAt: new Date(),
-    }).onConflictDoUpdate({
-      target: platformWhatsAppDefaults.id,
-      set: {
-        ...(patch.agentId !== undefined ? { defaultAgentId: patch.agentId } : {}),
-        ...(patch.providerCredentialId !== undefined ? { defaultProviderCredentialId: patch.providerCredentialId } : {}),
-        ...(patch.modelId !== undefined ? { defaultModel: patch.modelId } : {}),
-        ...(patch.permissions !== undefined ? { defaultPermissions: patch.permissions } : {}),
-        ...(patch.allowedTools !== undefined ? { defaultAllowedTools: patch.allowedTools } : {}),
-        ...(patch.allowedActions !== undefined ? { defaultAllowedActions: patch.allowedActions } : {}),
-        ...(patch.monthlyLimit !== undefined ? { monthlyLimit: patch.monthlyLimit } : {}),
-        ...(patch.autoReplyEnabled !== undefined ? { autoReplyEnabled: patch.autoReplyEnabled ?? true } : {}),
-        ...(patch.humanHandoffEnabled !== undefined ? { humanHandoffEnabled: patch.humanHandoffEnabled ?? true } : {}),
-        ...(patch.memoryEnabled !== undefined ? { memoryEnabled: patch.memoryEnabled ?? true } : {}),
-        ...(patch.filesEnabled !== undefined ? { filesEnabled: patch.filesEnabled ?? true } : {}),
-        updatedByUserId: input.actorUserId,
-        updatedAt: new Date(),
-      },
-    }).returning();
-    if (input.update.defaultOrganizationId !== undefined) {
-      await db().update(platformWhatsAppEndpoints).set({
-        defaultOrganizationId: input.update.defaultOrganizationId,
-        updatedAt: new Date(),
-      }).where(eq(platformWhatsAppEndpoints.id, "primary"));
-    }
-    return row;
-  }
-
   await validateReferences(input.organizationId, input.update);
   if (input.update.scope === "user") {
     const [membership] = await db().select({ id: organizationMembers.id }).from(organizationMembers).where(and(

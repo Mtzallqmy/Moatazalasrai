@@ -17,6 +17,7 @@ const keys = [
   "TELEGRAM_WEBHOOK_SECRET", "TELEGRAM_LINK_CODE_SECRET", "TELEGRAM_UPDATE_MODE",
 ] as const;
 const original = new Map<string, string | undefined>();
+const updateRowId = "00000000-0000-4000-8000-000000000001";
 
 beforeEach(() => {
   vi.resetModules();
@@ -31,9 +32,10 @@ beforeEach(() => {
     TELEGRAM_UPDATE_MODE: "webhook",
   });
   mocks.execute.mockReset();
-  mocks.enqueue.mockClear();
+  mocks.enqueue.mockReset();
+  mocks.enqueue.mockResolvedValue({ jobId: "job-1" });
   mocks.answerCallback.mockClear();
-  mocks.execute.mockResolvedValue({ rows: [{ id: "00000000-0000-4000-8000-000000000001" }] });
+  mocks.execute.mockResolvedValue({ rows: [{ id: updateRowId, status: "accepted", error_code: null }] });
 });
 
 afterEach(() => {
@@ -78,9 +80,9 @@ describe("central Telegram webhook", () => {
     const { POST } = await import("@/app/api/webhooks/telegram/route");
     const response = await POST(request("telegram-webhook-secret"));
     expect(response.status).toBe(200);
-    expect((await response.json()).data).toMatchObject({ accepted: true, queued: true });
-    expect(mocks.execute).toHaveBeenCalledTimes(1);
-    expect(mocks.enqueue).toHaveBeenCalledWith(expect.objectContaining({ updateId: 12345 }));
+    expect((await response.json()).data).toMatchObject({ accepted: true, queued: true, recovered: false });
+    expect(mocks.enqueue).toHaveBeenCalledWith(expect.objectContaining({ updateId: 12345, updateRowId }));
+    expect(mocks.execute.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
   it("answers callback queries before queueing the heavy processor", async () => {
@@ -102,12 +104,41 @@ describe("central Telegram webhook", () => {
     expect(mocks.enqueue).toHaveBeenCalledTimes(1);
   });
 
-  it("acknowledges a duplicate update without queueing it twice", async () => {
-    mocks.execute.mockRejectedValueOnce(Object.assign(new Error("duplicate"), { code: "23505" }));
+  it("acknowledges a completed duplicate without queueing it twice", async () => {
+    let calls = 0;
+    mocks.execute.mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) return { rows: [] };
+      return { rows: [{ id: updateRowId, status: "completed", error_code: null }] };
+    });
     const { POST } = await import("@/app/api/webhooks/telegram/route");
     const response = await POST(request("telegram-webhook-secret"));
     expect(response.status).toBe(200);
-    expect((await response.json()).data).toMatchObject({ accepted: true, duplicate: true });
+    expect((await response.json()).data).toMatchObject({ accepted: true, duplicate: true, terminal: true });
     expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("re-enqueues an accepted duplicate after a previous queue outage", async () => {
+    let calls = 0;
+    mocks.execute.mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) return { rows: [] };
+      if (calls === 2) return { rows: [{ id: updateRowId, status: "accepted", error_code: "TELEGRAM_QUEUE_UNAVAILABLE" }] };
+      return { rows: [] };
+    });
+    const { POST } = await import("@/app/api/webhooks/telegram/route");
+    const response = await POST(request("telegram-webhook-secret"));
+    expect(response.status).toBe(200);
+    expect((await response.json()).data).toMatchObject({ accepted: true, queued: true, recovered: true });
+    expect(mocks.enqueue).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 503 and preserves retryability when Graphile enqueue fails", async () => {
+    mocks.enqueue.mockRejectedValueOnce(new Error("queue unavailable"));
+    const { POST } = await import("@/app/api/webhooks/telegram/route");
+    const response = await POST(request("telegram-webhook-secret"));
+    expect(response.status).toBe(503);
+    expect(response.headers.get("retry-after")).toBe("5");
+    expect(mocks.enqueue).toHaveBeenCalledTimes(1);
   });
 });

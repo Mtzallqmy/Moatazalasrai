@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import type { PoolClient } from "pg";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { getPostgresPool } from "@/db/pool";
@@ -26,6 +27,8 @@ type LockedMfaRow = {
   failed_attempts: number;
   locked_until: Date | null;
 };
+
+type MfaFailureAudit = { attempts: number; locked: boolean };
 
 function recoveryHashes(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
@@ -145,77 +148,103 @@ export async function confirmMfaEnrollment(input: {
   return mfaStatus(input.userId);
 }
 
+/**
+ * Verifies MFA using an already-open transaction. The caller owns BEGIN/COMMIT/ROLLBACK.
+ * This is used by mobile challenge consumption so challenge, MFA state, membership,
+ * and session issuance can share one PostgreSQL connection without pool deadlocks.
+ */
+export async function verifyMfaForLoginWithClient(
+  client: PoolClient,
+  input: { userId: string; code?: string | null; onInvalid?: (audit: MfaFailureAudit) => void },
+) {
+  const result = await client.query<LockedMfaRow>(`
+    SELECT encrypted_secret, enabled, last_used_step, recovery_code_hashes, failed_attempts, locked_until
+    FROM user_mfa_credentials
+    WHERE user_id = $1
+    FOR UPDATE
+  `, [input.userId]);
+  const credential = result.rows[0];
+  if (!credential?.enabled) return false;
+
+  const now = new Date();
+  if (credential.locked_until && credential.locked_until > now) {
+    throw new ApiError(423, "MFA_TEMPORARILY_LOCKED", "تم قفل التحقق مؤقتًا بعد محاولات متعددة. حاول لاحقًا.");
+  }
+  const code = input.code?.trim();
+  if (!code) {
+    throw new ApiError(428, "MFA_REQUIRED", "أدخل رمز تطبيق المصادقة أو أحد رموز الاسترداد.");
+  }
+
+  const hashes = recoveryHashes(credential.recovery_code_hashes);
+  const recoveryHash = hashRecoveryCode(code);
+  const recoveryIndex = hashes.findIndex((hash) => constantTimeHashEquals(hash, recoveryHash));
+  let step: number | null = null;
+  let nextHashes = hashes;
+  let valid = recoveryIndex >= 0;
+  if (valid) nextHashes = hashes.filter((_, index) => index !== recoveryIndex);
+  else {
+    const secret = decryptSecret(credential.encrypted_secret, `mfa:${input.userId}`);
+    step = verifyTotp({ secret, code, lastUsedStep: credential.last_used_step });
+    valid = step !== null;
+  }
+
+  if (!valid) {
+    const attempts = credential.failed_attempts + 1;
+    const lockedUntil = attempts >= MFA_FAILURE_LIMIT ? new Date(Date.now() + MFA_LOCK_MS) : null;
+    await client.query(`
+      UPDATE user_mfa_credentials
+      SET failed_attempts = $2, locked_until = $3, updated_at = now()
+      WHERE user_id = $1
+    `, [input.userId, attempts, lockedUntil]);
+    input.onInvalid?.({ attempts, locked: Boolean(lockedUntil) });
+    throw new ApiError(401, "MFA_CODE_INVALID", "رمز المصادقة غير صحيح أو منتهي الصلاحية.");
+  }
+
+  await client.query(`
+    UPDATE user_mfa_credentials
+    SET last_used_step = COALESCE($2, last_used_step), recovery_code_hashes = $3::jsonb,
+        failed_attempts = 0, locked_until = NULL, updated_at = now()
+    WHERE user_id = $1
+  `, [input.userId, step, JSON.stringify(nextHashes)]);
+  return true;
+}
+
 export async function verifyMfaForLogin(input: { userId: string; code?: string | null }) {
   const client = await getPostgresPool().connect();
   let finished = false;
+  let released = false;
+  let failureAudit: MfaFailureAudit | null = null;
   try {
     await client.query("BEGIN");
-    const result = await client.query<LockedMfaRow>(`
-      SELECT encrypted_secret, enabled, last_used_step, recovery_code_hashes, failed_attempts, locked_until
-      FROM user_mfa_credentials
-      WHERE user_id = $1
-      FOR UPDATE
-    `, [input.userId]);
-    const credential = result.rows[0];
-    if (!credential?.enabled) {
+    try {
+      const verified = await verifyMfaForLoginWithClient(client, {
+        ...input,
+        onInvalid: (audit) => { failureAudit = audit; },
+      });
       await client.query("COMMIT");
       finished = true;
-      return false;
+      return verified;
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "MFA_CODE_INVALID") {
+        await client.query("COMMIT");
+        finished = true;
+      }
+      throw error;
     }
-    const now = new Date();
-    if (credential.locked_until && credential.locked_until > now) {
-      await client.query("ROLLBACK");
-      finished = true;
-      throw new ApiError(423, "MFA_TEMPORARILY_LOCKED", "تم قفل التحقق مؤقتًا بعد محاولات متعددة. حاول لاحقًا.");
-    }
-    const code = input.code?.trim();
-    if (!code) {
-      await client.query("ROLLBACK");
-      finished = true;
-      throw new ApiError(428, "MFA_REQUIRED", "أدخل رمز تطبيق المصادقة أو أحد رموز الاسترداد.");
-    }
-
-    const hashes = recoveryHashes(credential.recovery_code_hashes);
-    const recoveryHash = hashRecoveryCode(code);
-    const recoveryIndex = hashes.findIndex((hash) => constantTimeHashEquals(hash, recoveryHash));
-    let step: number | null = null;
-    let nextHashes = hashes;
-    let valid = recoveryIndex >= 0;
-    if (valid) nextHashes = hashes.filter((_, index) => index !== recoveryIndex);
-    else {
-      const secret = decryptSecret(credential.encrypted_secret, `mfa:${input.userId}`);
-      step = verifyTotp({ secret, code, lastUsedStep: credential.last_used_step });
-      valid = step !== null;
-    }
-
-    if (!valid) {
-      const attempts = credential.failed_attempts + 1;
-      const lockedUntil = attempts >= MFA_FAILURE_LIMIT ? new Date(Date.now() + MFA_LOCK_MS) : null;
-      await client.query(`
-        UPDATE user_mfa_credentials
-        SET failed_attempts = $2, locked_until = $3, updated_at = now()
-        WHERE user_id = $1
-      `, [input.userId, attempts, lockedUntil]);
-      await client.query("COMMIT");
-      finished = true;
-      await writeSecurityAudit({ userId: input.userId, action: "security.mfa.login_failed", metadata: { attempts, locked: Boolean(lockedUntil) } }).catch(() => undefined);
-      throw new ApiError(401, "MFA_CODE_INVALID", "رمز المصادقة غير صحيح أو منتهي الصلاحية.");
-    }
-
-    await client.query(`
-      UPDATE user_mfa_credentials
-      SET last_used_step = COALESCE($2, last_used_step), recovery_code_hashes = $3::jsonb,
-          failed_attempts = 0, locked_until = NULL, updated_at = now()
-      WHERE user_id = $1
-    `, [input.userId, step, JSON.stringify(nextHashes)]);
-    await client.query("COMMIT");
-    finished = true;
-    return true;
   } catch (error) {
     if (!finished) await client.query("ROLLBACK").catch(() => undefined);
+    if (failureAudit) {
+      client.release();
+      released = true;
+      await writeSecurityAudit({
+        userId: input.userId,
+        action: "security.mfa.login_failed",
+        metadata: failureAudit,
+      }).catch(() => undefined);
+    }
     throw error;
   } finally {
-    client.release();
+    if (!released) client.release();
   }
 }
 
