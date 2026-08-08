@@ -48,7 +48,7 @@ export default async function DashboardPage() {
           <div className="workspace-run-list">
             {summary.recentRuns.length ? summary.recentRuns.map((run) => {
               const status = runStatusPresentation[run.status];
-              return <Link key={run.id} href={`/dashboard/runs?runId=${encodeURIComponent(run.id)}`} className="workspace-run-row"><span className={`status-badge status-${status.tone}`}>{status.label}</span><span className="workspace-row-copy"><b>{run.agentName}</b><small>{friendlyModelName(run.model)}</small></span><time>{relativeTime(run.createdAt)}</time></Link>;
+              return <Link key={run.id} href={`/dashboard/runs/${encodeURIComponent(run.id)}`} className="workspace-run-row"><span className={`status-badge status-${status.tone}`}>{status.label}</span><span className="workspace-row-copy"><b>{run.agentName}</b><small>{friendlyModelName(run.model)}</small></span><time>{relativeTime(run.createdAt)}</time></Link>;
             }) : <div className="workspace-empty-inline"><Bot size={18} /><p>لا توجد تشغيلات بعد.</p><Link href="/dashboard/agents">افتح الوكلاء</Link></div>}
           </div>
         </section>
