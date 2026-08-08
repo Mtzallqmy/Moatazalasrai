@@ -70,6 +70,7 @@ RUN test -f /app/scripts/start-production.mjs \
   && test -f /app/drizzle/0040_telegram_admin_default_permissions.sql \
   && test -f /app/drizzle/0041_telegram_user_sessions.sql \
   && test -f /app/drizzle/0042_whatsapp_user_sessions.sql \
+  && test -f /app/drizzle/0050_member_access_expiry.sql \
   && node --input-type=module -e "await import('graphile-worker'); await import('pg')"
 
 USER nextjs

@@ -1,4 +1,4 @@
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { auditLogs, organizationMembers, users } from "@/db/schema";
@@ -12,6 +12,7 @@ import { loginSchema } from "@/lib/http/contracts";
 import { anonymizeIp, clientIp } from "@/lib/security/client-ip";
 import { enforceRateLimit, requestClientKey } from "@/lib/security/rate-limit";
 import { verifyTurnstile } from "@/lib/security/turnstile";
+import { activeMembership } from "@/lib/auth/membership-access";
 
 export const runtime = "nodejs";
 
@@ -36,16 +37,20 @@ export async function POST(request: Request) {
     const mfaVerified = await verifyMfaForLogin({ userId: user.id, code: body.mfaCode });
 
     const memberships = await db()
-      .select({ organizationId: organizationMembers.organizationId })
+      .select({ organizationId: organizationMembers.organizationId, expiresAt: organizationMembers.expiresAt })
       .from(organizationMembers)
-      .where(eq(organizationMembers.userId, user.id))
+      .where(and(eq(organizationMembers.userId, user.id), activeMembership()))
       .orderBy(asc(organizationMembers.createdAt))
       .limit(2);
+    if (memberships.length === 0) {
+      throw new ApiError(403, "ACCOUNT_ACCESS_EXPIRED", "انتهت صلاحية استخدام الحساب أو أوقفه مدير المؤسسة.");
+    }
     const activeOrganizationId = memberships.length === 1 ? memberships[0].organizationId : undefined;
 
     await createSession({
       userId: user.id,
       activeOrganizationId,
+      accessExpiresAt: memberships.length === 1 ? memberships[0].expiresAt : null,
       ipAddress: anonymizeIp(clientIp(request).address),
       userAgent: request.headers.get("user-agent") ?? undefined,
     });

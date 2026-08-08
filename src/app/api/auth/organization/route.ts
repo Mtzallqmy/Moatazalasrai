@@ -1,9 +1,10 @@
 import { db } from "@/db";
 import { auditLogs, organizationMembers, organizations } from "@/db/schema";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { currentSession, setActiveOrganization } from "@/lib/auth/session";
 import { apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson, ApiError } from "@/lib/http/api";
 import { switchOrganizationSchema } from "@/lib/http/contracts";
+import { activeMembership } from "@/lib/auth/membership-access";
 
 export async function GET(request: Request) {
   const requestId = getRequestId(request);
@@ -16,10 +17,11 @@ export async function GET(request: Request) {
         name: organizations.name,
         slug: organizations.slug,
         role: organizationMembers.role,
+        expiresAt: organizationMembers.expiresAt,
       })
       .from(organizationMembers)
       .innerJoin(organizations, eq(organizations.id, organizationMembers.organizationId))
-      .where(eq(organizationMembers.userId, session.userId))
+      .where(and(eq(organizationMembers.userId, session.userId), activeMembership()))
       .orderBy(asc(organizations.name));
     return apiSuccess({ organizations: rows, activeOrganizationId: session.organizationId }, requestId);
   } catch (error) {

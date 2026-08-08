@@ -80,12 +80,16 @@ export const organizationMembers = pgTable("organization_members", {
   organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   role: memberRole("role").notNull().default("member"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  customPermissions: jsonb("custom_permissions").$type<string[]>().notNull().default([]),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
   uniqueIndex("organization_members_org_user_idx").on(table.organizationId, table.userId),
   index("organization_members_org_role_idx").on(table.organizationId, table.role),
   index("organization_members_user_idx").on(table.userId),
+  index("organization_members_org_expiry_idx").on(table.organizationId, table.expiresAt),
+  index("organization_members_user_expiry_idx").on(table.userId, table.expiresAt),
 ]);
 
 export const platformApiKeys = pgTable("platform_api_keys", {

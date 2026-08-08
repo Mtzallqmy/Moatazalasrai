@@ -6,6 +6,19 @@ import { TurnstileWidget } from "@/components/turnstile-widget";
 
 type Mode = "login" | "register";
 
+function validationMessage(result: unknown) {
+  if (!result || typeof result !== "object") return null;
+  const failure = (result as { error?: { details?: unknown } }).error;
+  if (!Array.isArray(failure?.details)) return null;
+  const paths = new Set(failure.details.flatMap((issue) => issue && typeof issue === "object" && "path" in issue
+    ? [String((issue as { path: unknown }).path)]
+    : []));
+  if (paths.has("password")) return "كلمة المرور يجب أن تكون بين 12 و128 حرفًا.";
+  if (paths.has("email")) return "أدخل بريدًا إلكترونيًا صحيحًا دون مسافات زائدة.";
+  if (paths.has("name")) return "الاسم الكامل يجب أن يحتوي حرفين على الأقل.";
+  return null;
+}
+
 export function AuthForm({ mode, turnstileSiteKey }: { mode: Mode; turnstileSiteKey?: string }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -26,7 +39,7 @@ export function AuthForm({ mode, turnstileSiteKey }: { mode: Mode; turnstileSite
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const result = await response.json();
+      const result = await response.json().catch(() => null);
       if (!response.ok) {
         if (mode === "login" && result?.error?.code === "MFA_REQUIRED") {
           setMfaRequired(true);
@@ -35,7 +48,7 @@ export function AuthForm({ mode, turnstileSiteKey }: { mode: Mode; turnstileSite
           return;
         }
         setTurnstileReset((value) => value + 1);
-        throw new Error(result?.error?.message ?? "تعذر إكمال العملية.");
+        throw new Error(validationMessage(result) ?? result?.error?.message ?? "تعذر إكمال العملية.");
       }
       setMfaRequired(false);
       router.push(result?.data?.organizationSelectionRequired ? "/select-organization" : "/dashboard");
