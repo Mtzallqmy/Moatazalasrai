@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { Braces, Settings } from "lucide-react";
+import "./settings-workspace.css";
 
 export default function SettingsLayout({ children }: { children: ReactNode }) {
   return <>
