@@ -27,9 +27,9 @@ function tokenHash(token: string) {
 }
 
 export async function enqueueExecutionTaskTx(tx: ExecutionTransaction, input: {
-  task: "execution-provision" | "execution-run-step" | "execution-collect-artifacts" | "execution-cancel" | "execution-cleanup" | "execution-reconcile" | "execution-expire";
+  task: "execution-provision" | "execution-run-step" | "execution-collect-artifacts" | "execution-cancel" | "execution-cleanup" | "execution-reconcile" | "execution-expire" | "operational-tool-execute";
   payload: Record<string, string>;
-  queueName: "execution-provision" | "execution-run" | "execution-cleanup" | "execution-maintenance";
+  queueName: "execution-provision" | "execution-run" | "execution-cleanup" | "execution-maintenance" | "operational-tools";
   jobKey: string;
   maxAttempts?: number;
   priority?: number;

@@ -23,6 +23,7 @@ export const whatsappChannelUpdatePayloadSchema = z.object({
 }).strict();
 export const executionTaskPayloadSchema = z.object({ organizationId: uuid, jobId: uuid }).strict();
 export const executionMaintenancePayloadSchema = z.object({ requestedAt: z.string().datetime() }).strict();
+export const operationalToolPayloadSchema = z.object({ organizationId: uuid, jobId: uuid, toolRunId: uuid }).strict();
 
 export type AgentTeamRunPayload = z.infer<typeof agentTeamRunPayloadSchema>;
 export type DocumentParsePayload = z.infer<typeof documentParsePayloadSchema>;
@@ -38,6 +39,7 @@ export type TelegramUpdatePayload = z.infer<typeof telegramUpdatePayloadSchema>;
 export type WhatsAppChannelUpdatePayload = z.infer<typeof whatsappChannelUpdatePayloadSchema>;
 export type ExecutionTaskPayload = z.infer<typeof executionTaskPayloadSchema>;
 export type ExecutionMaintenancePayload = z.infer<typeof executionMaintenancePayloadSchema>;
+export type OperationalToolPayload = z.infer<typeof operationalToolPayloadSchema>;
 
 export const supportedWorkerTasks = [
   "agent-team-run",
@@ -66,5 +68,6 @@ export const supportedWorkerTasks = [
   "execution-cleanup",
   "execution-reconcile",
   "execution-expire",
+  "operational-tool-execute",
 ] as const;
 export type SupportedWorkerTask = typeof supportedWorkerTasks[number];

@@ -12,6 +12,7 @@ import { executionProvisionTask } from "@/worker/tasks/execution-provision";
 import { executionReconcileTask } from "@/worker/tasks/execution-reconcile";
 import { executionRunStepTask } from "@/worker/tasks/execution-run-step";
 import { notificationDispatchTask } from "@/worker/tasks/notification-dispatch";
+import { operationalToolExecuteTask } from "@/worker/tasks/operational-tool-execute";
 import { sandboxCleanupTask } from "@/worker/tasks/sandbox-cleanup";
 import { sandboxCreateTask } from "@/worker/tasks/sandbox-create";
 import { sandboxExecuteTask } from "@/worker/tasks/sandbox-execute";
@@ -33,6 +34,7 @@ export const taskList = {
   "execution-cleanup": executionCleanupTask,
   "execution-reconcile": executionReconcileTask,
   "execution-expire": executionExpireTask,
+  "operational-tool-execute": operationalToolExecuteTask,
   "notification-dispatch": notificationDispatchTask,
   "telegram-update-process": telegramUpdateProcessTask,
   "whatsapp-channel-update": whatsappChannelUpdateTask,
