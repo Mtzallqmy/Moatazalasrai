@@ -10,6 +10,15 @@ import { apiSuccess, getRequestId, handleApiError } from "@/lib/http/api";
 import { getToolAvailability } from "@/lib/tools/permission-service";
 import { listToolManifests } from "@/lib/tools/registry";
 
+function voiceProviderAvailable() {
+  return (process.env.OPENAI_VOICE_PROVIDER_ENABLED === "true" && Boolean(process.env.OPENAI_API_KEY))
+    || (process.env.ELEVENLABS_VOICE_PROVIDER_ENABLED === "true" && Boolean(process.env.ELEVENLABS_API_KEY));
+}
+
+function browserRuntimeAvailable() {
+  return process.env.BROWSER_AGENT_ENABLED === "true" && Boolean(process.env.BROWSER_RUNNER_URL) && Boolean(process.env.BROWSER_RUNNER_SHARED_SECRET);
+}
+
 export async function GET(request: Request) {
   const requestId = getRequestId(request);
   try {
@@ -43,14 +52,15 @@ export async function GET(request: Request) {
       }
 
       for (const manifest of listToolManifests()) {
+        const runtimeHealthy = manifest.id === "browser.agent" ? browserRuntimeAvailable() : runnerHealthy;
         const availability = await getToolAvailability({
           organizationId: session.organizationId,
           userId: session.userId,
           role: session.role,
           manifest,
           migrationsApplied,
-          runnerHealthy,
-          providerAvailable: false,
+          runnerHealthy: runtimeHealthy,
+          providerAvailable: manifest.id === "voice.studio" ? voiceProviderAvailable() : true,
         });
         if (!availability.visible) continue;
         rows.push({
