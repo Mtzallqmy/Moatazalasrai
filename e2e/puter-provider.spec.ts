@@ -114,7 +114,11 @@ test.describe("Puter browser provider", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
 
     await page.goto("/dashboard/chat");
+    const draftLoaded = page.waitForResponse((response) => response.request().method() === "GET"
+      && response.url().includes("/api/dashboard/chat/draft?conversationId=")
+      && response.status() === 200);
     await page.locator(".conversation-empty").getByRole("button", { name: "محادثة جديدة" }).click();
+    await draftLoaded;
     await page.getByRole("button", { name: "أدوات" }).click();
     await page.getByLabel("مصدر التنفيذ").selectOption("puter");
     await expect(page.getByLabel("نموذج Puter").locator('option[value="puter-e2e-model"]')).toHaveCount(1);
@@ -122,7 +126,9 @@ test.describe("Puter browser provider", () => {
     const composer = page.getByLabel("رسالة المحادثة");
     await expect(composer).toBeEnabled();
     await composer.fill("ابدأ اختبار Puter");
-    await page.getByRole("button", { name: "إرسال الرسالة" }).click();
+    const sendButton = page.getByRole("button", { name: "إرسال الرسالة" });
+    await expect(sendButton).toBeEnabled();
+    await sendButton.click();
     await page.getByRole("button", { name: "أفهم وأتابع" }).click();
     await expect(page.getByText("نجح بث Puter التجريبي")).toBeVisible();
     await page.reload();
