@@ -1,4 +1,0 @@
-/* يخفي بطاقة الإدخال اليدوي فقط عندما تكون متغيرات Railway هي مصدر WhatsApp. */
-.environmentManaged :global(#runtime-control) > :global(.soft-card):nth-child(3) {
-  display: none;
-}

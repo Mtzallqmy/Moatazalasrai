@@ -78,10 +78,11 @@ function unwrap(value: unknown) {
   return (record.data && typeof record.data === "object" ? record.data : record) as Record<string, unknown>;
 }
 
-async function requestJson(path: string, method = "GET", body?: unknown) {
+async function requestJson(path: string, method = "GET", body?: unknown, signal?: AbortSignal) {
   const response = await fetch(path, {
     method,
     cache: "no-store",
+    signal,
     ...(body === undefined ? {} : {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -92,8 +93,8 @@ async function requestJson(path: string, method = "GET", body?: unknown) {
   return unwrap(json);
 }
 
-async function fetchConnections(): Promise<Connection[]> {
-  const data = await requestJson("/api/dashboard/channels");
+async function fetchConnections(signal?: AbortSignal): Promise<Connection[]> {
+  const data = await requestJson("/api/dashboard/channels", "GET", undefined, signal);
   return (data.connections || []) as Connection[];
 }
 
@@ -326,30 +327,28 @@ export function ChannelManager({ canManage, canHandoff, options }: Props) {
     setSelectedId((current) => connections.some((row) => row.id === current) ? current : connections[0]?.id || "");
   }, []);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     try {
-      applyConnections(await fetchConnections());
+      applyConnections(await fetchConnections(signal));
     } finally {
       setLoading(false);
     }
   }, [applyConnections]);
 
   useEffect(() => {
-    let active = true;
-    void fetchConnections()
+    const controller = new AbortController();
+    void fetchConnections(controller.signal)
       .then((connections) => {
-        if (active) applyConnections(connections);
+        if (!controller.signal.aborted) applyConnections(connections);
       })
       .catch((error: Error) => {
-        if (active) setNotice(error.message);
+        if (!controller.signal.aborted) setNotice(error.message);
       })
       .finally(() => {
-        if (active) setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       });
-    return () => {
-      active = false;
-    };
+    return () => controller.abort();
   }, [applyConnections]);
 
   async function synchronize() {

@@ -3,8 +3,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import type { Message } from "../types";
 
-const VIRTUALIZE_AFTER = 100;
+const VIRTUALIZE_AFTER = 60;
 const OVERSCAN_PX = 900;
+
+function firstOffsetAfter(offsets: number[], target: number) {
+  let low = 0;
+  let high = offsets.length - 1;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (offsets[middle] <= target) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
 
 function estimatedHeight(message: Message) {
   const contentLines = Math.max(1, Math.ceil(message.content.length / 70));
@@ -14,6 +25,7 @@ function estimatedHeight(message: Message) {
 export function useVirtualMessageWindow(messages: Message[], viewportRef: RefObject<HTMLDivElement | null>) {
   const [measured, setMeasured] = useState<Map<string, number>>(() => new Map());
   const observersRef = useRef(new Map<string, ResizeObserver>());
+  const rangeFrameRef = useRef<number | null>(null);
   const [range, setRange] = useState({ start: 0, end: messages.length });
   const virtualized = messages.length > VIRTUALIZE_AFTER;
 
@@ -35,44 +47,56 @@ export function useVirtualMessageWindow(messages: Message[], viewportRef: RefObj
     if (!viewport) return;
     const top = Math.max(0, viewport.scrollTop - OVERSCAN_PX);
     const bottom = viewport.scrollTop + viewport.clientHeight + OVERSCAN_PX;
-    let start = 0;
-    let end = messages.length;
-    while (start < messages.length && layout[start + 1] < top) start += 1;
-    end = start;
-    while (end < messages.length && layout[end] < bottom) end += 1;
+    const start = Math.max(0, Math.min(messages.length, firstOffsetAfter(layout, top) - 1));
+    const end = Math.max(start, Math.min(messages.length, firstOffsetAfter(layout, bottom)));
     setRange((current) => current.start === start && current.end === end ? current : { start, end: Math.min(messages.length, end + 1) });
   }, [layout, messages.length, viewportRef, virtualized]);
+
+  const scheduleRangeUpdate = useCallback(() => {
+    if (rangeFrameRef.current !== null) return;
+    rangeFrameRef.current = requestAnimationFrame(() => {
+      rangeFrameRef.current = null;
+      updateRange();
+    });
+  }, [updateRange]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport) return;
     updateRange();
-    viewport.addEventListener("scroll", updateRange, { passive: true });
-    const observer = new ResizeObserver(updateRange);
+    viewport.addEventListener("scroll", scheduleRangeUpdate, { passive: true });
+    const observer = new ResizeObserver(scheduleRangeUpdate);
     observer.observe(viewport);
     return () => {
-      viewport.removeEventListener("scroll", updateRange);
+      viewport.removeEventListener("scroll", scheduleRangeUpdate);
       observer.disconnect();
+      if (rangeFrameRef.current !== null) cancelAnimationFrame(rangeFrameRef.current);
+      rangeFrameRef.current = null;
     };
-  }, [updateRange, viewportRef]);
+  }, [scheduleRangeUpdate, updateRange, viewportRef]);
 
   useEffect(() => {
     const known = new Set(messages.map((message) => message.id));
+    const removed: string[] = [];
     for (const [id, observer] of observersRef.current) {
       if (!known.has(id)) {
         observer.disconnect();
         observersRef.current.delete(id);
-        setMeasured((current) => {
-          if (!current.has(id)) return current;
-          const next = new Map(current);
-          next.delete(id);
-          return next;
-        });
+        removed.push(id);
       }
     }
+    if (!removed.length) return;
+    const cleanupFrame = requestAnimationFrame(() => setMeasured((current) => {
+        const next = new Map(current);
+        let changed = false;
+        for (const id of removed) changed = next.delete(id) || changed;
+        return changed ? next : current;
+      }));
+    return () => cancelAnimationFrame(cleanupFrame);
   }, [messages]);
 
   useEffect(() => () => {
+    if (rangeFrameRef.current !== null) cancelAnimationFrame(rangeFrameRef.current);
     for (const observer of observersRef.current.values()) observer.disconnect();
     observersRef.current.clear();
   }, []);

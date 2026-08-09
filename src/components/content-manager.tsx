@@ -55,8 +55,8 @@ function parseObject(value: FormDataEntryValue | null, field: string) {
   }
 }
 
-async function fetchContent() {
-  const response = await fetch("/api/dashboard/content", { cache: "no-store" });
+async function fetchContent(signal?: AbortSignal) {
+  const response = await fetch("/api/dashboard/content", { cache: "no-store", signal });
   const json = await response.json();
   if (!response.ok) throw new Error(json?.error?.message || "تعذر تحميل إدارة المحتوى.");
   return unwrap(json);
@@ -76,9 +76,9 @@ export function ContentManager(props: Props) {
   const load = useCallback(async () => apply(await fetchContent()), [apply]);
 
   useEffect(() => {
-    let active = true;
-    void fetchContent().then((next) => { if (active) apply(next); }).catch((error: Error) => { if (active) setNotice(error.message); });
-    return () => { active = false; };
+    const controller = new AbortController();
+    void fetchContent(controller.signal).then((next) => { if (!controller.signal.aborted) apply(next); }).catch((error: Error) => { if (!controller.signal.aborted) setNotice(error.message); });
+    return () => controller.abort();
   }, [apply]);
 
   async function mutate(operation: Record<string, unknown>, success: string) {

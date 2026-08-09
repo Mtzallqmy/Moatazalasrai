@@ -1069,7 +1069,6 @@
   place-items: center;
   padding: var(--space-4);
   background: rgb(8 15 27 / 0.58);
-  backdrop-filter: blur(5px);
 }
 
 .chat-action-dialog {

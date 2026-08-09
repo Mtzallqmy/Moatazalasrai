@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, Ban, Box, FileCheck2, Play, RefreshCw, TerminalSquare } from "lucide-react";
 
 type JobRow = {
@@ -110,18 +110,21 @@ export function ExecutionKernelConsole(props: { initialJobs: JobRow[]; canRun: b
   const [stderr, setStderr] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const detailControllerRef = useRef<AbortController | null>(null);
+  const detailStatusRef = useRef<string | null>(null);
 
-  const refreshJobs = useCallback(async () => {
-    const response = await fetch("/api/executions?limit=25", { cache: "no-store" });
+  const refreshJobs = useCallback(async (signal?: AbortSignal) => {
+    const response = await fetch("/api/executions?limit=25", { cache: "no-store", signal });
     const payload = await response.json() as ApiResponse<JobRow[]>;
     if (!response.ok || !payload.success || !payload.data) throw new Error(payload.error?.message ?? "تعذر تحميل عمليات التنفيذ.");
     setJobs(payload.data);
   }, []);
 
-  const loadDetail = useCallback(async (jobId: string) => {
-    const response = await fetch(`/api/executions/${jobId}`, { cache: "no-store" });
+  const loadDetail = useCallback(async (jobId: string, signal?: AbortSignal) => {
+    const response = await fetch(`/api/executions/${jobId}`, { cache: "no-store", signal });
     const payload = await response.json() as ApiResponse<ExecutionDetail>;
     if (!response.ok || !payload.success || !payload.data) throw new Error(payload.error?.message ?? "تعذر تحميل تفاصيل التنفيذ.");
+    detailStatusRef.current = payload.data.status;
     setDetail(payload.data);
     setEvents(payload.data.recentEvents);
     setStdout(outputFrom(payload.data.recentEvents, "stdout.chunk"));
@@ -129,14 +132,20 @@ export function ExecutionKernelConsole(props: { initialJobs: JobRow[]; canRun: b
   }, []);
 
   const openJob = useCallback(async (jobId: string) => {
+    detailControllerRef.current?.abort();
+    const controller = new AbortController();
+    detailControllerRef.current = controller;
     setSelectedId(jobId);
     setMessage("");
-    try { await loadDetail(jobId); }
-    catch (error) { setMessage(error instanceof Error ? error.message : "تعذر تحميل التنفيذ."); }
+    try { await loadDetail(jobId, controller.signal); }
+    catch (error) { if (!controller.signal.aborted) setMessage(error instanceof Error ? error.message : "تعذر تحميل التنفيذ."); }
   }, [loadDetail]);
+
+  useEffect(() => () => detailControllerRef.current?.abort(), []);
 
   useEffect(() => {
     if (!selectedId) return;
+    const controller = new AbortController();
     const source = new EventSource(`/api/executions/${selectedId}/events`);
     const handle = (event: MessageEvent<string>) => {
       let parsed: ExecutionEvent;
@@ -151,7 +160,7 @@ export function ExecutionKernelConsole(props: { initialJobs: JobRow[]; canRun: b
         setStderr((current) => `${current}${parsed.payload.text}`.slice(-200_000));
       }
       if (parsed.type.startsWith("job.") || parsed.type === "workspace.destroyed" || parsed.type.startsWith("artifact.")) {
-        void Promise.all([loadDetail(selectedId), refreshJobs()]).catch(() => undefined);
+        void Promise.all([loadDetail(selectedId, controller.signal), refreshJobs(controller.signal)]).catch(() => undefined);
       }
     };
     const names = [
@@ -161,10 +170,10 @@ export function ExecutionKernelConsole(props: { initialJobs: JobRow[]; canRun: b
     ];
     names.forEach((name) => source.addEventListener(name, handle as EventListener));
     source.onerror = () => {
-      if (detail && terminalStatuses.has(detail.status)) source.close();
+      if (detailStatusRef.current && terminalStatuses.has(detailStatusRef.current)) source.close();
     };
-    return () => source.close();
-  }, [detail, loadDetail, refreshJobs, selectedId]);
+    return () => { controller.abort(); source.close(); };
+  }, [loadDetail, refreshJobs, selectedId]);
 
   async function runDiagnostic() {
     setBusy(true);

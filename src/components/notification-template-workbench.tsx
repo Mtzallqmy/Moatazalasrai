@@ -58,18 +58,18 @@ export function NotificationTemplateWorkbench({ canManage }: { canManage: boolea
   }
 
   useEffect(() => {
-    let active = true;
-    void fetch("/api/dashboard/control-plane", { cache: "no-store" }).then(async (response) => {
+    const controller = new AbortController();
+    void fetch("/api/dashboard/control-plane", { cache: "no-store", signal: controller.signal }).then(async (response) => {
       const json = await response.json();
       if (!response.ok) throw new Error(json?.error?.message || "تعذر تحميل القوالب.");
       const data = unwrap(json);
       const rows = Array.isArray(data.templates) ? data.templates as Template[] : [];
-      if (active) {
+      if (!controller.signal.aborted) {
         setTemplates(rows);
         setSelectedId(rows[0]?.id ?? "");
       }
-    }).catch((error: Error) => { if (active) setNotice(error.message); });
-    return () => { active = false; };
+    }).catch((error: Error) => { if (!controller.signal.aborted) setNotice(error.message); });
+    return () => controller.abort();
   }, []);
 
   const selected = useMemo(() => templates.find((template) => template.id === selectedId) ?? null, [templates, selectedId]);

@@ -211,9 +211,8 @@ body {
     border: 1px solid var(--border);
     border-radius: 1.15rem;
     padding: 1rem;
-    background: color-mix(in srgb, var(--surface) 97%, transparent);
+    background: var(--surface);
     box-shadow: var(--shadow-raised);
-    backdrop-filter: blur(20px);
   }
   .appearance-label {
     margin-block: 0.9rem 0.5rem;
@@ -507,6 +506,7 @@ summary:focus-visible {
 }
 a.social-link:hover { border-color: var(--primary); background: var(--primary-soft); color: var(--primary); transform: translateY(-2px); }
 .social-link-disabled { cursor: not-allowed; opacity: 0.44; }
+.social-glyph { font-size: 0.67rem; font-weight: 850; letter-spacing: -0.04em; }
 @media (max-width: 540px) {
   .site-footer { flex-direction: column; justify-content: center; text-align: center; }
   .site-footer > div { justify-content: center; }
@@ -523,8 +523,7 @@ a.social-link:hover { border-color: var(--primary); background: var(--primary-so
   justify-content: space-between;
   height: 4.25rem;
   border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--surface) 92%, transparent);
-  backdrop-filter: blur(18px);
+  background: var(--surface);
 }
 .dashboard-sidebar {
   display: flex;
@@ -625,8 +624,7 @@ a.social-link:hover { border-color: var(--primary); background: var(--primary-so
   height: 4.25rem;
   border-bottom: 1px solid var(--border);
   padding-inline: 0.75rem;
-  background: color-mix(in srgb, var(--surface) 94%, transparent);
-  backdrop-filter: blur(18px);
+  background: var(--surface);
 }
 .mobile-brand { display: flex; align-items: center; gap: 0.5rem; font-weight: 850; }
 .mobile-brand svg { color: var(--primary); }
@@ -662,6 +660,7 @@ a.social-link:hover { border-color: var(--primary); background: var(--primary-so
 }
 .mobile-drawer-open .drawer-panel { transform: translateX(0); }
 .drawer-close { position: absolute; inset-block-start: 0.85rem; inset-inline-end: 0.75rem; z-index: 2; }
+.drawer-organization-switcher { position: absolute; inset-inline: 0.8rem; inset-block-end: 4.5rem; z-index: 3; }
 .dashboard-search {
   display: flex;
   align-items: center;
@@ -685,7 +684,6 @@ a.social-link:hover { border-color: var(--primary); background: var(--primary-so
   place-items: start center;
   padding: min(18vh, 8rem) 1rem 1rem;
   background: rgba(5, 15, 17, 0.42);
-  backdrop-filter: blur(8px);
 }
 .command-palette {
   width: min(34rem, 100%);
@@ -982,10 +980,10 @@ a.social-link:hover { border-color: var(--primary); background: var(--primary-so
   min-height: var(--mobile-nav-height);
   border-top: 1px solid var(--border);
   padding: 0.4rem max(0.35rem, env(safe-area-inset-right)) max(0.45rem, env(safe-area-inset-bottom)) max(0.35rem, env(safe-area-inset-left));
-  background: color-mix(in srgb, var(--surface) 95%, transparent);
+  background: var(--surface);
   box-shadow: 0 -10px 30px rgba(9, 20, 19, 0.08);
-  backdrop-filter: blur(20px);
 }
+.more-sheet-dot { width: 0.45rem; height: 0.45rem; flex: 0 0 auto; border-radius: 999px; background: currentColor; opacity: 0.68; }
 .mobile-bottom-nav a {
   display: grid;
   min-width: 0;
@@ -1001,6 +999,10 @@ a.social-link:hover { border-color: var(--primary); background: var(--primary-so
 .mobile-bottom-nav a:hover, .mobile-bottom-nav .mobile-bottom-link-active { background: var(--primary-soft); color: var(--primary); }
 .dashboard-main { padding-bottom: calc(var(--mobile-nav-height) + 1rem + env(safe-area-inset-bottom)); }
 .dashboard-content { width: min(100%, var(--content-wide)); }
+.dashboard-route-loading { display: grid; width: min(100%, var(--content-wide)); gap: 1rem; padding: 1.25rem; }
+.dashboard-loading-title { width: min(18rem, 70%); height: 2.5rem; border-radius: var(--radius-sm); }
+.dashboard-loading-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+.dashboard-loading-card { min-height: 9rem; border-radius: var(--radius-md); }
 
 .form-control {
   min-height: 2.75rem;
@@ -1018,6 +1020,7 @@ a.social-link:hover { border-color: var(--primary); background: var(--primary-so
 }
 
 @media (max-width: 719px) {
+  .dashboard-loading-grid { grid-template-columns: 1fr; }
   .dashboard-content { padding-inline: 0.1rem; }
   .page-section-header { align-items: flex-start; }
   .page-section-header, .page-section-body { padding-inline: 0.8rem; }

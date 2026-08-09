@@ -28,8 +28,8 @@ function unwrap(value: unknown): Data {
   return (root.data && typeof root.data === "object" ? root.data : root) as Data;
 }
 
-async function loadData() {
-  const response = await fetch("/api/dashboard/control-plane", { cache: "no-store" });
+async function loadData(signal?: AbortSignal) {
+  const response = await fetch("/api/dashboard/control-plane", { cache: "no-store", signal });
   const json = await response.json();
   if (!response.ok) throw new Error(json?.error?.message || "تعذر تحميل أدوات المالك المتقدمة.");
   return unwrap(json);
@@ -42,9 +42,9 @@ export function PlatformAdvancedControls({ canManage }: { canManage: boolean }) 
   const load = useCallback(async () => setData(await loadData()), []);
 
   useEffect(() => {
-    let active = true;
-    void loadData().then((next) => { if (active) setData(next); }).catch((error: Error) => { if (active) setNotice(error.message); });
-    return () => { active = false; };
+    const controller = new AbortController();
+    void loadData(controller.signal).then((next) => { if (!controller.signal.aborted) setData(next); }).catch((error: Error) => { if (!controller.signal.aborted) setNotice(error.message); });
+    return () => controller.abort();
   }, []);
 
   async function mutate(operation: Record<string, unknown>, success: string) {

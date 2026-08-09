@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Ban,
   Bot,
@@ -80,11 +80,12 @@ export function TeamManager() {
   const [busy, setBusy] = useState(false);
   const [busyRunId, setBusyRunId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
+  const pollControllerRef = useRef<AbortController | null>(null);
 
   const hasActiveRuns = useMemo(() => runs.some((run) => activeStatuses.has(run.status)), [runs]);
 
-  const load = useCallback(async () => {
-    const response = await fetch("/api/dashboard/teams", { cache: "no-store" });
+  const load = useCallback(async (signal?: AbortSignal) => {
+    const response = await fetch("/api/dashboard/teams", { cache: "no-store", signal });
     const payload = await response.json();
     if (!response.ok || !payload.success) throw new Error(payload.error?.message ?? "تعذر تحميل الفرق.");
     const data = payload.data as DashboardPayload;
@@ -94,16 +95,20 @@ export function TeamManager() {
   }, []);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => { void load().catch((error) => setMessage(error.message)); }, 0);
-    return () => window.clearTimeout(timer);
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => { void load(controller.signal).catch((error) => { if (!controller.signal.aborted) setMessage(error.message); }); }, 0);
+    return () => { window.clearTimeout(timer); controller.abort(); };
   }, [load]);
 
   useEffect(() => {
     if (!hasActiveRuns) return;
     const timer = window.setInterval(() => {
-      void load().catch((error) => setMessage(error instanceof Error ? error.message : "تعذر تحديث حالة التشغيل."));
+      pollControllerRef.current?.abort();
+      const controller = new AbortController();
+      pollControllerRef.current = controller;
+      void load(controller.signal).catch((error) => { if (!controller.signal.aborted) setMessage(error instanceof Error ? error.message : "تعذر تحديث حالة التشغيل."); });
     }, 2500);
-    return () => window.clearInterval(timer);
+    return () => { window.clearInterval(timer); pollControllerRef.current?.abort(); pollControllerRef.current = null; };
   }, [hasActiveRuns, load]);
 
   async function submit(body: Record<string, unknown>, runId?: string) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, Copy, ExternalLink, Link2, Send, ShieldCheck } from "lucide-react";
 
 const featureLabels: Record<string, string> = {
@@ -49,9 +49,13 @@ export function CentralTelegramManager(props: {
   const [code, setCode] = useState<LinkCode | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const refreshControllerRef = useRef<AbortController | null>(null);
 
   const refreshOwn = useCallback(async () => {
-    const response = await fetch("/api/telegram/link-status", { cache: "no-store" });
+    refreshControllerRef.current?.abort();
+    const controller = new AbortController();
+    refreshControllerRef.current = controller;
+    const response = await fetch("/api/telegram/link-status", { cache: "no-store", signal: controller.signal });
     const payload = await response.json() as Api<LinkStatus>;
     if (!response.ok || !payload.success || !payload.data) throw new Error(payload.error?.message ?? "تعذر تحميل حالة الربط.");
     setStatus(payload.data);
@@ -70,6 +74,8 @@ export function CentralTelegramManager(props: {
     window.addEventListener("focus", synchronize);
     document.addEventListener("visibilitychange", synchronize);
     return () => {
+      refreshControllerRef.current?.abort();
+      refreshControllerRef.current = null;
       window.removeEventListener("pageshow", synchronize);
       window.removeEventListener("focus", synchronize);
       document.removeEventListener("visibilitychange", synchronize);

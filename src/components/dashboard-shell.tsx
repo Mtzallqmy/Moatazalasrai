@@ -1,9 +1,7 @@
 import Link from "next/link";
-import { OrganizationSwitcher } from "@/components/organization-switcher";
 import type { DashboardSession } from "@/components/dashboard-navigation";
-import { SiteFooter } from "@/components/site-footer";
 
-export async function DashboardShell({ session, title, description, actions, children }: {
+export function DashboardShell({ title, description, actions, children }: {
   session: DashboardSession;
   activePath: string;
   title: string;
@@ -25,11 +23,9 @@ export async function DashboardShell({ session, title, description, actions, chi
           </div>
           <div className="dashboard-header-actions">
             {actions}
-            <OrganizationSwitcher activeOrganizationId={session.organizationId} />
           </div>
         </header>
         <div className="dashboard-content">{children}</div>
-        <SiteFooter compact />
     </>
   );
 }
