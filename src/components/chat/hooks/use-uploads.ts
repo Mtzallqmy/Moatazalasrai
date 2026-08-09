@@ -6,6 +6,8 @@ import { ApiClientError, apiErrorMessage, apiRequest } from "@/lib/http/client";
 import type { Attachment, UploadTask } from "../types";
 
 export const MAX_COMPOSER_ATTACHMENTS = 8;
+const PROGRESS_RENDER_INTERVAL_MS = 100;
+const PROGRESS_RENDER_STEP = 4;
 
 export function uploadBusy(state: UploadTask["state"]) {
   return state === "SELECTED" || state === "VALIDATING" || state === "UPLOADING" || state === "PROCESSING";
@@ -33,17 +35,28 @@ export function useUploads(conversationId: string, onError: (message: string) =>
   const [tasks, setTasks] = useState<UploadTask[]>([]);
   const requestsRef = useRef(new Map<string, XMLHttpRequest>());
   const controllersRef = useRef(new Map<string, AbortController>());
+  const progressRef = useRef(new Map<string, { at: number; progress: number | null }>());
   const ownerRef = useRef(0);
 
   const patch = useCallback((id: string, value: Partial<UploadTask>) => {
     setTasks((current) => current.map((task) => task.id === id ? { ...task, ...value } : task));
   }, []);
 
+  const patchProgress = useCallback((taskId: string, progress: number | null) => {
+    const now = performance.now();
+    const previous = progressRef.current.get(taskId);
+    const advanced = progress !== null && (previous?.progress ?? -PROGRESS_RENDER_STEP) <= progress - PROGRESS_RENDER_STEP;
+    if (progress !== 100 && previous && now - previous.at < PROGRESS_RENDER_INTERVAL_MS && !advanced) return;
+    progressRef.current.set(taskId, { at: now, progress });
+    patch(taskId, { state: "UPLOADING", progress });
+  }, [patch]);
+
   const cancel = useCallback((taskId: string) => {
     controllersRef.current.get(taskId)?.abort();
     requestsRef.current.get(taskId)?.abort();
     controllersRef.current.delete(taskId);
     requestsRef.current.delete(taskId);
+    progressRef.current.delete(taskId);
     patch(taskId, { state: "CANCELLED", progress: null, message: "أُلغي رفع الملف." });
   }, [patch]);
 
@@ -53,6 +66,7 @@ export function useUploads(conversationId: string, onError: (message: string) =>
     for (const request of requestsRef.current.values()) request.abort();
     controllersRef.current.clear();
     requestsRef.current.clear();
+    progressRef.current.clear();
   }, []);
 
   useEffect(() => {
@@ -71,11 +85,12 @@ export function useUploads(conversationId: string, onError: (message: string) =>
     xhr.setRequestHeader("x-request-id", crypto.randomUUID());
     const abort = () => xhr.abort();
     signal.addEventListener("abort", abort, { once: true });
-    xhr.upload.onprogress = (event) => patch(taskId, { state: "UPLOADING", progress: event.lengthComputable ? Math.min(99, Math.round(event.loaded / event.total * 100)) : null });
+    xhr.upload.onprogress = (event) => patchProgress(taskId, event.lengthComputable ? Math.min(99, Math.round(event.loaded / event.total * 100)) : null);
     xhr.upload.onload = () => patch(taskId, { state: "PROCESSING", progress: 100 });
     const finish = () => {
       signal.removeEventListener("abort", abort);
       requestsRef.current.delete(taskId);
+      progressRef.current.delete(taskId);
     };
     xhr.onload = () => {
       finish();
@@ -90,7 +105,7 @@ export function useUploads(conversationId: string, onError: (message: string) =>
     form.set("conversationId", conversationId);
     form.set("file", file);
     xhr.send(form);
-  }), [conversationId, patch]);
+  }), [conversationId, patch, patchProgress]);
 
   const uploadDirect = useCallback(async (taskId: string, file: File, signal: AbortSignal) => {
     const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
@@ -115,10 +130,11 @@ export function useUploads(conversationId: string, onError: (message: string) =>
       Object.entries(reservation.requiredHeaders).forEach(([name, value]) => xhr.setRequestHeader(name, value));
       const abort = () => xhr.abort();
       signal.addEventListener("abort", abort, { once: true });
-      xhr.upload.onprogress = (event) => patch(taskId, { state: "UPLOADING", progress: event.lengthComputable ? Math.min(99, Math.round(event.loaded / event.total * 100)) : null });
+      xhr.upload.onprogress = (event) => patchProgress(taskId, event.lengthComputable ? Math.min(99, Math.round(event.loaded / event.total * 100)) : null);
       const finish = () => {
         signal.removeEventListener("abort", abort);
         requestsRef.current.delete(taskId);
+        progressRef.current.delete(taskId);
       };
       xhr.onload = () => {
         finish();
@@ -137,12 +153,13 @@ export function useUploads(conversationId: string, onError: (message: string) =>
       attachment = await apiRequest<Attachment>(`/api/dashboard/files/presigned?id=${encodeURIComponent(attachment.id)}`, { signal });
     }
     return attachment;
-  }, [conversationId, patch, uploadViaApplication]);
+  }, [conversationId, patch, patchProgress, uploadViaApplication]);
 
   const process = useCallback(async (taskId: string, file: File) => {
     const owner = ownerRef.current;
     const controller = new AbortController();
     controllersRef.current.set(taskId, controller);
+    progressRef.current.delete(taskId);
     patch(taskId, { state: "VALIDATING", progress: 0, message: null, attachment: null });
     const validation = validateClientFile(file);
     if (!validation.valid) {
@@ -164,6 +181,7 @@ export function useUploads(conversationId: string, onError: (message: string) =>
     } finally {
       controllersRef.current.delete(taskId);
       requestsRef.current.delete(taskId);
+      progressRef.current.delete(taskId);
     }
   }, [patch, uploadDirect]);
 
@@ -187,6 +205,7 @@ export function useUploads(conversationId: string, onError: (message: string) =>
         return;
       }
     }
+    progressRef.current.delete(task.id);
     setTasks((current) => current.filter((item) => item.id !== task.id));
   }, [cancel, onError]);
 
@@ -197,7 +216,10 @@ export function useUploads(conversationId: string, onError: (message: string) =>
 
   const readyAttachments = useMemo(() => tasks.filter((task) => uploadReady(task.state) && task.attachment).map((task) => task.attachment!), [tasks]);
   const busy = tasks.some((task) => uploadBusy(task.state));
-  const consume = useCallback(() => setTasks([]), []);
+  const consume = useCallback(() => {
+    progressRef.current.clear();
+    setTasks([]);
+  }, []);
 
   return { tasks, readyAttachments, busy, add, cancel, remove, retry, consume, cancelAll };
 }
