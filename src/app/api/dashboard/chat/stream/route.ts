@@ -32,33 +32,22 @@ export async function POST(request: Request) {
   let conversationLookupMs: number | null = null;
   try {
     assertSameOrigin(request);
-    const [session, body] = await Promise.all([
-      requireSession("agents:run", authTimings),
-      parseJson(request, chatStreamSchema, 96 * 1024),
-    ]);
-    const conversationPromise = (async () => {
-      const conversationStartedAt = performance.now();
-      try {
-        const [conversation] = await db().select({ id: conversations.id, agentId: conversations.agentId })
-          .from(conversations)
-          .innerJoin(agents, and(eq(agents.id, conversations.agentId), eq(agents.organizationId, session.organizationId)))
-          .where(and(
-            eq(conversations.id, body.conversationId),
-            eq(conversations.organizationId, session.organizationId),
-            conversationAccessFilter({ role: session.role, userId: session.userId, access: "write" }),
-            isNull(conversations.archivedAt),
-            isNull(conversations.deletedAt),
-            eq(agents.status, "published"),
-          )).limit(1);
-        return conversation;
-      } finally {
-        conversationLookupMs = Math.round(performance.now() - conversationStartedAt);
-      }
-    })();
-    const [conversation] = await Promise.all([
-      conversationPromise,
-      enforceRateLimit({ scope: "chat.send", key: `${session.organizationId}:${session.userId}`, limit: 30, windowMs: 60_000 }),
-    ]);
+    const session = await requireSession("agents:run", authTimings);
+    await enforceRateLimit({ scope: "chat.send", key: `${session.organizationId}:${session.userId}`, limit: 30, windowMs: 60_000 });
+    const body = await parseJson(request, chatStreamSchema, 96 * 1024);
+    const conversationStartedAt = performance.now();
+    const [conversation] = await db().select({ id: conversations.id, agentId: conversations.agentId })
+      .from(conversations)
+      .innerJoin(agents, and(eq(agents.id, conversations.agentId), eq(agents.organizationId, session.organizationId)))
+      .where(and(
+        eq(conversations.id, body.conversationId),
+        eq(conversations.organizationId, session.organizationId),
+        conversationAccessFilter({ role: session.role, userId: session.userId, access: "write" }),
+        isNull(conversations.archivedAt),
+        isNull(conversations.deletedAt),
+        eq(agents.status, "published"),
+      )).limit(1);
+    conversationLookupMs = Math.round(performance.now() - conversationStartedAt);
     if (!conversation) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة أو الوكيل غير متاح.");
 
     const encoder = new TextEncoder();

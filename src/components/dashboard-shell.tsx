@@ -1,19 +1,17 @@
 import Link from "next/link";
 import type { DashboardSession } from "@/components/dashboard-navigation";
 
-export function DashboardShell({ title, description, actions, children, variant = "default" }: {
+export function DashboardShell({ title, description, actions, children }: {
   session: DashboardSession;
   activePath: string;
   title: string;
   description?: string;
   actions?: React.ReactNode;
   children: React.ReactNode;
-  variant?: "default" | "chat";
 }) {
-  const chatLayout = variant === "chat";
   return (
     <>
-        <header className={chatLayout ? "dashboard-header dashboard-header-chat" : "dashboard-header"}>
+        <header className="dashboard-header">
           <div className="min-w-0">
             <p className="dashboard-breadcrumb">
               <Link href="/dashboard">مساحة العمل</Link>
@@ -27,7 +25,7 @@ export function DashboardShell({ title, description, actions, children, variant 
             {actions}
           </div>
         </header>
-        <div className={chatLayout ? "dashboard-content dashboard-content-chat" : "dashboard-content"}>{children}</div>
+        <div className="dashboard-content">{children}</div>
     </>
   );
 }

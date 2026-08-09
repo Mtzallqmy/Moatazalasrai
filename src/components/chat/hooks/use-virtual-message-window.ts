@@ -25,8 +25,6 @@ function estimatedHeight(message: Message) {
 export function useVirtualMessageWindow(messages: Message[], viewportRef: RefObject<HTMLDivElement | null>) {
   const [measured, setMeasured] = useState<Map<string, number>>(() => new Map());
   const observersRef = useRef(new Map<string, ResizeObserver>());
-  const pendingMeasurementsRef = useRef(new Map<string, number>());
-  const measurementFrameRef = useRef<number | null>(null);
   const rangeFrameRef = useRef<number | null>(null);
   const [range, setRange] = useState({ start: 0, end: messages.length });
   const virtualized = messages.length > VIRTUALIZE_AFTER;
@@ -99,45 +97,28 @@ export function useVirtualMessageWindow(messages: Message[], viewportRef: RefObj
 
   useEffect(() => () => {
     if (rangeFrameRef.current !== null) cancelAnimationFrame(rangeFrameRef.current);
-    if (measurementFrameRef.current !== null) cancelAnimationFrame(measurementFrameRef.current);
-    pendingMeasurementsRef.current.clear();
     for (const observer of observersRef.current.values()) observer.disconnect();
     observersRef.current.clear();
-  }, []);
-
-  const scheduleMeasurement = useCallback((id: string, height: number) => {
-    if (height <= 0) return;
-    pendingMeasurementsRef.current.set(id, height);
-    if (measurementFrameRef.current !== null) return;
-    measurementFrameRef.current = requestAnimationFrame(() => {
-      measurementFrameRef.current = null;
-      const pending = pendingMeasurementsRef.current;
-      pendingMeasurementsRef.current = new Map();
-      setMeasured((current) => {
-        let next: Map<string, number> | null = null;
-        for (const [messageId, nextHeight] of pending) {
-          if ((next?.get(messageId) ?? current.get(messageId)) === nextHeight) continue;
-          if (!next) next = new Map(current);
-          next.set(messageId, nextHeight);
-        }
-        return next ?? current;
-      });
-    });
   }, []);
 
   const register = useCallback((id: string, node: HTMLElement | null) => {
     observersRef.current.get(id)?.disconnect();
     observersRef.current.delete(id);
     if (!node || !virtualized) return;
-    const record = (entry?: ResizeObserverEntry) => {
-      const height = Math.ceil(entry?.borderBoxSize?.[0]?.blockSize ?? entry?.contentRect.height ?? node.offsetHeight);
-      scheduleMeasurement(id, height);
+    const record = () => {
+      const height = Math.ceil(node.getBoundingClientRect().height);
+      if (height > 0) setMeasured((current) => {
+        if (current.get(id) === height) return current;
+        const next = new Map(current);
+        next.set(id, height);
+        return next;
+      });
     };
     record();
-    const observer = new ResizeObserver((entries) => record(entries[0]));
+    const observer = new ResizeObserver(record);
     observer.observe(node);
     observersRef.current.set(id, observer);
-  }, [scheduleMeasurement, virtualized]);
+  }, [virtualized]);
 
   const start = virtualized ? Math.min(range.start, messages.length) : 0;
   const end = virtualized ? Math.max(start, Math.min(range.end, messages.length)) : messages.length;

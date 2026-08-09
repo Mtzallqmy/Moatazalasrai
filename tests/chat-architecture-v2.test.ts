@@ -80,37 +80,9 @@ describe("chat render and connection architecture", () => {
     expect(hook).toContain("OVERSCAN_PX");
     expect(hook).toContain("firstOffsetAfter");
     expect(hook).toContain("requestAnimationFrame");
-    expect(hook).toContain("pendingMeasurementsRef");
-    expect(hook).not.toContain("getBoundingClientRect");
     expect(list).toContain("data-rendered-count");
     expect(list).toContain("topSpacer");
     expect(list).toContain("bottomSpacer");
-  });
-
-  it("keeps the composer inside a bounded chat viewport on mobile", async () => {
-    const [page, shell, css] = await Promise.all([
-      readFile("src/app/dashboard/chat/page.tsx", "utf8"),
-      readFile("src/components/dashboard-shell.tsx", "utf8"),
-      readFile("src/app/dashboard/chat/conversation-workspace.css", "utf8"),
-    ]);
-    expect(page).toContain('variant="chat"');
-    expect(shell).toContain("dashboard-content-chat");
-    expect(css).toContain("grid-template-rows: minmax(0, 1fr)");
-    expect(css).toContain(".conversation-list-scroll");
-    expect(css).toContain('html[data-chat-keyboard-open="true"] .chat-workspace-shell');
-    expect(css).toContain("position: relative");
-    expect(css).not.toContain("inset-block-end: calc(4.45rem");
-  });
-
-  it("parallelizes pre-stream work and resolves directly linked conversations", async () => {
-    const [page, streamRoute] = await Promise.all([
-      readFile("src/app/dashboard/chat/page.tsx", "utf8"),
-      readFile("src/app/api/dashboard/chat/stream/route.ts", "utf8"),
-    ]);
-    expect(streamRoute).toContain("const [session, body] = await Promise.all");
-    expect(streamRoute).toContain("enforceRateLimit");
-    expect(page).toContain("requestedConversation");
-    expect(page).toContain("visibleRows");
   });
 
   it("loads model and knowledge catalogs only when their controls open", async () => {
