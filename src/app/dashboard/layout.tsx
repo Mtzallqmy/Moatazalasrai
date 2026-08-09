@@ -5,6 +5,7 @@ import { SessionExpiryGuard } from "@/components/session-expiry-guard";
 import { currentSession } from "@/lib/auth/session";
 import { loadCustomPermissions } from "@/lib/auth/custom-permissions";
 import { SiteFooter } from "@/components/site-footer";
+import "./dashboard-performance.css";
 
 export default async function DashboardLayout({ children }: { children: ReactNode }) {
   const session = await currentSession();
