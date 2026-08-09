@@ -1,0 +1,55 @@
+/* Keep dashboard interactions cheap on touch hardware without changing desktop capabilities. */
+.dashboard-root :where(button, [role="button"], summary, a[href], label[for]) {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.chat-composer > textarea {
+  field-sizing: content;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .dashboard-root .glass-panel {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: var(--surface);
+  }
+
+  .dashboard-root .soft-card:hover,
+  .dashboard-root .agent-template:hover,
+  .dashboard-root .primary-button:hover,
+  .dashboard-root .nav-link:hover,
+  .dashboard-root .conversation-row:hover,
+  .dashboard-root .appearance-theme:hover {
+    transform: none;
+  }
+
+  .dashboard-root .conversation-workspace,
+  .dashboard-root .chat-composer,
+  .dashboard-root .chat-message,
+  .dashboard-root .primary-button {
+    box-shadow: none;
+  }
+
+  .dashboard-root :where(button, a[href], summary, .soft-card, .agent-template, .conversation-row) {
+    transition-duration: 80ms;
+  }
+
+  .conversation-main .chat-stage,
+  .conversation-list-scroll,
+  .conversation-list {
+    scroll-behavior: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-root *,
+  .dashboard-root *::before,
+  .dashboard-root *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

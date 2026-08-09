@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useRef, useState } from "react";
 import { splitServerEvents } from "@/lib/chat/sse";
 import { apiRequest } from "@/lib/http/client";
 import type { Message, SendOptions } from "../types";
@@ -15,6 +15,8 @@ export type StreamCallbacks = {
 
 type ApiErrorPayload = { error?: { code?: string; message?: string } };
 
+const STREAM_RENDER_INTERVAL_MS = 50;
+
 export function useChatStream(ownerKey: string, currentUser: { id: string; name: string; email: string }, callbacks: StreamCallbacks) {
   const [activeStreamingMessage, setActiveStreamingMessage] = useState<Message | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -25,12 +27,15 @@ export function useChatStream(ownerKey: string, currentUser: { id: string; name:
   const generationRef = useRef<string | null>(null);
   const runIdRef = useRef<string | null>(null);
   const timeoutRef = useRef<number | null>(null);
+  const flushTimerRef = useRef<number | null>(null);
   const frameRef = useRef<number | null>(null);
 
   const clearScheduled = useCallback(() => {
     if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
+    if (flushTimerRef.current !== null) window.clearTimeout(flushTimerRef.current);
     if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
     timeoutRef.current = null;
+    flushTimerRef.current = null;
     frameRef.current = null;
   }, []);
 
@@ -108,13 +113,25 @@ export function useChatStream(ownerKey: string, currentUser: { id: string; name:
     let completed = false;
     const isActive = () => generationRef.current === generationId;
     const flushDelta = () => {
+      if (flushTimerRef.current !== null) window.clearTimeout(flushTimerRef.current);
       if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
+      flushTimerRef.current = null;
       frameRef.current = null;
       if (!pendingDelta || !isActive()) return;
       const delta = pendingDelta;
       pendingDelta = "";
       activeSnapshot = { ...activeSnapshot, content: activeSnapshot.content + delta };
-      setActiveStreamingMessage(activeSnapshot);
+      startTransition(() => setActiveStreamingMessage(activeSnapshot));
+    };
+    const scheduleDeltaFlush = () => {
+      if (flushTimerRef.current !== null || frameRef.current !== null) return;
+      flushTimerRef.current = window.setTimeout(() => {
+        flushTimerRef.current = null;
+        frameRef.current = window.requestAnimationFrame(() => {
+          frameRef.current = null;
+          flushDelta();
+        });
+      }, STREAM_RENDER_INTERVAL_MS);
     };
     timeoutRef.current = window.setTimeout(() => {
       if (!responseStarted) {
@@ -140,7 +157,8 @@ export function useChatStream(ownerKey: string, currentUser: { id: string; name:
         signal: controller.signal,
       });
       responseStarted = true;
-      clearScheduled();
+      if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
       if (!response.ok) {
         const payload = await response.json().catch(() => null) as ApiErrorPayload | null;
         throw new Error(payload?.error?.message ?? "تعذر تشغيل الوكيل.");
@@ -161,7 +179,7 @@ export function useChatStream(ownerKey: string, currentUser: { id: string; name:
         for (const item of parsed.events) {
           if (item.data === "[DONE]" || !isActive()) continue;
           const data = JSON.parse(item.data) as Record<string, unknown>;
-          if (item.event === "status" && typeof data.message === "string") setStatus(data.message);
+          if (item.event === "status" && typeof data.message === "string") startTransition(() => setStatus(data.message as string));
           if (item.event === "message" && data.userMessage) {
             sawServerMessage = true;
             callbacks.onServerUser(optimisticId, data.userMessage as Message);
@@ -170,11 +188,11 @@ export function useChatStream(ownerKey: string, currentUser: { id: string; name:
             flushDelta();
             runIdRef.current = data.runId;
             activeSnapshot = { ...activeSnapshot, id: `stream-${data.runId}`, metadata: { ...(activeSnapshot.metadata ?? {}), runId: data.runId } };
-            setActiveStreamingMessage(activeSnapshot);
+            startTransition(() => setActiveStreamingMessage(activeSnapshot));
           }
           if (item.event === "delta" && typeof data.text === "string") {
             pendingDelta += data.text;
-            if (frameRef.current === null) frameRef.current = window.requestAnimationFrame(flushDelta);
+            scheduleDeltaFlush();
           }
           if (item.event === "complete" && typeof data.messageId === "string") {
             flushDelta();

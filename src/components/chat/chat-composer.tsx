@@ -46,6 +46,7 @@ export const ChatComposer = memo(function ChatComposer({ conversationId, canWrit
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const resizeFrameRef = useRef<number | null>(null);
   const focusFrameRef = useRef<number | null>(null);
+  const viewportFrameRef = useRef<number | null>(null);
   const reportError = useCallback((message: string) => setLocalError(message), []);
   const draft = useDraft(conversationId, canWrite, reportError);
   const uploads = useUploads(conversationId, reportError);
@@ -53,19 +54,27 @@ export const ChatComposer = memo(function ChatComposer({ conversationId, canWrit
   useEffect(() => {
     const viewport = window.visualViewport;
     if (!viewport) return;
-    const update = () => {
+    const applyViewport = () => {
+      viewportFrameRef.current = null;
       const keyboardOpen = viewport.height < window.innerHeight - 120;
       document.documentElement.dataset.chatKeyboardOpen = keyboardOpen ? "true" : "false";
       document.documentElement.style.setProperty("--chat-visual-height", `${Math.round(viewport.height)}px`);
     };
-    update();
-    viewport.addEventListener("resize", update, { passive: true });
+    const scheduleViewport = () => {
+      if (viewportFrameRef.current !== null) return;
+      viewportFrameRef.current = requestAnimationFrame(applyViewport);
+    };
+    applyViewport();
+    viewport.addEventListener("resize", scheduleViewport, { passive: true });
+    viewport.addEventListener("scroll", scheduleViewport, { passive: true });
     return () => {
-      viewport.removeEventListener("resize", update);
+      viewport.removeEventListener("resize", scheduleViewport);
+      viewport.removeEventListener("scroll", scheduleViewport);
       delete document.documentElement.dataset.chatKeyboardOpen;
       document.documentElement.style.removeProperty("--chat-visual-height");
       if (resizeFrameRef.current !== null) cancelAnimationFrame(resizeFrameRef.current);
       if (focusFrameRef.current !== null) cancelAnimationFrame(focusFrameRef.current);
+      if (viewportFrameRef.current !== null) cancelAnimationFrame(viewportFrameRef.current);
     };
   }, []);
 
@@ -75,8 +84,13 @@ export const ChatComposer = memo(function ChatComposer({ conversationId, canWrit
       resizeFrameRef.current = null;
       const node = textareaRef.current;
       if (!node) return;
+      if (typeof CSS !== "undefined" && CSS.supports("field-sizing", "content")) {
+        node.style.height = "";
+        return;
+      }
       node.style.height = "0px";
-      node.style.height = `${Math.min(Math.max(node.scrollHeight, 48), 160)}px`;
+      const nextHeight = Math.min(Math.max(node.scrollHeight, 48), 160);
+      node.style.height = `${nextHeight}px`;
     });
   }, []);
 
@@ -171,7 +185,7 @@ export const ChatComposer = memo(function ChatComposer({ conversationId, canWrit
       if (focusFrameRef.current !== null) cancelAnimationFrame(focusFrameRef.current);
       focusFrameRef.current = requestAnimationFrame(() => {
         focusFrameRef.current = null;
-        textareaRef.current?.focus();
+        textareaRef.current?.focus({ preventScroll: true });
       });
     }
     return success;
@@ -185,8 +199,8 @@ export const ChatComposer = memo(function ChatComposer({ conversationId, canWrit
   const visibleError = localError ?? streamError;
   return (
     <>
-      <form onSubmit={submit} className="chat-composer" data-component="chat-composer">
-        <textarea ref={textareaRef} name="message" maxLength={30000} rows={1} value={draft.draft} onChange={(event) => draft.setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} disabled={!agentsAvailable || !canWrite || generating} placeholder={!canWrite ? "هذه المحادثة للقراءة فقط" : conversationId ? "اكتب رسالة…" : "اكتب أول رسالة لبدء المحادثة…"} aria-label="رسالة المحادثة" />
+      <form onSubmit={submit} className="chat-composer" data-component="chat-composer" aria-busy={generating}>
+        <textarea ref={textareaRef} name="message" maxLength={30000} rows={1} value={draft.draft} onChange={(event) => draft.setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} disabled={!agentsAvailable || !canWrite} placeholder={!canWrite ? "هذه المحادثة للقراءة فقط" : conversationId ? "اكتب رسالة…" : "اكتب أول رسالة لبدء المحادثة…"} aria-label="رسالة المحادثة" />
         <UploadTray tasks={uploads.tasks} onCancel={uploads.cancel} onRetry={(task) => void uploads.retry(task)} onRemove={(task) => void uploads.remove(task)} />
         {toolsOpen ? <section className="composer-tools-panel" aria-label="أدوات وسياق المحادثة">
           {puterEnabled ? <label><span>مصدر التنفيذ</span><select value={executionMode} onChange={(event) => { const next = event.target.value === "puter" ? "puter" : "server"; if (next === "puter" && uploads.tasks.length) { setLocalError("أزل المرفقات قبل التحويل إلى Puter."); return; } setExecutionMode(next); if (next === "puter" && !puterModels.length) void connectPuter(); }}><option value="server">الوكيل على الخادم</option><option value="puter" disabled={uploads.tasks.length > 0}>Puter من المتصفح</option></select></label> : null}
