@@ -1,10 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useRef, useState } from "react";
 import { apiRequest } from "@/lib/http/client";
 import type { PuterChatMessage } from "@/lib/puter/types";
 import type { Message } from "../types";
 import type { StreamCallbacks } from "./use-chat-stream";
+
+const STREAM_RENDER_INTERVAL_MS = 50;
 
 export function usePuterStream(ownerKey: string, currentUser: { id: string; name: string; email: string }, callbacks: StreamCallbacks) {
   const [activeStreamingMessage, setActiveStreamingMessage] = useState<Message | null>(null);
@@ -14,7 +16,15 @@ export function usePuterStream(ownerKey: string, currentUser: { id: string; name
   const controllerRef = useRef<AbortController | null>(null);
   const generationRef = useRef<string | null>(null);
   const executionRef = useRef<{ executionId: string; userMessageId: string; model: string; conversationId: string } | null>(null);
+  const flushTimerRef = useRef<number | null>(null);
   const frameRef = useRef<number | null>(null);
+
+  const clearFlush = useCallback(() => {
+    if (flushTimerRef.current !== null) window.clearTimeout(flushTimerRef.current);
+    if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
+    flushTimerRef.current = null;
+    frameRef.current = null;
+  }, []);
 
   const cancel = useCallback(() => {
     const execution = executionRef.current;
@@ -22,15 +32,14 @@ export function usePuterStream(ownerKey: string, currentUser: { id: string; name
     controllerRef.current?.abort(new DOMException("Puter cancelled", "AbortError"));
     controllerRef.current = null;
     executionRef.current = null;
-    if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
-    frameRef.current = null;
+    clearFlush();
     setGenerating(false);
     setStatus(null);
     if (execution) void apiRequest("/api/dashboard/chat/puter", {
       method: "PATCH",
       body: { conversationId: execution.conversationId, executionId: execution.executionId, userMessageId: execution.userMessageId, model: execution.model, status: "cancelled" },
     }).catch(() => undefined);
-  }, []);
+  }, [clearFlush]);
 
   useEffect(() => {
     queueMicrotask(() => {
@@ -45,14 +54,13 @@ export function usePuterStream(ownerKey: string, currentUser: { id: string; name
       controllerRef.current?.abort(new DOMException("Puter owner changed", "AbortError"));
       controllerRef.current = null;
       executionRef.current = null;
-      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
-      frameRef.current = null;
+      clearFlush();
       if (execution) void apiRequest("/api/dashboard/chat/puter", {
         method: "PATCH",
         body: { conversationId: execution.conversationId, executionId: execution.executionId, userMessageId: execution.userMessageId, model: execution.model, status: "cancelled" },
       }).catch(() => undefined);
     };
-  }, [ownerKey]);
+  }, [clearFlush, ownerKey]);
 
   const finish = useCallback(async (input: { executionId: string; userMessageId: string; model: string; conversationId: string }, state: "completed" | "failed" | "cancelled", content?: string) => {
     const result = await apiRequest<{ assistantMessage: Message | null }>("/api/dashboard/chat/puter", {
@@ -82,11 +90,22 @@ export function usePuterStream(ownerKey: string, currentUser: { id: string; name
     let active: Message | null = null;
     let pending = "";
     const flush = () => {
-      frameRef.current = null;
+      clearFlush();
       if (!pending || generationRef.current !== generationId || !active) return;
       active = { ...active, content: active.content + pending };
       pending = "";
-      setActiveStreamingMessage(active);
+      const snapshot = active;
+      startTransition(() => setActiveStreamingMessage(snapshot));
+    };
+    const scheduleFlush = () => {
+      if (flushTimerRef.current !== null || frameRef.current !== null) return;
+      flushTimerRef.current = window.setTimeout(() => {
+        flushTimerRef.current = null;
+        frameRef.current = window.requestAnimationFrame(() => {
+          frameRef.current = null;
+          flush();
+        });
+      }, STREAM_RENDER_INTERVAL_MS);
     };
     try {
       const [{ getPuterClient }, { streamPuterChat }] = await Promise.all([
@@ -109,7 +128,7 @@ export function usePuterStream(ownerKey: string, currentUser: { id: string; name
       setStatus("جارٍ إنشاء الرد…");
       const finalText = await streamPuterChat({ client, messages: result.messages, model, signal: controller.signal, onText(delta) {
         pending += delta;
-        if (frameRef.current === null) frameRef.current = requestAnimationFrame(flush);
+        scheduleFlush();
       } });
       flush();
       if (generationRef.current !== generationId) return false;
@@ -130,6 +149,7 @@ export function usePuterStream(ownerKey: string, currentUser: { id: string; name
       setError(cancelled ? "تم إيقاف استجابة Puter." : cause instanceof Error ? cause.message : "تعذر تشغيل Puter.");
       return false;
     } finally {
+      clearFlush();
       if (generationRef.current === generationId) {
         generationRef.current = null;
         controllerRef.current = null;
@@ -137,7 +157,7 @@ export function usePuterStream(ownerKey: string, currentUser: { id: string; name
         setGenerating(false);
       }
     }
-  }, [callbacks, currentUser.email, currentUser.id, currentUser.name, finish]);
+  }, [callbacks, clearFlush, currentUser.email, currentUser.id, currentUser.name, finish]);
 
   return { activeStreamingMessage, status, error, generating, send, stop, cancel, setError };
 }
