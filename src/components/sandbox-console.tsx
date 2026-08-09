@@ -71,6 +71,7 @@ export function SandboxConsole({ conversationId, compact = false }: { conversati
   const eventSourceRef = useRef<EventSource | null>(null);
   const terminalRef = useRef<HTMLPreElement | null>(null);
   const workspaceIdRef = useRef("");
+  const refreshTimerRef = useRef<number | null>(null);
 
   const workspace = workspaces.find((item) => item.id === workspaceId);
   const selectedExecution = executions.find((item) => item.id === selectedExecutionId);
@@ -82,60 +83,67 @@ export function SandboxConsole({ conversationId, compact = false }: { conversati
 
   useEffect(() => { workspaceIdRef.current = workspaceId; }, [workspaceId]);
 
-  const loadExecutions = useCallback(async (id?: string) => {
+  const loadExecutions = useCallback(async (id?: string, signal?: AbortSignal) => {
     const targetId = id ?? workspaceIdRef.current;
     if (!targetId) return;
-    const rows = await api<Execution[]>(`/api/dashboard/sandbox/executions?workspaceId=${encodeURIComponent(targetId)}&limit=100`);
+    const rows = await api<Execution[]>(`/api/dashboard/sandbox/executions?workspaceId=${encodeURIComponent(targetId)}&limit=100`, { signal });
     setExecutions(rows);
     setSelectedExecutionId((current) => current && rows.some((row) => row.id === current) ? current : rows[0]?.id ?? "");
   }, []);
 
-  const loadFiles = useCallback(async (path = ".") => {
+  const loadFiles = useCallback(async (path = ".", signal?: AbortSignal) => {
     const targetId = workspaceIdRef.current;
     if (!targetId) return;
     try {
-      const rows = await api<FileEntry[]>(`/api/dashboard/sandbox/files?mode=list&workspaceId=${encodeURIComponent(targetId)}&path=${encodeURIComponent(path)}&depth=5`);
+      const rows = await api<FileEntry[]>(`/api/dashboard/sandbox/files?mode=list&workspaceId=${encodeURIComponent(targetId)}&path=${encodeURIComponent(path)}&depth=5`, { signal });
       setFiles(rows);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "تعذر تحميل الملفات."); }
+    } catch (cause) { if (!signal?.aborted) setError(cause instanceof Error ? cause.message : "تعذر تحميل الملفات."); }
   }, []);
 
-  const loadWorkspaces = useCallback(async () => {
+  const loadWorkspaces = useCallback(async (signal?: AbortSignal) => {
     setLoading(true); setError("");
     try {
       const query = conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : "";
-      const rows = await api<Workspace[]>(`/api/dashboard/sandbox/workspaces${query}`);
+      const rows = await api<Workspace[]>(`/api/dashboard/sandbox/workspaces${query}`, { signal });
       setWorkspaces(rows);
       const currentId = workspaceIdRef.current;
       const nextId = rows.some((item) => item.id === currentId) ? currentId : rows[0]?.id ?? "";
       workspaceIdRef.current = nextId;
       setWorkspaceId(nextId);
-      if (nextId) await loadExecutions(nextId);
-      else setExecutions([]);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "تعذر تحميل Sandbox."); }
-    finally { setLoading(false); }
+      if (!nextId) setExecutions([]);
+      else if (nextId === currentId) await loadExecutions(nextId, signal);
+    } catch (cause) { if (!signal?.aborted) setError(cause instanceof Error ? cause.message : "تعذر تحميل Sandbox."); }
+    finally { if (!signal?.aborted) setLoading(false); }
   }, [conversationId, loadExecutions]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => { void loadWorkspaces(); }, 0);
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => { void loadWorkspaces(controller.signal); }, 0);
     return () => {
       window.clearTimeout(timer);
+      if (refreshTimerRef.current !== null) window.clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = null;
+      controller.abort();
       eventSourceRef.current?.close();
     };
   }, [loadWorkspaces]);
   useEffect(() => {
     if (!workspaceId) return;
+    const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      void loadExecutions(workspaceId);
+      void loadExecutions(workspaceId, controller.signal).catch((cause) => { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "تعذر تحميل التشغيلات."); });
     }, 0);
-    return () => window.clearTimeout(timer);
+    return () => { window.clearTimeout(timer); controller.abort(); };
   }, [loadExecutions, workspaceId]);
   useEffect(() => {
     if (activeTab !== "files" || !workspaceId) return;
-    const timer = window.setTimeout(() => { void loadFiles(); }, 0);
-    return () => window.clearTimeout(timer);
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => { void loadFiles(".", controller.signal); }, 0);
+    return () => { window.clearTimeout(timer); controller.abort(); };
   }, [activeTab, loadFiles, workspaceId]);
   useEffect(() => {
     eventSourceRef.current?.close();
+    const controller = new AbortController();
     let source: EventSource | null = null;
     const timer = window.setTimeout(() => {
       setEvents([]);
@@ -149,11 +157,12 @@ export function SandboxConsole({ conversationId, compact = false }: { conversati
         } catch {}
       };
       ["status", "output", "step", "error"].forEach((name) => source?.addEventListener(name, handler));
-      source.addEventListener("complete", () => { source?.close(); void loadExecutions(); });
+      source.addEventListener("complete", () => { source?.close(); void loadExecutions(undefined, controller.signal).catch(() => undefined); });
       source.onerror = () => source?.close();
     }, 0);
     return () => {
       window.clearTimeout(timer);
+      controller.abort();
       source?.close();
     };
   }, [loadExecutions, selectedExecutionId]);
@@ -165,7 +174,8 @@ export function SandboxConsole({ conversationId, compact = false }: { conversati
     try {
       await api("/api/dashboard/sandbox/workspaces", { method: "POST", body: JSON.stringify({ conversationId, template: "moataz-code", permissions: [] }) });
       await loadWorkspaces();
-      window.setTimeout(() => void loadWorkspaces(), 1_500);
+      if (refreshTimerRef.current !== null) window.clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = window.setTimeout(() => { refreshTimerRef.current = null; void loadWorkspaces(); }, 1_500);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "تعذر إنشاء المساحة."); }
     finally { setSaving(false); }
   }

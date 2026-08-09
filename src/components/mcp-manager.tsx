@@ -34,8 +34,8 @@ export function McpManager() {
   const [message, setMessage] = useState("");
   const [preview, setPreview] = useState("");
 
-  const load = useCallback(async () => {
-    const response = await fetch("/api/dashboard/mcp", { cache: "no-store" });
+  const load = useCallback(async (signal?: AbortSignal) => {
+    const response = await fetch("/api/dashboard/mcp", { cache: "no-store", signal });
     const payload = await response.json();
     if (!response.ok || !payload.success) throw new Error(payload.error?.message ?? "تعذر تحميل MCP.");
     setServers(payload.data.servers);
@@ -46,8 +46,9 @@ export function McpManager() {
   }, []);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void load().catch((error) => setMessage(errorMessage(error))), 0);
-    return () => window.clearTimeout(timer);
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => void load(controller.signal).catch((error) => { if (!controller.signal.aborted) setMessage(errorMessage(error)); }), 0);
+    return () => { window.clearTimeout(timer); controller.abort(); };
   }, [load]);
 
   async function mutate(method: "POST" | "PATCH", body: Record<string, unknown>) {

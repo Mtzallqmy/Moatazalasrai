@@ -29,9 +29,10 @@ export function WhatsAppConnectionCard({ canManagePlatform = false }: { canManag
   const [message, setMessage] = useState<string | null>(null);
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
   const statusRef = useRef<Status | null>(null);
+  const pollControllerRef = useRef<AbortController | null>(null);
 
-  const loadStatus = useCallback(async () => {
-    const response = await fetch("/api/integrations/whatsapp/status", { cache: "no-store" });
+  const loadStatus = useCallback(async (signal?: AbortSignal) => {
+    const response = await fetch("/api/integrations/whatsapp/status", { cache: "no-store", signal });
     const payload = await response.json().catch(() => null) as Api<Status> | null;
     if (!response.ok || !payload?.success || !payload.data) {
       throw new Error(apiMessage(payload, "تعذر تحميل حالة WhatsApp."));
@@ -42,10 +43,11 @@ export function WhatsAppConnectionCard({ canManagePlatform = false }: { canManag
   }, []);
 
   useEffect(() => {
+    const controller = new AbortController();
     const timer = setTimeout(() => {
-      loadStatus().catch((error) => setMessage(error instanceof Error ? error.message : "تعذر تحميل حالة WhatsApp."));
+      loadStatus(controller.signal).catch((error) => { if (!controller.signal.aborted) setMessage(error instanceof Error ? error.message : "تعذر تحميل حالة WhatsApp."); });
     }, 0);
-    return () => clearTimeout(timer);
+    return () => { clearTimeout(timer); controller.abort(); };
   }, [loadStatus]);
 
   useEffect(() => {
@@ -61,7 +63,10 @@ export function WhatsAppConnectionCard({ canManagePlatform = false }: { canManag
         return;
       }
       try {
-        const next = await loadStatus();
+        pollControllerRef.current?.abort();
+        const controller = new AbortController();
+        pollControllerRef.current = controller;
+        const next = await loadStatus(controller.signal);
         if (next.connected) {
           setExpiresAt(null);
           setMessage("تم ربط WhatsApp بنجاح.");
@@ -78,6 +83,8 @@ export function WhatsAppConnectionCard({ canManagePlatform = false }: { canManag
     return () => {
       stopped = true;
       clearInterval(interval);
+      pollControllerRef.current?.abort();
+      pollControllerRef.current = null;
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [expiresAt, loadStatus, status?.connected]);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   Clock3,
@@ -54,26 +54,31 @@ export function ToolApprovalsManager() {
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
+  const pollControllerRef = useRef<AbortController | null>(null);
 
-  const load = useCallback(async () => {
-    const response = await fetch("/api/tool-approvals", { cache: "no-store" });
+  const load = useCallback(async (signal?: AbortSignal) => {
+    const response = await fetch("/api/tool-approvals", { cache: "no-store", signal });
     const payload = await response.json().catch(() => null) as ApiPayload<Approval[]> | null;
     if (!response.ok || !payload?.success) throw new Error(payload?.error?.message ?? "تعذر تحميل طلبات الموافقة.");
     setApprovals(payload.data ?? []);
   }, []);
 
   useEffect(() => {
+    const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      void load().catch((error) => setMessage(error instanceof Error ? error.message : "تعذر تحميل طلبات الموافقة."));
+      void load(controller.signal).catch((error) => { if (!controller.signal.aborted) setMessage(error instanceof Error ? error.message : "تعذر تحميل طلبات الموافقة."); });
     }, 0);
-    return () => window.clearTimeout(timer);
+    return () => { window.clearTimeout(timer); controller.abort(); };
   }, [load]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
-      void load().catch(() => undefined);
+      pollControllerRef.current?.abort();
+      const controller = new AbortController();
+      pollControllerRef.current = controller;
+      void load(controller.signal).catch(() => undefined);
     }, 5000);
-    return () => window.clearInterval(timer);
+    return () => { window.clearInterval(timer); pollControllerRef.current?.abort(); pollControllerRef.current = null; };
   }, [load]);
 
   const sorted = useMemo(() => [...approvals].sort((left, right) =>

@@ -31,13 +31,13 @@ export function MfaSettings() {
   }
 
   useEffect(() => {
-    let active = true;
-    void fetch("/api/dashboard/security/mfa", { cache: "no-store" }).then(async (response) => {
+    const controller = new AbortController();
+    void fetch("/api/dashboard/security/mfa", { cache: "no-store", signal: controller.signal }).then(async (response) => {
       const json = await response.json();
       if (!response.ok) throw new Error(json?.error?.message || "تعذر تحميل حالة MFA.");
-      if (active) setStatus(unwrap(json) as unknown as Status);
-    }).catch((error: Error) => { if (active) setNotice(error.message); });
-    return () => { active = false; };
+      if (!controller.signal.aborted) setStatus(unwrap(json) as unknown as Status);
+    }).catch((error: Error) => { if (!controller.signal.aborted) setNotice(error.message); });
+    return () => controller.abort();
   }, []);
 
   async function request(operation: Record<string, unknown>, success: string) {

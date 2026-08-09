@@ -4,6 +4,7 @@ import { DashboardNavigation } from "@/components/dashboard-navigation";
 import { SessionExpiryGuard } from "@/components/session-expiry-guard";
 import { currentSession } from "@/lib/auth/session";
 import { loadCustomPermissions } from "@/lib/auth/custom-permissions";
+import { SiteFooter } from "@/components/site-footer";
 
 export default async function DashboardLayout({ children }: { children: ReactNode }) {
   const session = await currentSession();
@@ -18,6 +19,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
       <DashboardNavigation session={{ ...session, permissions }} activePath="/dashboard" />
       <section className="dashboard-main" id="main-content">
         {children}
+        <SiteFooter compact />
       </section>
     </main>
   );

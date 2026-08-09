@@ -49,8 +49,10 @@ describe("chat render and connection architecture", () => {
       readFile("src/components/chat/hooks/use-virtual-message-window.ts", "utf8"),
       readFile("src/components/chat/message-list.tsx", "utf8"),
     ]);
-    expect(hook).toContain("VIRTUALIZE_AFTER = 100");
+    expect(hook).toContain("VIRTUALIZE_AFTER = 60");
     expect(hook).toContain("OVERSCAN_PX");
+    expect(hook).toContain("firstOffsetAfter");
+    expect(hook).toContain("requestAnimationFrame");
     expect(list).toContain("data-rendered-count");
     expect(list).toContain("topSpacer");
     expect(list).toContain("bottomSpacer");

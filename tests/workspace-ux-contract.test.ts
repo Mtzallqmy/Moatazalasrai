@@ -15,7 +15,7 @@ describe("AI workspace UX architecture", () => {
 
   it("uses tenant-scoped server search with per-entity access constraints", async () => {
     const [navigation, route] = await Promise.all([
-      readFile("src/components/dashboard-navigation.tsx", "utf8"),
+      readFile("src/components/dashboard-navigation-overlays.tsx", "utf8"),
       readFile("src/app/api/dashboard/search/route.ts", "utf8"),
     ]);
     expect(navigation).toContain("/api/dashboard/search?q=");
@@ -71,16 +71,29 @@ describe("AI workspace UX architecture", () => {
   });
 
   it("stores developer mode on the server and applies it to technical details", async () => {
-    const [route, preference, technical, setting] = await Promise.all([
+    const [route, preference, developerMode, technical, setting] = await Promise.all([
       readFile("src/app/api/dashboard/preferences/developer-mode/route.ts", "utf8"),
       readFile("src/lib/preferences/developer-mode.ts", "utf8"),
+      readFile("src/components/chat/hooks/use-developer-mode.ts", "utf8"),
       readFile("src/components/workspace/technical-details.tsx", "utf8"),
       readFile("src/components/developer-mode-setting.tsx", "utf8"),
     ]);
     expect(route).toContain("assertSameOrigin(request)");
     expect(preference).toContain("developer_mode_enabled");
-    expect(technical).toContain("/api/dashboard/preferences/developer-mode");
+    expect(developerMode).toContain("/api/dashboard/preferences/developer-mode");
     expect(setting).toContain("moataz:developer-mode");
-    expect(technical).toContain("moataz:developer-mode");
+    expect(developerMode).toContain("moataz:developer-mode");
+    expect(technical).not.toContain("addEventListener");
+  });
+
+  it("keeps the dashboard shell persistent and defers expensive navigation overlays", async () => {
+    const [layout, navigation] = await Promise.all([
+      readFile("src/app/dashboard/layout.tsx", "utf8"),
+      readFile("src/components/dashboard-navigation.tsx", "utf8"),
+    ]);
+    await expect(readFile("src/app/dashboard/template.tsx", "utf8")).rejects.toThrow();
+    expect(layout).toContain("<DashboardNavigation");
+    expect(navigation).toContain('dynamic(() => import("@/components/dashboard-navigation-overlays")');
+    expect(navigation).toContain("drawerOpen ? <div");
   });
 });

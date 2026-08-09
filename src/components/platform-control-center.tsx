@@ -29,8 +29,8 @@ function unwrap(value: unknown) {
   return record.data && typeof record.data === "object" ? record.data as Data : record as unknown as Data;
 }
 
-async function fetchControlPlane() {
-  const response = await fetch("/api/dashboard/control-plane", { cache: "no-store" });
+async function fetchControlPlane(signal?: AbortSignal) {
+  const response = await fetch("/api/dashboard/control-plane", { cache: "no-store", signal });
   const json = await response.json();
   if (!response.ok) throw new Error(json?.error?.message || "تعذر تحميل مركز التحكم.");
   return unwrap(json);
@@ -48,13 +48,13 @@ export function PlatformControlCenter({ canManage }: { canManage: boolean }) {
 
   const load = useCallback(async () => setData(await fetchControlPlane()), []);
   useEffect(() => {
-    let active = true;
-    void fetchControlPlane().then((next) => {
-      if (active) setData(next);
+    const controller = new AbortController();
+    void fetchControlPlane(controller.signal).then((next) => {
+      if (!controller.signal.aborted) setData(next);
     }).catch((error: Error) => {
-      if (active) setNotice(error.message);
+      if (!controller.signal.aborted) setNotice(error.message);
     });
-    return () => { active = false; };
+    return () => controller.abort();
   }, []);
 
   async function mutate(operation: Record<string, unknown>, success: string) {

@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { ArrowDown, Loader2, RefreshCw } from "lucide-react";
 import type { ChatAppearance } from "@/lib/chat/appearance";
 import { useAutoScroll } from "./hooks/use-auto-scroll";
+import { useDeveloperMode } from "./hooks/use-developer-mode";
 import { MessageItem } from "./message-item";
 import { MessageList } from "./message-list";
 import type { ActionDialog, Agent, Conversation, Message } from "./types";
@@ -32,6 +33,7 @@ export const MessageViewport = memo(function MessageViewport({ conversationId, a
   const scrollFrameRef = useRef<number | null>(null);
   const contentSignal = `${completedMessages.length}:${activeStreamingMessage?.content.length ?? 0}:${activeStreamingMessage?.status ?? ""}`;
   const autoScroll = useAutoScroll(viewportRef, contentSignal);
+  const showTechnicalDetails = useDeveloperMode();
   useEffect(() => () => {
     if (copyTimeoutRef.current !== null) window.clearTimeout(copyTimeoutRef.current);
     if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
@@ -69,8 +71,8 @@ export const MessageViewport = memo(function MessageViewport({ conversationId, a
         {loading ? <div className="message-skeleton-stack">{[0, 1, 2].map((item) => <div key={item} className="skeleton message-skeleton" />)}</div> : null}
         {!loading && !error && conversationId && completedMessages.length === 0 && !activeStreamingMessage ? <div className="message-empty"><span>✦</span><h3>ابدأ المحادثة</h3><p>اكتب رسالتك، ويمكنك إضافة ملفات أو سياق متقدم عند الحاجة.</p></div> : null}
         {!conversationId ? <div className="message-empty new-chat-empty"><span>✦</span><h3>ابدأ مع وكيلك الذكي</h3><p>{agents.length ? "اختر الوكيل ثم اكتب رسالتك. سننشئ المحادثة تلقائيًا عند الإرسال." : "لا يوجد وكيل منشور. أنشئ وكيلًا واربطه بمزوّد متحقق أولًا."}</p>{agents.length ? <label><span>الوكيل</span><select className="form-control" value={selectedAgentId} onChange={(event) => onSelectAgent(event.target.value)}>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select></label> : <a className="primary-button" href="/dashboard/agents">إعداد وكيل ذكي</a>}</div> : null}
-        <MessageList messages={completedMessages} viewportRef={viewportRef} agentName={agentName} currentUserId={currentUserId} canManage={activeConversation?.canManage === true} copiedMessageId={copiedMessageId} onCopy={copy} onAction={onAction} />
-        {activeStreamingMessage ? <div className="active-streaming-message"><MessageItem message={activeStreamingMessage} agentName={agentName} currentUserId={currentUserId} canManage={false} copied={false} onCopy={copy} onAction={onAction} /></div> : null}
+        <MessageList messages={completedMessages} viewportRef={viewportRef} agentName={agentName} currentUserId={currentUserId} canManage={activeConversation?.canManage === true} copiedMessageId={copiedMessageId} showTechnicalDetails={showTechnicalDetails} onCopy={copy} onAction={onAction} />
+        {activeStreamingMessage ? <div className="active-streaming-message"><MessageItem message={activeStreamingMessage} agentName={agentName} currentUserId={currentUserId} canManage={false} copied={false} showTechnicalDetails={showTechnicalDetails} onCopy={copy} onAction={onAction} /></div> : null}
         <div className="chat-scroll-anchor" />
       </div>
       {autoScroll.showLatest ? <button type="button" className="latest-message-button" onClick={autoScroll.scrollToLatest}><ArrowDown size={16} /> أحدث رسالة</button> : null}

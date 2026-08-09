@@ -1,10 +1,12 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { memo } from "react";
 import { Check, Copy, FileText, Loader2, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { MessageContent } from "@/components/message-content";
-import { TechnicalDetails } from "@/components/workspace/technical-details";
 import type { ActionDialog, Message } from "./types";
+
+const TechnicalDetails = dynamic(() => import("@/components/workspace/technical-details").then((module) => module.TechnicalDetails));
 
 function metadataString(message: Message, key: string) {
   const value = message.metadata?.[key];
@@ -25,12 +27,13 @@ function statusLabel(status: Message["status"]) {
   return null;
 }
 
-export const MessageItem = memo(function MessageItem({ message, agentName, currentUserId, canManage, copied, onCopy, onAction }: {
+export const MessageItem = memo(function MessageItem({ message, agentName, currentUserId, canManage, copied, showTechnicalDetails, onCopy, onAction }: {
   message: Message;
   agentName: string;
   currentUserId: string;
   canManage: boolean;
   copied: boolean;
+  showTechnicalDetails: boolean;
   onCopy: (message: Message) => void;
   onAction: (dialog: ActionDialog) => void;
 }) {
@@ -48,7 +51,7 @@ export const MessageItem = memo(function MessageItem({ message, agentName, curre
         {message.content ? <button type="button" onClick={() => onCopy(message)} aria-label={copied ? "تم نسخ الرسالة" : "نسخ الرسالة"}>{copied ? <Check size={13} /> : <Copy size={13} />} {copied ? "تم النسخ" : "نسخ"}</button> : null}
         {canMutate || message.role === "user" && !message.id.startsWith("local-") ? <details className="message-actions-menu"><summary aria-label="إجراءات الرسالة"><MoreHorizontal size={16} /></summary><div>{message.role === "user" && canMutate ? <button type="button" onClick={() => onAction({ kind: "edit-message", message, value: message.content })}><Pencil size={13} /> تعديل وإعادة توليد</button> : null}{canMutate ? <button type="button" className="danger-menu-action" onClick={() => onAction({ kind: "delete-message", message })}><Trash2 size={13} /> حذف</button> : null}</div></details> : null}
       </footer>
-      <TechnicalDetails model={message.model} provider={metadataString(message, "provider")} latencyMs={message.latencyMs} inputTokens={message.inputTokens} outputTokens={message.outputTokens} runId={metadataString(message, "runId")} errorCode={message.errorCode} toolCalls={toolCallCount(message)} />
+      {showTechnicalDetails ? <TechnicalDetails model={message.model} provider={metadataString(message, "provider")} latencyMs={message.latencyMs} inputTokens={message.inputTokens} outputTokens={message.outputTokens} runId={metadataString(message, "runId")} errorCode={message.errorCode} toolCalls={toolCallCount(message)} /> : null}
     </article>
   );
 });
