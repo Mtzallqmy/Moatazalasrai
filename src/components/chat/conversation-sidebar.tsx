@@ -63,19 +63,19 @@ export const ConversationSidebar = memo(function ConversationSidebar({ conversat
   const rows = remoteRows ?? conversations;
   const groups = useMemo(() => groupConversations(rows), [rows]);
   return (
-    <aside className="conversation-sidebar" aria-label="قائمة المحادثات" data-mobile-open={mobileOpen ? "true" : "false"}>
+    <aside className="conversation-sidebar" aria-label="قائمة المحادثات" aria-busy={busy} data-mobile-open={mobileOpen ? "true" : "false"}>
       <header className="conversation-sidebar-header">
         <div><p className="eyebrow">مساحة العمل</p><h2>المحادثات</h2></div>
         <div className="conversation-sidebar-header-actions">
           <button type="button" className="icon-button chat-sidebar-close" onClick={onCloseMobile} aria-label="إغلاق قائمة المحادثات"><X size={18} /></button>
-          <button type="button" className="icon-button" aria-label="محادثة جديدة" disabled={busy || !agents.length} onClick={onNew}><FilePlus2 size={19} /></button>
+          <button type="button" className="icon-button" aria-label="محادثة جديدة" disabled={!agents.length} onClick={onNew}><FilePlus2 size={19} /></button>
         </div>
       </header>
       <div className="conversation-sidebar-controls">
         <input value={search} onChange={(event) => setSearch(event.target.value)} className="form-control" placeholder="ابحث في المحادثات…" aria-label="بحث في المحادثات" />
         <div className="conversation-new-row">
           <select value={selectedAgentId} onChange={(event) => onSelectAgent(event.target.value)} className="form-control" aria-label="وكيل المحادثة الجديدة">{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select>
-          <button type="button" className="primary-button" disabled={busy || !agents.length} onClick={onNew}>جديدة</button>
+          <button type="button" className="primary-button" disabled={!agents.length} onClick={onNew}>جديدة</button>
         </div>
         <div className="conversation-view-tabs" role="tablist"><button type="button" className={!archived ? "is-active" : ""} onClick={() => onArchivedChange(false)}>النشطة</button><button type="button" className={archived ? "is-active" : ""} onClick={() => onArchivedChange(true)}><Archive size={14} /> المؤرشفة</button></div>
       </div>
