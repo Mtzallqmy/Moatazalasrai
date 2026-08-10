@@ -1,6 +1,6 @@
 import { and, count, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { agentVersions, agents, auditLogs } from "@/db/schema";
+import { agentMcpTools, agentVersions, agents, auditLogs, mcpServers, mcpTools } from "@/db/schema";
 import { requireSession } from "@/lib/auth/authorization";
 import { assertVerifiedAgentModel, createAgent } from "@/lib/agents/application-service";
 import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
@@ -20,17 +20,41 @@ export async function GET(request: Request) {
         session.role === "member" ? eq(agents.status, "published") : undefined,
       )).limit(1);
       if (!agent) throw new ApiError(404, "AGENT_NOT_FOUND", "الوكيل غير موجود.");
-      const versions = await db().select({
-        id: agentVersions.id,
-        version: agentVersions.version,
-        providerCredentialId: agentVersions.providerCredentialId,
-        model: agentVersions.model,
-        instructions: agentVersions.instructions,
-        temperatureMilli: agentVersions.temperatureMilli,
-        maxOutputTokens: agentVersions.maxOutputTokens,
-        createdAt: agentVersions.createdAt,
-      }).from(agentVersions).where(eq(agentVersions.agentId, agent.id)).orderBy(desc(agentVersions.version));
-      return apiSuccess({ agent, versions }, requestId);
+      const [versions, availableMcpTools, boundMcpTools] = await Promise.all([
+        db().select({
+          id: agentVersions.id,
+          version: agentVersions.version,
+          providerCredentialId: agentVersions.providerCredentialId,
+          model: agentVersions.model,
+          instructions: agentVersions.instructions,
+          temperatureMilli: agentVersions.temperatureMilli,
+          maxOutputTokens: agentVersions.maxOutputTokens,
+          createdAt: agentVersions.createdAt,
+        }).from(agentVersions).where(eq(agentVersions.agentId, agent.id)).orderBy(desc(agentVersions.version)),
+        db().select({
+          id: mcpTools.id,
+          name: mcpTools.name,
+          title: mcpTools.title,
+          risk: mcpTools.risk,
+          serverName: mcpServers.name,
+        }).from(mcpTools).innerJoin(mcpServers, eq(mcpServers.id, mcpTools.serverId)).where(and(
+          eq(mcpTools.organizationId, session.organizationId),
+          eq(mcpTools.enabled, true),
+          eq(mcpServers.organizationId, session.organizationId),
+          eq(mcpServers.enabled, true),
+          eq(mcpServers.status, "connected"),
+        )),
+        db().select({ toolId: agentMcpTools.toolId }).from(agentMcpTools).where(and(
+          eq(agentMcpTools.organizationId, session.organizationId),
+          eq(agentMcpTools.agentId, agent.id),
+        )),
+      ]);
+      const boundIds = new Set(boundMcpTools.map((row) => row.toolId));
+      return apiSuccess({
+        agent,
+        versions,
+        mcpTools: availableMcpTools.map((tool) => ({ ...tool, enabled: boundIds.has(tool.id) })),
+      }, requestId);
     }
 
     const query = paginationSchema.parse(Object.fromEntries(url.searchParams));

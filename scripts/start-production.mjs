@@ -6,8 +6,6 @@ import { validateOptionalRuntimeEnvironment } from "./validate-runtime-env.mjs";
 
 const scriptsDirectory = path.dirname(fileURLToPath(import.meta.url));
 const applicationRoot = path.resolve(scriptsDirectory, "..");
-const telegramSchemaScript = path.join(scriptsDirectory, "check-telegram-schema.mjs");
-const telegramSetupScript = path.join(scriptsDirectory, "setup-telegram-webhook.mjs");
 const whatsappSchemaScript = path.join(scriptsDirectory, "check-whatsapp-schema.mjs");
 
 validateOptionalRuntimeEnvironment();
@@ -45,21 +43,7 @@ function runRequiredScript(input) {
   console.info(JSON.stringify({ level: "info", event: `${input.event}.completed` }));
 }
 
-if (enabled("TELEGRAM_INTEGRATION_ENABLED")) {
-  runRequiredScript({
-    event: "telegram.schema.verification",
-    script: telegramSchemaScript,
-    timeoutMs: 30_000,
-  });
-  const mode = process.env.TELEGRAM_UPDATE_MODE?.trim().toLowerCase() || "webhook";
-  if (mode === "webhook") {
-    runRequiredScript({
-      event: "telegram.webhook.bootstrap",
-      script: telegramSetupScript,
-      timeoutMs: 70_000,
-    });
-  }
-}
+
 
 if (enabled("WHATSAPP_INTEGRATION_ENABLED")) {
   runRequiredScript({

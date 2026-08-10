@@ -415,6 +415,7 @@ export async function readMcpResource(input: {
   serverId: string;
   uri: string;
   userId?: string | null;
+  signal?: AbortSignal;
 }) {
   const server = await getMcpServer(input.organizationId, input.serverId);
   await assertResourceAllowed(input.organizationId, server.id, input.uri);
@@ -428,6 +429,7 @@ export async function readMcpResource(input: {
     operation: () => readRemoteMcpResource({
       ...connection,
       uri: input.uri,
+      signal: input.signal,
     }),
   });
 }
@@ -438,6 +440,7 @@ export async function renderMcpPrompt(input: {
   name: string;
   arguments?: Record<string, string>;
   userId?: string | null;
+  signal?: AbortSignal;
 }) {
   const server = await getMcpServer(input.organizationId, input.serverId);
   await assertPromptAllowed(input.organizationId, server.id, input.name);
@@ -452,6 +455,7 @@ export async function renderMcpPrompt(input: {
       ...connection,
       name: input.name,
       arguments: input.arguments,
+      signal: input.signal,
     }),
   });
 }

@@ -27,7 +27,7 @@ function rememberRequest(request: Request, requestId: string) {
   });
 }
 
-export function completeRequestTiming(requestId: string, status: number, metrics: Record<string, number | string | boolean | null> = {}) {
+export function completeRequestTiming(requestId: string, status: number, metrics: Record<string, unknown> = {}) {
   const timing = requestTimings.get(requestId);
   if (!timing) return;
   requestTimings.delete(requestId);

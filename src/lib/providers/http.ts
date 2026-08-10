@@ -38,6 +38,18 @@ export function providerErrorForHttpStatus(status: number, bodyText = "", header
   const searchable = `${details.type ?? ""} ${details.message ?? ""}`.toLowerCase();
   const retryMs = retryAfterMs(headers);
 
+  if (/resource\s*exhausted|resourceexhausted/i.test(searchable)
+      && /worker\s+local\s+total\s+request\s+limit\s+reached/i.test(searchable)) {
+    return new ProviderError(
+      "PROVIDER_CAPACITY_EXHAUSTED",
+      "سعة التنفيذ لدى المزود ممتلئة مؤقتًا. لم يبدأ توليد الرد.",
+      503,
+      status,
+      true,
+      retryMs ?? 60_000,
+    );
+  }
+
   if (status === 400 && /context[_ -]?length|context window|maximum context|too many tokens/.test(searchable)) {
     return new ProviderError("CONTEXT_TOO_LARGE", "تجاوز سياق المحادثة الحد الذي يقبله النموذج.", 422, status);
   }

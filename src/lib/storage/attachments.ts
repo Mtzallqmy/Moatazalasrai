@@ -18,25 +18,26 @@ const SUPPORTED_EXTENSIONS = new Set([
   ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".xml", ".yaml", ".yml", ".log", ".ini", ".conf", ".env", ".sql",
   ".js", ".jsx", ".ts", ".tsx", ".py", ".java", ".c", ".h", ".cpp", ".hpp", ".cs", ".go", ".rs", ".php", ".rb", ".swift",
   ".kt", ".kts", ".dart", ".vue", ".svelte", ".sh", ".bash", ".ps1", ".toml", ".gradle", ".html", ".htm", ".css", ".scss",
-  ".pdf", ".doc", ".docx", ".odt", ".rtf", ".epub", ".xls", ".xlsx", ".ods", ".ppt", ".pptx", ".odp",
-  ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".svg", ".heic", ".heif",
-  ".zip", ".rar", ".7z", ".tar", ".gz", ".tgz", ".mp3", ".wav", ".ogg", ".m4a", ".mp4", ".webm", ".mov",
+  ".pdf", ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".epub", ".zip",
+  ".jpg", ".jpeg", ".png", ".webp", ".gif",
 ]);
-const ALLOWED_MIME_PREFIXES = ["text/", "image/", "audio/", "video/"];
 const ALLOWED_APPLICATION_MIMES = new Set([
   "application/octet-stream", "application/pdf", "application/json", "application/xml", "application/zip", "application/x-zip-compressed",
-  "application/vnd.rar", "application/x-rar-compressed", "application/x-7z-compressed", "application/gzip", "application/x-gzip", "application/x-tar",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   "application/vnd.oasis.opendocument.text", "application/vnd.oasis.opendocument.spreadsheet", "application/vnd.oasis.opendocument.presentation",
-  "application/rtf", "application/epub+zip", "application/msword", "application/vnd.ms-excel", "application/vnd.ms-powerpoint",
+  "application/epub+zip",
 ]);
 export const ALLOWED_ATTACHMENT_TYPES = new Set([
   ...ALLOWED_APPLICATION_MIMES,
-  "image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp", "image/tiff", "image/svg+xml", "image/heic", "image/heif",
-  "audio/mpeg", "audio/wav", "audio/ogg", "audio/mp4", "video/mp4", "video/webm", "video/quicktime",
+  "image/jpeg", "image/png", "image/webp", "image/gif",
   "text/plain", "text/markdown", "text/csv", "text/tab-separated-values", "text/html", "text/css", "text/xml",
+]);
+const TEXT_EXT_MIME_FAMILY = new Set([
+  ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".xml", ".yaml", ".yml", ".log", ".ini", ".conf", ".env", ".sql",
+  ".js", ".jsx", ".ts", ".tsx", ".py", ".java", ".c", ".h", ".cpp", ".hpp", ".cs", ".go", ".rs", ".php", ".rb", ".swift",
+  ".kt", ".kts", ".dart", ".vue", ".svelte", ".sh", ".bash", ".ps1", ".toml", ".gradle", ".html", ".htm", ".css", ".scss",
 ]);
 
 export function cleanFilename(value: string) {
@@ -48,26 +49,19 @@ function filenameExtension(filename: string) {
 function isOctet(mime: string) { return mime === "application/octet-stream"; }
 function familyMatches(ext: string, mime: string) {
   if (!ext || ext === ".dockerfile") return mime.startsWith("text/") || mime === "application/octet-stream";
-  if ([".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".svg", ".heic", ".heif"].includes(ext)) return mime.startsWith("image/") || isOctet(mime);
+  if ([".jpg", ".jpeg", ".png", ".webp", ".gif"].includes(ext)) return mime.startsWith("image/") || isOctet(mime);
   if (ext === ".pdf") return mime === "application/pdf" || isOctet(mime);
-  if ([".mp3", ".wav", ".ogg", ".m4a"].includes(ext)) return mime.startsWith("audio/") || isOctet(mime);
-  if ([".mp4", ".webm", ".mov"].includes(ext)) return mime.startsWith("video/") || isOctet(mime);
-  if ([".zip", ".rar", ".7z", ".tar", ".gz", ".tgz"].includes(ext)) return ["application/zip", "application/x-zip-compressed", "application/vnd.rar", "application/x-rar-compressed", "application/x-7z-compressed", "application/gzip", "application/x-gzip", "application/x-tar", "application/octet-stream"].includes(mime);
-  if ([".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".epub", ".doc", ".xls", ".ppt", ".rtf"].includes(ext)) return mime.startsWith("application/") && !["application/pdf", "application/x-msdownload"].includes(mime);
+  if (ext === ".zip") return ["application/zip", "application/x-zip-compressed", "application/octet-stream"].includes(mime);
+  if ([".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".epub"].includes(ext)) return mime.startsWith("application/") && mime !== "application/pdf";
   if (TEXT_EXT_MIME_FAMILY.has(ext)) return mime.startsWith("text/") || ["application/json", "application/xml", "application/octet-stream"].includes(mime);
-  return true;
+  return false;
 }
-const TEXT_EXT_MIME_FAMILY = new Set([
-  ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".xml", ".yaml", ".yml", ".log", ".ini", ".conf", ".env", ".sql",
-  ".js", ".jsx", ".ts", ".tsx", ".py", ".java", ".c", ".h", ".cpp", ".hpp", ".cs", ".go", ".rs", ".php", ".rb", ".swift",
-  ".kt", ".kts", ".dart", ".vue", ".svelte", ".sh", ".bash", ".ps1", ".toml", ".gradle", ".html", ".htm", ".css", ".scss",
-]);
 
 export function validateDeclaredMime(filename: string, mimeType: string) {
   const normalized = (mimeType || "application/octet-stream").split(";", 1)[0]!.trim().toLowerCase() || "application/octet-stream";
   const ext = filenameExtension(filename);
   const extensionAllowed = SUPPORTED_EXTENSIONS.has(ext) || ext === ".dockerfile" || !ext;
-  const mimeAllowed = ALLOWED_APPLICATION_MIMES.has(normalized) || ALLOWED_MIME_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+  const mimeAllowed = ALLOWED_ATTACHMENT_TYPES.has(normalized) || normalized.startsWith("text/");
   if (!extensionAllowed) throw new ApiError(415, "UNSUPPORTED_FILE_TYPE", "امتداد الملف غير مدعوم للتحليل الآمن.");
   if (!mimeAllowed) throw new ApiError(415, "UNSUPPORTED_FILE_TYPE", "نوع الملف المعلن غير مدعوم.");
   if (!familyMatches(ext, normalized)) throw new ApiError(415, "FILE_TYPE_MISMATCH", "نوع الملف المعلن لا يطابق امتداده.");
@@ -139,10 +133,10 @@ export async function storeAttachment(input: {
     if (!created) throw new Error("ATTACHMENT_CREATE_FAILED");
 
     const indexed = await indexProcessedAttachment({ attachmentId: id, organizationId: input.organizationId, conversationId: input.conversationId, processed });
-    const legacyStatus = indexed.status === "unsupported" ? "failed" : "ready";
+    const legacyStatus = indexed.status === "failed" ? "failed" : "ready";
     await db().update(attachments).set({
       processingStatus: legacyStatus,
-      processingErrorCode: indexed.status === "unsupported" ? processed.warnings[0] ?? "UNSUPPORTED_FILE_TYPE" : null,
+      processingErrorCode: indexed.status === "failed" ? processed.warnings[0] ?? "FILE_ANALYSIS_FAILED" : null,
       updatedAt: new Date(),
     }).where(and(eq(attachments.id, id), eq(attachments.organizationId, input.organizationId)));
 
@@ -194,8 +188,8 @@ export async function processStoredAttachment(attachmentId: string, organization
       detectedType: processed.detectedType,
       extractedText: processed.extractedText || null,
       archiveEntryCount: processed.archiveEntryCount,
-      processingStatus: indexed.status === "unsupported" ? "failed" : "ready",
-      processingErrorCode: indexed.status === "unsupported" ? processed.warnings[0] ?? "UNSUPPORTED_FILE_TYPE" : null,
+      processingStatus: indexed.status,
+      processingErrorCode: indexed.status === "failed" ? processed.warnings[0] ?? "FILE_ANALYSIS_FAILED" : null,
       updatedAt: new Date(),
     }).where(and(eq(attachments.id, attachmentId), eq(attachments.organizationId, organizationId)));
     return { status: indexed.status, chunkCount: indexed.chunkCount, indexedAt: indexed.indexedAt, warnings: processed.warnings };

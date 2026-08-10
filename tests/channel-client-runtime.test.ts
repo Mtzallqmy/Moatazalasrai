@@ -104,37 +104,7 @@ describe("shared channel client runtime", () => {
     expect(services).toContain("testCurrentAuthenticatedRunner");
   });
 
-  it("routes every visible Telegram runtime and integration button to a real handler", async () => {
-    const menu = await readFile("src/lib/telegram/menu-renderer.ts", "utf8");
-    const processor = await readFile("src/lib/telegram/update-processor.ts", "utf8");
-    const runtime = await readFile("src/lib/telegram/runtime-flows.ts", "utf8");
-    const repositories = await readFile("src/lib/telegram/repository-flows.ts", "utf8");
-    for (const [capability, action] of [
-      ["files.receive", "files:help"],
-      ["repositories.list", "repositories:list"],
-      ["browser.list", "browser:list"],
-      ["sandbox.list", "sandbox:list"],
-    ]) {
-      expect(menu).toContain(`"${capability}": "${action}"`);
-      expect(processor).toContain(`input.action === "${action}"`);
-    }
-    expect(processor).toContain("showTelegramRepository");
-    expect(processor).toContain('new ApiError(403, "TELEGRAM_FILES_CAPABILITY_DENIED"');
-    expect(runtime).toContain("channelBrowserDiagnostics");
-    expect(runtime).toContain("channelSandboxDiagnostics");
-    expect(repositories).toContain("listOrganizationGitHubRepositories");
-    expect(repositories).toContain("findOrganizationGitHubRepository");
-    expect(repositories).toContain("telegramPlatformConfig");
-    expect(repositories).not.toContain("https://moatazalalqami.online");
-  });
 
-  it("uses one capability registry for Telegram and WhatsApp", async () => {
-    const telegramRegistry = await readFile("src/lib/telegram/capability-registry.ts", "utf8");
-    expect(telegramRegistry).toContain("CHANNEL_CAPABILITY_REGISTRY");
-    expect(telegramRegistry).toContain("resolveChannelCapabilities");
-    expect(telegramRegistry).not.toContain("platformModules");
-    expect(telegramRegistry).not.toContain("loadCustomPermissions");
-  });
 
   it("makes the dashboard repository API use the same application service as channels", async () => {
     const route = await readFile("src/app/api/dashboard/repositories/route.ts", "utf8");
@@ -152,7 +122,7 @@ describe("shared channel client runtime", () => {
   });
 
   it("queues both webhooks before heavy channel or AI processing", async () => {
-    const telegram = await readFile("src/app/api/webhooks/telegram/route.ts", "utf8");
+    const telegram = await readFile("src/app/api/webhooks/telegram/[integrationId]/route.ts", "utf8");
     const whatsapp = await readFile("src/app/api/webhooks/whatsapp/route.ts", "utf8");
     expect(telegram).toContain("enqueueTelegramUpdate");
     expect(telegram).not.toContain("routeIncomingChannelMessage");

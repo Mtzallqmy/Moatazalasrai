@@ -54,23 +54,20 @@ COPY --from=builder --chown=nextjs:nodejs \
   /app/scripts/migrate-worker.mjs \
   /app/scripts/sql-utils.mjs \
   /app/scripts/start-production.mjs \
-  /app/scripts/check-telegram-schema.mjs \
   /app/scripts/check-whatsapp-schema.mjs \
-  /app/scripts/setup-telegram-webhook.mjs \
   /app/scripts/validate-runtime-env.mjs \
   ./scripts/
 
 # Fail the image build if Railway startup or migration assets are incomplete.
 RUN test -f /app/scripts/start-production.mjs \
-  && test -f /app/scripts/check-telegram-schema.mjs \
   && test -f /app/scripts/check-whatsapp-schema.mjs \
-  && test -f /app/scripts/setup-telegram-webhook.mjs \
   && test -f /app/scripts/validate-runtime-env.mjs \
   && test -f /app/drizzle/0039_central_telegram_bot.sql \
   && test -f /app/drizzle/0040_telegram_admin_default_permissions.sql \
   && test -f /app/drizzle/0041_telegram_user_sessions.sql \
   && test -f /app/drizzle/0042_whatsapp_user_sessions.sql \
   && test -f /app/drizzle/0050_member_access_expiry.sql \
+  && test -f /app/drizzle/0057_drop_legacy_central_telegram.sql \
   && node --input-type=module -e "await import('graphile-worker'); await import('pg')"
 
 USER nextjs

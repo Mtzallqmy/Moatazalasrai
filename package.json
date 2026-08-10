@@ -26,7 +26,6 @@
     "worker": "node --import tsx src/worker/index.ts",
     "worker:dev": "node --import tsx --watch src/worker/index.ts",
     "verify:deployment": "node scripts/verify-deployment.mjs",
-    "telegram:webhook:setup": "node scripts/setup-telegram-webhook.mjs",
     "secrets:reencrypt": "node --import tsx scripts/reencrypt-secrets.ts",
     "cf:build": "opennextjs-cloudflare build",
     "cf:preview": "opennextjs-cloudflare preview",

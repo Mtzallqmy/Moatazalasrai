@@ -30,7 +30,8 @@ type Version = {
   maxOutputTokens: number;
   createdAt: string;
 };
-type Details = { agent: Agent; versions: Version[] };
+type McpTool = { id: string; name: string; title: string | null; risk: string; serverName: string; enabled: boolean };
+type Details = { agent: Agent; versions: Version[]; mcpTools: McpTool[] };
 type AgentMutation = { agent: Agent; version: Version };
 
 function providerModels(providers: Provider[], providerId: string) {
@@ -134,6 +135,7 @@ export function AgentManager({ providers, initialAgents, canManage }: { provider
       const normalized = {
         agent: { ...agent, ...result.agent },
         versions: result.versions.map((item) => ({ ...item, createdAt: String(item.createdAt) })),
+        mcpTools: result.mcpTools ?? [],
       };
       setDetails(normalized);
       setEditProviderId(normalized.versions[0]?.providerCredentialId ?? agent.providerCredentialId);
@@ -165,6 +167,26 @@ export function AgentManager({ providers, initialAgents, canManage }: { provider
       router.refresh();
     } catch (cause) {
       setError(apiErrorMessage(cause, "تعذر تحديث الوكيل."));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function saveMcpTools(toolId: string, enabled: boolean) {
+    if (!details || !canManage) return;
+    clearFeedback();
+    setBusy(`mcp:${toolId}`);
+    const nextTools = details.mcpTools.map((tool) => tool.id === toolId ? { ...tool, enabled } : tool);
+    try {
+      await apiRequest<{ agentId: string; toolIds: string[] }>("/api/dashboard/agents/mcp", {
+        method: "PUT",
+        body: { agentId: details.agent.id, toolIds: nextTools.filter((tool) => tool.enabled).map((tool) => tool.id) },
+        timeoutMs: 30_000,
+      });
+      setDetails({ ...details, mcpTools: nextTools });
+      setNotice("تم تحديث أدوات MCP المفعلة للوكيل.");
+    } catch (cause) {
+      setError(apiErrorMessage(cause, "تعذر تحديث أدوات MCP."));
     } finally {
       setBusy(null);
     }
@@ -252,6 +274,6 @@ export function AgentManager({ providers, initialAgents, canManage }: { provider
       <fieldset><legend>النموذج</legend><div className="agent-fields"><Field label="المزود"><Select value={editProviderId} onChange={(event) => setEditProviderId(event.target.value)}>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</Select></Field><Field label="النموذج"><Select name="model" defaultValue={editModels.includes(version.model) ? version.model : editModels[0]}>{editModels.map((model) => <option key={model} value={model}>{friendlyModelName(model)}</option>)}</Select></Field></div><code className="technical-value agent-model-slug">{version.model}</code></fieldset>
       <details className="agent-advanced-settings"><summary>إعدادات متقدمة</summary><div className="agent-fields"><Field label="Temperature"><Input name="temperature" type="number" min={0} max={2} step={0.1} defaultValue={version.temperatureMilli / 1000} /></Field><Field label="حد الإخراج"><Input name="maxOutputTokens" type="number" min={64} max={32768} defaultValue={version.maxOutputTokens} /></Field></div></details>
       <footer className="modal-actions"><Button variant="secondary" type="button" onClick={() => setDetails(null)}>إلغاء</Button><Button type="submit" disabled={busy !== null || !editModels.length}>حفظ كإصدار جديد</Button></footer>
-    </form><section className="agent-version-panel"><h3><History size={16} /> الإصدارات</h3><div>{details.versions.map((item, index) => <button type="button" key={item.id} onClick={() => { setSelectedVersion(index); setEditProviderId(item.providerCredentialId); }} className={index === selectedVersion ? "agent-version-active" : undefined}><span>الإصدار {item.version}</span><b>{friendlyModelName(item.model)}</b><small>{relativeTime(item.createdAt)}</small></button>)}</div></section></section></dialog> : null}
+    </form><section className="agent-version-panel"><h3>أدوات MCP المفعلة</h3>{details.mcpTools.length ? <div>{details.mcpTools.map((tool) => <label key={tool.id} className="flex items-start gap-2 py-2 text-sm"><input type="checkbox" checked={tool.enabled} disabled={!canManage || busy !== null} onChange={(event) => void saveMcpTools(tool.id, event.target.checked)} /><span><b>{tool.title || tool.name}</b><small className="block text-slate-500">{tool.serverName} · {tool.risk}</small></span></label>)}</div> : <p className="text-sm text-slate-500">لا توجد أدوات من خادم MCP متصل. <Link href="/dashboard/mcp" className="underline">إضافة خادم MCP</Link></p>}</section><section className="agent-version-panel"><h3><History size={16} /> الإصدارات</h3><div>{details.versions.map((item, index) => <button type="button" key={item.id} onClick={() => { setSelectedVersion(index); setEditProviderId(item.providerCredentialId); }} className={index === selectedVersion ? "agent-version-active" : undefined}><span>الإصدار {item.version}</span><b>{friendlyModelName(item.model)}</b><small>{relativeTime(item.createdAt)}</small></button>)}</div></section></section></dialog> : null}
   </div>;
 }

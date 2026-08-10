@@ -1,6 +1,7 @@
 import { currentSession } from "@/lib/auth/session";
 import { loadCustomPermissions } from "@/lib/auth/custom-permissions";
 import { ApiError } from "@/lib/http/api";
+import { withDatabaseQuerySubsystem } from "@/db/query-observability";
 import { can, type Permission } from "@/lib/auth/permissions";
 
 export { can, permissionsFor } from "@/lib/auth/permissions";
@@ -21,7 +22,7 @@ export async function assertSessionPermission(session: AuthorizedSession, permis
 
 export async function requireSession(permission?: Permission, timings?: { sessionLatencyMs?: number; permissionLatencyMs?: number }): Promise<AuthorizedSession> {
   const sessionStartedAt = performance.now();
-  const session = await currentSession();
+  const session = await withDatabaseQuerySubsystem("session", () => currentSession());
   if (timings) timings.sessionLatencyMs = Math.round(performance.now() - sessionStartedAt);
   if (!session) throw new ApiError(401, "UNAUTHORIZED", "يجب تسجيل الدخول.");
   if (!session.organizationId || !session.role) {
@@ -30,7 +31,7 @@ export async function requireSession(permission?: Permission, timings?: { sessio
   const authorized = session as AuthorizedSession;
   if (permission) {
     const permissionStartedAt = performance.now();
-    await assertSessionPermission(authorized, permission);
+    await withDatabaseQuerySubsystem("permissions", () => assertSessionPermission(authorized, permission));
     if (timings) timings.permissionLatencyMs = Math.round(performance.now() - permissionStartedAt);
   }
   return authorized;

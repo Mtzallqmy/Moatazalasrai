@@ -198,7 +198,7 @@ export async function PATCH(request: Request) {
     let apiKey: string | undefined;
     if (connectionChanged) {
       if (!body.apiKey && !current.encryptedSecret) {
-        throw new ApiError(409, "PROVIDER_MANAGED_CREDENTIAL_UNSUPPORTED", "إدارة اتصالات Cloudflare تتم من لوحة الإدارة في هذا الإصدار.");
+        throw new ApiError(409, "PROVIDER_MANAGED_CREDENTIAL_UNSUPPORTED", "لا يحتوي هذا الاتصال المباشر على مفتاح مزود محفوظ. أضف مفتاحًا صالحًا ثم أعد التحقق.");
       }
       apiKey = body.apiKey ?? decryptSecret(current.encryptedSecret!, `provider:${principal.organizationId}`);
       const testModel = body.testModel ?? body.manualModel ?? current.discoveredModels[0];

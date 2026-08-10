@@ -7,6 +7,7 @@ export type McpConnectionInput = {
   endpoint: string;
   bearerToken?: string;
   authProvider?: OAuthClientProvider;
+  signal?: AbortSignal;
 };
 
 type ToolDescriptor = {
@@ -69,10 +70,15 @@ async function connectedClient<T>(input: McpConnectionInput, operation: (client:
       maxRetries: 2,
     },
   });
+  if (input.signal?.aborted) throw input.signal.reason ?? new DOMException("MCP request cancelled", "AbortError");
+  const abort = () => { void client.close().catch(() => undefined); };
+  input.signal?.addEventListener("abort", abort, { once: true });
   try {
     await client.connect(transport, { timeout: DISCOVERY_TIMEOUT_MS });
+    if (input.signal?.aborted) throw input.signal.reason ?? new DOMException("MCP request cancelled", "AbortError");
     return await operation(client);
   } finally {
+    input.signal?.removeEventListener("abort", abort);
     await client.close().catch(() => undefined);
   }
 }

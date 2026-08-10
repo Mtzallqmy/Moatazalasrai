@@ -1,11 +1,11 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
-import { runWithDatabaseQueryMetrics } from "@/db/query-observability";
+import { runWithDatabaseQueryMetrics, withDatabaseQuerySubsystem } from "@/db/query-observability";
 import { agentMemories, agents, attachments, conversations, messages } from "@/db/schema";
 import { aiFeatureEnabled } from "@/ai/config";
 import { buildMcpChatContext } from "@/ai/mcp/context";
 import { retrieveKnowledge } from "@/ai/rag/retriever";
-import { streamAgentRun } from "@/lib/agents/runtime";
+import { streamAgentRun, titleFromFirstMessage } from "@/lib/agents/runtime";
 import { requireSession } from "@/lib/auth/authorization";
 import { conversationAccessFilter } from "@/lib/chat/access";
 import { ApiError, assertSameOrigin, completeRequestTiming, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
@@ -39,7 +39,7 @@ export async function POST(request: Request) {
     const conversationPromise = (async () => {
       const conversationStartedAt = performance.now();
       try {
-        const [conversation] = await db().select({ id: conversations.id, agentId: conversations.agentId })
+        const [conversation] = await withDatabaseQuerySubsystem("conversation", () => db().select({ id: conversations.id, agentId: conversations.agentId, title: conversations.title })
           .from(conversations)
           .innerJoin(agents, and(eq(agents.id, conversations.agentId), eq(agents.organizationId, session.organizationId)))
           .where(and(
@@ -49,7 +49,7 @@ export async function POST(request: Request) {
             isNull(conversations.archivedAt),
             isNull(conversations.deletedAt),
             eq(agents.status, "published"),
-          )).limit(1);
+          )).limit(1));
         return conversation;
       } finally {
         conversationLookupMs = Math.round(performance.now() - conversationStartedAt);
@@ -57,7 +57,7 @@ export async function POST(request: Request) {
     })();
     const [conversation] = await Promise.all([
       conversationPromise,
-      enforceRateLimit({ scope: "chat.send", key: `${session.organizationId}:${session.userId}`, limit: 30, windowMs: 60_000 }),
+      withDatabaseQuerySubsystem("rate_limit", () => enforceRateLimit({ scope: "chat.send", key: `${session.organizationId}:${session.userId}`, limit: 30, windowMs: 60_000 })),
     ]);
     if (!conversation) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة أو الوكيل غير متاح.");
 
@@ -71,6 +71,8 @@ export async function POST(request: Request) {
     let memoryLatencyMs: number | null = null;
     let mcpLatencyMs: number | null = null;
     let streamFailed = false;
+    let providerAttemptCount = 0;
+    let maxActiveProviderRequests = 0;
     const streamAbort = new AbortController();
     const abortFromRequest = () => streamAbort.abort(request.signal.reason);
     request.signal.addEventListener("abort", abortFromRequest, { once: true });
@@ -85,23 +87,23 @@ export async function POST(request: Request) {
             finally { record(Math.round(performance.now() - startedAt)); }
           };
           const [attachmentData, mcpContext, knowledge, memoryRows] = await Promise.all([
-            measured(resolveAttachmentContext({
+            measured(withDatabaseQuerySubsystem("attachments", () => resolveAttachmentContext({
               organizationId: session.organizationId,
               conversationId: conversation.id,
               userId: session.userId,
               explicitAttachmentIds: body.attachmentIds,
               userQuery: body.message,
-            }), (value) => { attachmentContextMs = value; }),
-            measured(buildMcpChatContext({ organizationId: session.organizationId, userId: session.userId, resources: body.mcpResources, prompt: body.mcpPrompt }), (value) => { mcpLatencyMs = value; }),
+            })), (value) => { attachmentContextMs = value; }),
+            measured(withDatabaseQuerySubsystem("mcp", () => buildMcpChatContext({ organizationId: session.organizationId, userId: session.userId, resources: body.mcpResources, prompt: body.mcpPrompt, signal: streamAbort.signal })), (value) => { mcpLatencyMs = value; }),
             body.knowledgeBaseId && aiFeatureEnabled("RAG")
-              ? measured(retrieveKnowledge({ organizationId: session.organizationId, knowledgeBaseId: body.knowledgeBaseId, query: body.message }), (value) => { ragLatencyMs = value; })
+              ? measured(withDatabaseQuerySubsystem("rag", () => retrieveKnowledge({ organizationId: session.organizationId, knowledgeBaseId: body.knowledgeBaseId, query: body.message })), (value) => { ragLatencyMs = value; })
               : Promise.resolve({ text: "", citations: [] }),
             body.useMemory && aiFeatureEnabled("MEMORY")
-              ? measured(db().select({ content: agentMemories.content }).from(agentMemories).where(and(
+              ? measured(withDatabaseQuerySubsystem("memory", () => db().select({ content: agentMemories.content }).from(agentMemories).where(and(
                 eq(agentMemories.organizationId, session.organizationId),
                 eq(agentMemories.userId, session.userId),
                 eq(agentMemories.enabled, true),
-              )).limit(10), (value) => { memoryLatencyMs = value; })
+              )).limit(10)), (value) => { memoryLatencyMs = value; })
               : Promise.resolve([]),
           ]);
           contextDurationMs = Math.round(performance.now() - contextStartedAt);
@@ -115,7 +117,7 @@ export async function POST(request: Request) {
               ? inputKindForAttachments(attachmentData.attachments.map((file) => file.mimeType))
               : body.inputKind;
           const memoryText = memoryRows.length ? `\n\n[ذاكرة مصرح بها]\n${memoryRows.map((row) => row.content).join("\n")}` : "";
-          const [userMessage] = await db().transaction(async (tx) => {
+          const [userMessage] = await withDatabaseQuerySubsystem("messages", () => db().transaction(async (tx) => {
             const createdAt = new Date();
             const [created] = await tx.insert(messages).values({
               conversationId: conversation.id,
@@ -148,14 +150,18 @@ export async function POST(request: Request) {
                 inArray(attachments.id, body.attachmentIds),
               ));
             }
+            const generatedTitle = !conversation.title || conversation.title.startsWith("محادثة مع ")
+              ? titleFromFirstMessage(body.message)
+              : null;
             await tx.update(conversations).set({
+              ...(generatedTitle ? { title: generatedTitle } : {}),
               providerCredentialId: body.providerCredentialId,
               model: body.model,
               lastMessageAt: createdAt,
               updatedAt: createdAt,
             }).where(and(eq(conversations.id, conversation.id), eq(conversations.organizationId, session.organizationId)));
             return [created];
-          });
+          }));
           console.info(JSON.stringify({
             event: "chat.attachment_context_resolved", requestId, organizationId: session.organizationId,
             conversationId: conversation.id, messageId: userMessage.id,
@@ -198,9 +204,18 @@ export async function POST(request: Request) {
             model: body.model,
             inputKind: effectiveInputKind,
             media: combinedMedia,
+            onProviderAttempt: (attempt) => {
+              providerAttemptCount = Math.max(providerAttemptCount, attempt.attempt);
+              maxActiveProviderRequests = Math.max(maxActiveProviderRequests, attempt.activeProviderRequests);
+            },
           })) {
-            if (providerConnectMs === null) providerConnectMs = Math.round(performance.now() - providerStartedAt);
-            if (providerFirstTokenMs === null && event.type === "delta") providerFirstTokenMs = Math.round(performance.now() - providerStartedAt);
+            if (event.type === "delta") {
+              const elapsed = Math.round(performance.now() - providerStartedAt);
+              if (providerConnectMs === null) providerConnectMs = elapsed;
+              if (providerFirstTokenMs === null) providerFirstTokenMs = elapsed;
+            } else if (event.type === "complete" && providerConnectMs === null) {
+              providerConnectMs = Math.round(performance.now() - providerStartedAt);
+            }
             controller.enqueue(encoder.encode(sse(event.type, event)));
           }
         } catch (error) {
@@ -212,6 +227,9 @@ export async function POST(request: Request) {
           }
         } finally {
           const streamDurationMs = Math.round(performance.now() - streamStartedAt);
+          const enhancedContext = body.attachmentIds.length > 0 || Boolean(body.knowledgeBaseId) || Boolean(body.mcpResources.length) || Boolean(body.mcpPrompt) || body.useMemory;
+          const dbQueryBudget = enhancedContext ? 48 : 32;
+          const dbQueryBudgetExceeded = queryMetrics.count > dbQueryBudget;
           console.info(JSON.stringify({
             level: streamFailed ? "warn" : "info",
             event: "chat.stream.completed",
@@ -229,6 +247,11 @@ export async function POST(request: Request) {
             providerFirstTokenMs,
             streamDurationMs,
             dbQueryCount: queryMetrics.count,
+            dbQueryBudget,
+            dbQueryBudgetExceeded,
+            dbQueriesBySubsystem: queryMetrics.bySubsystem,
+            providerAttemptCount,
+            maxActiveProviderRequests,
           }));
           if (!streamFailed) completeRequestTiming(requestId, 200, {
             sessionLatencyMs: authTimings.sessionLatencyMs ?? null,
@@ -242,6 +265,11 @@ export async function POST(request: Request) {
             providerFirstTokenMs,
             streamDurationMs,
             dbQueryCount: queryMetrics.count,
+            dbQueryBudget,
+            dbQueryBudgetExceeded,
+            dbQueriesBySubsystem: queryMetrics.bySubsystem,
+            providerAttemptCount,
+            maxActiveProviderRequests,
           });
           request.signal.removeEventListener("abort", abortFromRequest);
           try { controller.close(); } catch { /* The consumer cancelled the stream. */ }

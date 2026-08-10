@@ -88,45 +88,19 @@ export function validateOptionalRuntimeEnvironment() {
 
   const storage = process.env.OBJECT_STORAGE_DRIVER?.trim().toLowerCase() || "database";
   if (!new Set(["database", "local", "r2"]).has(storage)) throw new Error("OBJECT_STORAGE_DRIVER must be database, local or r2.");
+  if (process.env.NODE_ENV === "production" && storage !== "r2") {
+    throw new Error("Production chat attachments require OBJECT_STORAGE_DRIVER=r2 so direct uploads do not fall back through the application server.");
+  }
   if (storage === "r2") {
     requireAll("R2", ["R2_BUCKET_NAME", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"]);
     if (!process.env.R2_ACCOUNT_ID?.trim() && !process.env.R2_ENDPOINT?.trim()) throw new Error("R2 requires R2_ACCOUNT_ID or R2_ENDPOINT.");
   }
 
-  if (enabled("CLOUDFLARE_AI_GATEWAY_ENABLED")) {
-    requireAll("Cloudflare AI Gateway", [
-      "CLOUDFLARE_ACCOUNT_ID",
-      "CLOUDFLARE_AI_GATEWAY_ID",
-    ]);
-  }
-  if (enabled("AI_PROVIDER_DIRECT_FALLBACK_ENABLED") && !enabled("AI_PROVIDER_FALLBACK_ENABLED")) {
-    throw new Error("AI_PROVIDER_DIRECT_FALLBACK_ENABLED requires AI_PROVIDER_FALLBACK_ENABLED=true.");
-  }
+
 
   validateExecutionKernel();
 
-  if (enabled("TELEGRAM_INTEGRATION_ENABLED")) {
-    requireAll("Telegram central bot", [
-      "TELEGRAM_BOT_TOKEN",
-      "TELEGRAM_WEBHOOK_SECRET",
-      "TELEGRAM_LINK_CODE_SECRET",
-    ]);
-    publicAppUrl("Telegram central bot");
-    if (process.env.TELEGRAM_WEBHOOK_SECRET.trim().length < 16) {
-      throw new Error("TELEGRAM_WEBHOOK_SECRET must contain at least 16 characters.");
-    }
-    if (process.env.TELEGRAM_LINK_CODE_SECRET.trim().length < 32) {
-      throw new Error("TELEGRAM_LINK_CODE_SECRET must contain at least 32 characters.");
-    }
-    const explicitWebhook = process.env.TELEGRAM_WEBHOOK_URL?.trim();
-    if (explicitWebhook && process.env.NODE_ENV === "production" && !explicitWebhook.startsWith("https://")) {
-      throw new Error("TELEGRAM_WEBHOOK_URL must use HTTPS in production.");
-    }
-    const updateMode = process.env.TELEGRAM_UPDATE_MODE?.trim().toLowerCase() || "webhook";
-    if (!new Set(["webhook", "polling"]).has(updateMode)) {
-      throw new Error("TELEGRAM_UPDATE_MODE must be webhook or polling.");
-    }
-  }
+
 
   if (enabled("WHATSAPP_INTEGRATION_ENABLED")) {
     requireAll("WhatsApp Business Platform", [

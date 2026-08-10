@@ -138,6 +138,7 @@ export async function executeMcpToolIdempotent(input: {
   runId: string;
   toolCallId: string;
   stepNumber: number;
+  signal?: AbortSignal;
 }) {
   const args = asRecord(input.arguments);
   const inputDigest = digest(args);
@@ -192,6 +193,7 @@ export async function executeMcpToolIdempotent(input: {
       name: binding.tool.name,
       arguments: args,
       timeoutMs: toolTimeoutMs(binding.tool.capability),
+      signal: input.signal,
     });
     assertMcpJsonLimits(result);
     if (binding.tool.outputSchema) {

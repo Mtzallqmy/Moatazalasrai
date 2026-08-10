@@ -35,6 +35,7 @@ export async function POST(request: Request) {
         userId: principal.userId,
         resources: body.mcpResources,
         prompt: body.mcpPrompt,
+        signal: request.signal,
       }),
     ]);
     const media = context.rows.filter((file) => ["image/jpeg", "image/png", "image/webp", "image/gif"].includes(file.mimeType)).map((file) => ({

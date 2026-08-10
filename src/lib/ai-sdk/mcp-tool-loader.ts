@@ -146,6 +146,7 @@ export async function loadBoundMcpTools(input: {
           runId: input.runId,
           toolCallId: options.toolCallId,
           stepNumber: input.state.allocateStep(),
+          signal: options.abortSignal,
         });
         input.state.toolExecuted = true;
         input.state.toolResultSaved = true;

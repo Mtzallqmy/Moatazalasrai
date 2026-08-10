@@ -41,23 +41,9 @@ docker run --rm -p 3000:3000 --env-file .env moataz-agent-platform
 
 ## Cloudflare أمام Railway
 
-Railway/Docker هو runtime الأساسي. لا تُنقل PostgreSQL أو Graphile Worker أو Next.js إلى Cloudflare Workers في هذه المرحلة. يُستخدم Cloudflare DNS/Proxy وTurnstile وR2 وAI Gateway الاختياري فقط. راجع [دليل Cloudflare](CLOUDFLARE.md).
+Railway/Docker هو runtime الأساسي. لا تُنقل PostgreSQL أو Graphile Worker أو Next.js إلى Cloudflare Workers في هذه المرحلة. يُستخدم Cloudflare DNS/Proxy وTurnstile وR2 فقط. راجع [دليل Cloudflare](CLOUDFLARE.md).
 
 عند استخدام التخزين المحلي داخل Docker اربط volume دائمًا إلى `/app/.data`; لا تستخدمه مع عدة replicas. للإنتاج اختر `OBJECT_STORAGE_DRIVER=r2`. يشغّل Web pre-deploy migrations ثم تهيئة المالك المشروطة، ولا يكرر Worker migrations عند البدء.
-
-### تفعيل منصة مزوّدي Cloudflare تدريجيًا
-
-1. أضف معرّفات الحساب والبوابة إلى Web وWorker، وأضف فقط الرموز المطلوبة للمسار المختار.
-2. انشر أولًا والاتصالات الحالية على `direct` والـfallback معطل.
-3. شغّل migration ثم تحقق من اتصال خادمي موجود ومن المحادثة والبث.
-4. أنشئ اتصال staging عبر provider-native أو REST واختبره قبل جعله افتراضيًا.
-5. استخدم Workers AI فقط في نشر OpenNext/Wrangler الذي يحتوي binding `AI`.
-6. راقب HTTP status وrequest/trace ID وlatency وحالة `interrupted` للبث، دون payloads أو أسرار.
-7. للرجوع عطّل الاتصال أو أعده إلى `direct`، وأبق الـfallback معطلًا.
-
-لا يستخدم التنفيذ الجديد `OPENAI_BASE_URL` أو endpoint `/compat`. `CLOUDFLARE_AI_GATEWAY_TOKEN` مخصص لـAuthenticated Gateway، و`CLOUDFLARE_API_TOKEN` مخصص لـAI Gateway REST API، ولا يحل أي منهما محل BYOK إلا عندما يكون الاتصال مضبوطًا صراحة على مرجع Cloudflare.
-
-راجع [دليل منصة مزوّدي Cloudflare](cloudflare-ai-gateway.md).
 
 ## التهيئة
 

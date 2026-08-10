@@ -1,5 +1,6 @@
 import { and, eq, max, sql } from "drizzle-orm";
 import { db } from "@/db";
+import { withDatabaseQuerySubsystem } from "@/db/query-observability";
 import { databaseRows } from "@/db/result";
 import { runEvents, runs } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
@@ -10,7 +11,7 @@ export async function appendRunEvents(input: {
   events: Array<{ type: string; payload?: Record<string, unknown> }>;
 }) {
   if (input.events.length === 0) return [];
-  return db().transaction(async (tx) => {
+  return withDatabaseQuerySubsystem("run_events", () => db().transaction(async (tx) => {
     const lock = await tx.execute(sql`
       SELECT "id" FROM "runs"
       WHERE "id" = ${input.runId} AND "organization_id" = ${input.organizationId}
@@ -27,7 +28,7 @@ export async function appendRunEvents(input: {
       type: event.type,
       payload: event.payload ?? {},
     }))).returning();
-  });
+  }));
 }
 
 export async function appendRunEvent(input: {

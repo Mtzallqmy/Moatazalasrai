@@ -119,7 +119,7 @@ export function useUploads(conversationId: string, onError: (message: string) =>
         body: { conversationId, filename: file.name, mimeType: file.type || "application/octet-stream", sizeBytes: file.size, sha256 },
       });
     } catch (cause) {
-      if (cause instanceof ApiClientError && cause.code === "DIRECT_UPLOAD_UNAVAILABLE") return uploadViaApplication(taskId, file, signal);
+      if (cause instanceof ApiClientError && cause.code === "DIRECT_UPLOAD_UNAVAILABLE" && process.env.NODE_ENV !== "production") return uploadViaApplication(taskId, file, signal);
       throw cause;
     }
     await new Promise<void>((resolve, reject) => {
@@ -148,7 +148,7 @@ export function useUploads(conversationId: string, onError: (message: string) =>
     });
     patch(taskId, { state: "PROCESSING", progress: 100 });
     let attachment = await apiRequest<Attachment>("/api/dashboard/files/presigned", { method: "PATCH", signal, body: { attachmentId: reservation.attachment.id } });
-    for (let attempt = 0; attempt < 60 && attachment.processingStatus !== "ready" && attachment.processingStatus !== "failed"; attempt += 1) {
+    for (let attempt = 0; attempt < 60 && !["ready", "partially_ready", "failed"].includes(attachment.intelligenceStatus ?? attachment.processingStatus ?? "pending"); attempt += 1) {
       await abortableDelay(1_000, signal);
       attachment = await apiRequest<Attachment>(`/api/dashboard/files/presigned?id=${encodeURIComponent(attachment.id)}`, { signal });
     }

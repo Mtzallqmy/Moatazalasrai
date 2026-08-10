@@ -9,7 +9,7 @@ import { getProviderAdapter } from "@/lib/providers/registry";
 import { ProviderError, type ProviderMessage } from "@/lib/providers/types";
 import type { ProviderKind, ProviderTransportMode, ProviderTypeId } from "@/lib/providers/types";
 import { createDirectLanguageModel } from "@/lib/ai-sdk/model-factory";
-import { loadAgentMcpTools, type ToolRuntimeState } from "@/lib/ai-sdk/mcp-tools";
+import { loadAgentMcpTools, type AgentToolBinding, type ToolRuntimeState } from "@/lib/ai-sdk/mcp-tools";
 import { maxModelStepsPerRun } from "@/lib/ai-sdk/limits";
 import { aiSdkTelemetry } from "@/lib/ai-sdk/telemetry";
 import { persistRunStep } from "@/lib/ai-sdk/run-steps";
@@ -25,11 +25,6 @@ export type AiSdkCandidate = {
   capabilities: Record<string, boolean | undefined>;
   providerTypeId?: ProviderTypeId;
   transportMode?: ProviderTransportMode;
-  gatewayId?: string;
-  keyAlias?: string;
-  skipCache?: boolean;
-  cacheTtl?: number;
-  collectLog?: boolean;
 };
 
 export type AiSdkExecutionState = {
@@ -170,6 +165,7 @@ async function runtimeTools(input: {
   agentId: string;
   runId: string;
   allowedToolIds?: readonly string[] | null;
+  toolsEnabled?: boolean;
   allocateStep: () => number;
 }) {
   const state: ToolRuntimeState = {
@@ -178,6 +174,15 @@ async function runtimeTools(input: {
     sideEffectOccurred: false,
     allocateStep: input.allocateStep,
   };
+  if (input.toolsEnabled === false) {
+    return {
+      tools: {},
+      bindings: new Map<string, AgentToolBinding>(),
+      hasTools: false,
+      internalToolNames: [] as string[],
+      state,
+    };
+  }
   const loaded = await loadAgentMcpTools({
     organizationId: input.organizationId,
     userId: input.userId,
@@ -269,6 +274,7 @@ export async function executeAiSdkCandidate(input: {
   context?: ProviderMessage[];
   resumeMessages?: ModelMessage[];
   allowedToolIds?: readonly string[] | null;
+  toolsEnabled?: boolean;
   temperature: number;
   maxOutputTokens: number;
   abortSignal?: AbortSignal;
@@ -290,11 +296,6 @@ export async function executeAiSdkCandidate(input: {
       requestId: input.requestId,
       providerTypeId: input.candidate.providerTypeId,
       transportMode: input.candidate.transportMode,
-      gatewayId: input.candidate.gatewayId,
-      keyAlias: input.candidate.keyAlias,
-      skipCache: input.candidate.skipCache,
-      cacheTtl: input.candidate.cacheTtl,
-      collectLog: input.candidate.collectLog,
     });
     const result = await generateText({
       model,
@@ -380,6 +381,7 @@ export async function* streamAiSdkCandidate(input: {
   candidate: AiSdkCandidate;
   context: ProviderMessage[];
   allowedToolIds?: readonly string[] | null;
+  toolsEnabled?: boolean;
   temperature: number;
   maxOutputTokens: number;
   abortSignal?: AbortSignal;
@@ -399,11 +401,6 @@ export async function* streamAiSdkCandidate(input: {
       requestId: input.requestId,
       providerTypeId: input.candidate.providerTypeId,
       transportMode: input.candidate.transportMode,
-      gatewayId: input.candidate.gatewayId,
-      keyAlias: input.candidate.keyAlias,
-      skipCache: input.candidate.skipCache,
-      cacheTtl: input.candidate.cacheTtl,
-      collectLog: input.candidate.collectLog,
     });
     const result = streamText({
       model,

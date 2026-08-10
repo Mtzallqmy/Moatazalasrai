@@ -23,7 +23,7 @@ export const conversationMemberRole = pgEnum("conversation_member_role", ["reade
 export const integrationKind = pgEnum("integration_kind", ["telegram", "github"]);
 export const integrationStatus = pgEnum("integration_status", ["pending", "verified", "failed"]);
 export const attachmentSource = pgEnum("attachment_source", ["web", "api", "telegram"]);
-export const fileProcessingStatus = pgEnum("file_processing_status", ["pending", "processing", "ready", "failed", "quarantined"]);
+export const fileProcessingStatus = pgEnum("file_processing_status", ["pending", "processing", "ready", "partially_ready", "failed", "quarantined"]);
 export const memoryKind = pgEnum("memory_kind", ["semantic", "procedural", "episodic"]);
 export const documentStatus = pgEnum("document_status", ["uploaded", "processing", "ready", "failed", "deleted"]);
 export const jobStatus = pgEnum("job_status", ["queued", "running", "completed", "failed", "cancelled"]);
@@ -141,11 +141,6 @@ export const providerCredentials = pgTable("provider_credentials", {
   providerTypeId: text("provider_type_id").notNull(),
   transportMode: text("transport_mode").notNull().default("direct"),
   credentialMode: text("credential_mode").notNull().default("encrypted_byok"),
-  gatewayId: text("gateway_id"),
-  keyAlias: text("key_alias"),
-  gatewaySkipCache: boolean("gateway_skip_cache").notNull().default(true),
-  gatewayCacheTtl: integer("gateway_cache_ttl"),
-  gatewayCollectLog: boolean("gateway_collect_log").notNull().default(false),
   defaultModel: text("default_model"),
   allowedModels: jsonb("allowed_models").$type<string[]>().notNull().default([]),
   capabilities: jsonb("capabilities").$type<Record<string, boolean>>().notNull().default({}),
@@ -410,7 +405,6 @@ export const telegramUpdates = pgTable("telegram_updates", {
   uniqueIndex("telegram_updates_integration_update_unique_idx").on(table.integrationId, table.updateId),
   index("telegram_updates_received_idx").on(table.receivedAt),
 ]);
-
 
 export const whatsappConnections = pgTable("whatsapp_connections", {
   id: uuid("id").defaultRandom().primaryKey(),

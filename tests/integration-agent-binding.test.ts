@@ -17,7 +17,6 @@ describe("integration agent binding", () => {
     const processor = await readFile("src/lib/telegram/channel-update-processor.ts", "utf8");
 
     expect(route).toContain("configureAndVerifyTelegramWebhook");
-    expect(route).toContain('mode: "channel"');
     expect(route).toContain("webhookSecretHash: hashApiKey(secret)");
     expect(route).toContain("webhookActive: true");
     expect(route).toContain("db().transaction");
@@ -29,27 +28,5 @@ describe("integration agent binding", () => {
     expect(processor).toContain("decryptSecret");
   });
 
-  it("routes the central Telegram bot through the queued processor and shared platform services", async () => {
-    const component = await readFile("src/components/central-telegram-manager.tsx", "utf8");
-    const webhook = await readFile("src/app/api/webhooks/telegram/route.ts", "utf8");
-    const processor = await readFile("src/lib/telegram/update-processor.ts", "utf8");
-    const conversations = await readFile("src/lib/telegram/conversation-flows.ts", "utf8");
-    const router = await readFile("src/lib/channels/router.ts", "utf8");
 
-    expect(component).toContain("إنشاء رمز وفتح البوت");
-    expect(component).toContain("فتح البوت مباشرة");
-    expect(component).toContain("window.location.href = nextCode.deepLink");
-    expect(component).toContain("nextCode.appDeepLink");
-    expect(component).toContain('window.addEventListener("pageshow", synchronize)');
-
-    expect(webhook).toContain("enqueueTelegramUpdate");
-    expect(webhook).not.toContain("executeAgentRun");
-    expect(processor).toContain("resolveTelegramAccount");
-    expect(processor).toContain("ensureTelegramSession");
-    expect(processor).toContain("sendTelegramConversationMessage");
-    expect(conversations).toContain("createConversationForAgent");
-    expect(conversations).toContain("executeAgentRun");
-    expect(router).toContain("channelConversationLinks");
-    expect(router).toContain("conversationId: conversation.id");
-  });
 });

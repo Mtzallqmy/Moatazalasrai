@@ -4,13 +4,12 @@ import {
   channelConnectionUpdateSchema,
   deleteChannelConnection,
   listChannelAdministration,
+  listChannelSummaries,
   updateChannelConnection,
 } from "@/lib/channels/admin";
-import { ensureCentralTelegramChannelConnection } from "@/lib/channels/connections";
 import { ensureOrganizationWhatsAppProjection } from "@/lib/channels/whatsapp-platform";
 import { requireSession } from "@/lib/auth/authorization";
 import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
-import { centralTelegramBot, telegramPlatformConfig } from "@/lib/integrations/telegram-platform";
 import { enforceRateLimit, requestClientKey } from "@/lib/security/rate-limit";
 
 export const runtime = "nodejs";
@@ -22,15 +21,6 @@ async function synchronizeManagedChannels(input: { organizationId: string; userI
   const tasks: Promise<unknown>[] = [
     ensureOrganizationWhatsAppProjection(input.organizationId),
   ];
-  const telegram = telegramPlatformConfig();
-  if (telegram.enabled) {
-    tasks.push(centralTelegramBot().then((bot) => ensureCentralTelegramChannelConnection({
-      organizationId: input.organizationId,
-      botId: String(bot.id),
-      botUsername: bot.username,
-      actorUserId: input.userId,
-    })));
-  }
   const results = await Promise.allSettled(tasks);
   return results.map((result) => result.status === "fulfilled"
     ? { ok: true as const }
@@ -52,7 +42,11 @@ export async function GET(request: Request) {
       organizationId: session.organizationId,
       userId: session.userId,
     });
-    return apiSuccess({
+    const summaryOnly = new URL(request.url).searchParams.get("mode") === "summary";
+    return apiSuccess(summaryOnly ? {
+      connections: await listChannelSummaries(session.organizationId),
+      synchronization,
+    } : {
       ...await listChannelAdministration(session.organizationId),
       synchronization,
     }, requestId);

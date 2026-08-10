@@ -31,20 +31,15 @@ describe("production Docker runtime dependencies", () => {
     const dockerfile = await readFile("Dockerfile", "utf8");
     const startup = await readFile("scripts/start-production.mjs", "utf8");
 
-    expect(startup).toContain("setup-telegram-webhook.mjs");
-    expect(startup).toContain("check-telegram-schema.mjs");
     expect(startup).toContain("check-whatsapp-schema.mjs");
-    expect(dockerfile).toContain("/app/scripts/setup-telegram-webhook.mjs");
-    expect(dockerfile).toContain("/app/scripts/check-telegram-schema.mjs");
     expect(dockerfile).toContain("/app/scripts/check-whatsapp-schema.mjs");
-    expect(dockerfile).toContain("test -f /app/scripts/setup-telegram-webhook.mjs");
-    expect(dockerfile).toContain("test -f /app/scripts/check-telegram-schema.mjs");
     expect(dockerfile).toContain("test -f /app/scripts/check-whatsapp-schema.mjs");
     expect(dockerfile).toContain("test -f /app/drizzle/0039_central_telegram_bot.sql");
     expect(dockerfile).toContain("test -f /app/drizzle/0040_telegram_admin_default_permissions.sql");
     expect(dockerfile).toContain("test -f /app/drizzle/0041_telegram_user_sessions.sql");
     expect(dockerfile).toContain("test -f /app/drizzle/0042_whatsapp_user_sessions.sql");
     expect(dockerfile).toContain("test -f /app/drizzle/0050_member_access_expiry.sql");
+    expect(dockerfile).toContain("test -f /app/drizzle/0057_drop_legacy_central_telegram.sql");
     expect(dockerfile).toContain("test -f /app/scripts/start-production.mjs");
     expect(dockerfile).toContain("test -f /app/scripts/validate-runtime-env.mjs");
   });

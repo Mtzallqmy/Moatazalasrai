@@ -1,4 +1,4 @@
-// Telegram Bot API client used by the shared channel adapter and central Telegram runtime.
+// Telegram Bot API client used by the shared channel adapter.
 import { ApiError } from "@/lib/http/api";
 import { integrationFetch } from "./http";
 
@@ -30,19 +30,6 @@ export type TelegramInlineButton = {
   id?: string;
   url?: string;
 };
-
-export const CENTRAL_TELEGRAM_COMMANDS = [
-  { command: "start", description: "بدء البوت وعرض القائمة" },
-  { command: "help", description: "عرض المساعدة" },
-  { command: "status", description: "حالة الحساب والجلسة" },
-  { command: "agents", description: "عرض الوكلاء المتاحين" },
-  { command: "teams", description: "عرض فرق الوكلاء" },
-  { command: "runs", description: "عرض عمليات تشغيل الفرق" },
-  { command: "new", description: "بدء محادثة حقيقية" },
-  { command: "approvals", description: "عرض الموافقات المعلقة" },
-  { command: "cancel", description: "إلغاء العملية الحالية" },
-  { command: "unlink", description: "فصل حساب Telegram" },
-] as const;
 
 export const CHANNEL_TELEGRAM_COMMANDS = [
   { command: "start", description: "بدء المحادثة مع وكيل المنصة" },
@@ -107,10 +94,6 @@ function registerTelegramCommands(token: string, commands: readonly { command: s
   });
 }
 
-export function registerCentralTelegramCommands(token: string) {
-  return registerTelegramCommands(token, CENTRAL_TELEGRAM_COMMANDS);
-}
-
 export function registerChannelTelegramCommands(token: string) {
   return registerTelegramCommands(token, CHANNEL_TELEGRAM_COMMANDS);
 }
@@ -119,11 +102,9 @@ export async function configureAndVerifyTelegramWebhook(input: {
   token: string;
   url: string;
   secretToken: string;
-  mode: "central" | "channel";
 }) {
   await configureTelegramWebhook(input);
-  if (input.mode === "central") await registerCentralTelegramCommands(input.token);
-  else await registerChannelTelegramCommands(input.token);
+  await registerChannelTelegramCommands(input.token);
   const info = await getTelegramWebhookInfo(input.token);
   if (info.url !== input.url) {
     throw new ApiError(502, "TELEGRAM_WEBHOOK_URL_MISMATCH", "لم يؤكد Telegram عنوان Webhook المطلوب.");

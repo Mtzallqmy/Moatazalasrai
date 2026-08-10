@@ -168,6 +168,23 @@ async function validateReferences(input: {
   if (input.workflowId && workflowRows.length !== 1) throw new ApiError(422, "CHANNEL_WORKFLOW_INVALID", "سير العمل لا يتبع المؤسسة.");
 }
 
+export async function listChannelSummaries(organizationId: string) {
+  return db().select({
+    id: channelConnections.id,
+    kind: channelConnections.kind,
+    name: channelConnections.name,
+    displayAddress: channelConnections.displayAddress,
+    status: channelConnections.status,
+    enabled: channelConnections.enabled,
+    webhookStatus: channelConnections.webhookStatus,
+    lastHealthAt: channelConnections.lastHealthAt,
+    lastErrorCode: channelConnections.lastErrorCode,
+    defaultAgentId: channelConnections.defaultAgentId,
+  }).from(channelConnections)
+    .where(eq(channelConnections.organizationId, organizationId))
+    .orderBy(desc(channelConnections.updatedAt));
+}
+
 export async function listChannelAdministration(organizationId: string) {
   const connections = await db().select().from(channelConnections).where(eq(channelConnections.organizationId, organizationId))
     .orderBy(desc(channelConnections.updatedAt));

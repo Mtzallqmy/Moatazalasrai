@@ -2,9 +2,10 @@ import { and, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { attachments } from "@/db/schema";
+import { attachmentIntelligence } from "@/db/file-intelligence-schema";
 import { requireSession } from "@/lib/auth/authorization";
 import { requireConversationAccess } from "@/lib/chat/access";
-import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
+import { ApiError, apiSuccess, assertSameOrigin, completeRequestTiming, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { cleanFilename, MAX_ATTACHMENT_BYTES, validateDeclaredMime } from "@/lib/storage/attachments";
 import { objectStorage } from "@/lib/storage/object-storage";
 import { enqueueAttachmentProcess } from "@/worker/queue";
@@ -32,18 +33,27 @@ export async function GET(request: Request) {
     const [file] = await db().select({
       id: attachments.id, filename: attachments.filename, mimeType: attachments.mimeType, sizeBytes: attachments.sizeBytes,
       sha256: attachments.sha256, processingStatus: attachments.processingStatus, processingErrorCode: attachments.processingErrorCode,
-    }).from(attachments).where(and(eq(attachments.id, id), eq(attachments.organizationId, session.organizationId), eq(attachments.uploadedByUserId, session.userId), isNull(attachments.deletedAt))).limit(1);
+      intelligenceStatus: attachmentIntelligence.status, intelligenceWarnings: attachmentIntelligence.warnings,
+    }).from(attachments)
+      .leftJoin(attachmentIntelligence, eq(attachmentIntelligence.attachmentId, attachments.id))
+      .where(and(eq(attachments.id, id), eq(attachments.organizationId, session.organizationId), eq(attachments.uploadedByUserId, session.userId), isNull(attachments.deletedAt))).limit(1);
     if (!file) throw new ApiError(404, "FILE_NOT_FOUND", "الملف غير موجود.");
-    return apiSuccess({ ...file, intelligenceStatus: file.processingStatus, warnings: file.processingErrorCode ? [file.processingErrorCode] : [] }, requestId);
+    const { intelligenceWarnings, ...publicFile } = file;
+    return apiSuccess({
+      ...publicFile,
+      intelligenceStatus: file.intelligenceStatus ?? file.processingStatus,
+      warnings: intelligenceWarnings?.length ? intelligenceWarnings : file.processingErrorCode ? [file.processingErrorCode] : [],
+    }, requestId);
   } catch (error) { return handleApiError(error, requestId, "/api/dashboard/files/presigned"); }
 }
 
 export async function POST(request: Request) {
   const requestId = getRequestId(request);
+  const startedAt = performance.now();
   try {
     assertSameOrigin(request);
     if (process.env.OBJECT_STORAGE_DRIVER?.trim().toLowerCase() !== "r2") {
-      throw new ApiError(409, "DIRECT_UPLOAD_UNAVAILABLE", "الرفع المباشر متاح عند تفعيل R2 فقط.");
+      throw new ApiError(process.env.NODE_ENV === "production" ? 503 : 409, "DIRECT_UPLOAD_UNAVAILABLE", process.env.NODE_ENV === "production" ? "إعداد التخزين في بيئة الإنتاج غير صالح. يجب تفعيل R2 للرفع المباشر." : "الرفع المباشر متاح عند تفعيل R2 فقط.");
     }
     const session = await requireSession("files:upload");
     const body = await parseJson(request, reserveSchema, 8 * 1024);
@@ -68,6 +78,7 @@ export async function POST(request: Request) {
     if (!created) throw new Error("ATTACHMENT_RESERVE_FAILED");
     try {
       const uploadUrl = await objectStorage("r2").createSignedUploadUrl({ key: objectKey, contentType: mimeType, sizeBytes: body.sizeBytes, sha256: body.sha256.toLowerCase(), expiresInSeconds: signedTtl() });
+      completeRequestTiming(requestId, 201, { uploadPresignMs: Math.round(performance.now() - startedAt), uploadRequestCount: 1 });
       return apiSuccess({ attachment: created, uploadUrl, expiresIn: signedTtl(), requiredHeaders: { "content-type": mimeType, "x-amz-meta-sha256": body.sha256.toLowerCase() } }, requestId, 201);
     } catch (error) {
       await db().delete(attachments).where(and(eq(attachments.id, id), eq(attachments.organizationId, session.organizationId)));
@@ -78,6 +89,7 @@ export async function POST(request: Request) {
 
 export async function PATCH(request: Request) {
   const requestId = getRequestId(request);
+  const startedAt = performance.now();
   try {
     assertSameOrigin(request);
     const session = await requireSession("files:upload");
@@ -98,6 +110,7 @@ export async function PATCH(request: Request) {
       throw new ApiError(422, "FILE_UPLOAD_MISMATCH", "الملف المرفوع لا يطابق الحجز الآمن.");
     }
     await enqueueAttachmentProcess({ organizationId: session.organizationId, attachmentId: file.id });
+    completeRequestTiming(requestId, 202, { uploadFinalizeMs: Math.round(performance.now() - startedAt), uploadRequestCount: 1 });
     return apiSuccess({ id: file.id, filename: file.filename, mimeType: file.mimeType, sizeBytes: file.sizeBytes, sha256: file.sha256, processingStatus: "pending", intelligenceStatus: "pending", warnings: [] }, requestId, 202);
   } catch (error) { return handleApiError(error, requestId, "/api/dashboard/files/presigned"); }
 }

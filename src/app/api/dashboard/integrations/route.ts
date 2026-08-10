@@ -11,6 +11,7 @@ import {
 } from "@/lib/http/contracts";
 import { ApiError, apiSuccess, assertSameOrigin, getRequestId, handleApiError, parseJson } from "@/lib/http/api";
 import { configureAndVerifyTelegramWebhook } from "@/lib/integrations/telegram";
+import { ensureTelegramChannelConnection, testAndPersistChannelConnection } from "@/lib/channels/connections";
 import { decryptSecret, encryptSecret, hashApiKey, maskSecret } from "@/lib/security/encryption";
 import { integrationAdapter } from "@/server/integrations/registry";
 
@@ -78,7 +79,6 @@ async function configureTenantTelegram(input: { token: string; integrationId: st
     token: input.token,
     url,
     secretToken: secret,
-    mode: "channel",
   });
   return {
     webhookSecretHash: hashApiKey(secret),
@@ -140,6 +140,14 @@ export async function POST(request: Request) {
           eq(integrations.id, created.id),
           eq(integrations.organizationId, session.organizationId),
         )).returning(publicFields);
+        const [integrationRecord] = await db().select().from(integrations).where(and(
+          eq(integrations.id, created.id),
+          eq(integrations.organizationId, session.organizationId),
+        )).limit(1);
+        if (!integrationRecord) throw new Error("TELEGRAM_INTEGRATION_RELOAD_FAILED");
+        const connection = await ensureTelegramChannelConnection({ integration: integrationRecord, actorUserId: session.userId });
+        const health = await testAndPersistChannelConnection(connection);
+        if (health.status === "failed") throw new ApiError(422, health.errorCode ?? "TELEGRAM_HEALTH_FAILED", health.details);
       } catch (error) {
         const errorCode = error instanceof ApiError ? error.code : error instanceof Error ? error.name : "TELEGRAM_WEBHOOK_SETUP_FAILED";
         await db().update(integrations).set({
@@ -238,6 +246,15 @@ export async function PATCH(request: Request) {
       });
       return row;
     });
+    if (current.kind === "telegram") {
+      const [integrationRecord] = await db().select().from(integrations).where(and(
+        eq(integrations.id, current.id), eq(integrations.organizationId, session.organizationId),
+      )).limit(1);
+      if (integrationRecord) {
+        const connection = await ensureTelegramChannelConnection({ integration: integrationRecord, actorUserId: session.userId });
+        if (integrationRecord.enabled) await testAndPersistChannelConnection(connection);
+      }
+    }
     return apiSuccess({ ...updated, config: publicConfig(updated.kind, updated.config) }, requestId);
   } catch (error) {
     return handleApiError(error, requestId, "/api/dashboard/integrations");

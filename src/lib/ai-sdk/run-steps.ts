@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { and, eq, max, sql } from "drizzle-orm";
 import { db } from "@/db";
+import { withDatabaseQuerySubsystem } from "@/db/query-observability";
 import { databaseRows } from "@/db/result";
 import { agentRunSteps } from "@/db/agent-runtime-schema";
 import { runs } from "@/db/schema";
@@ -17,7 +18,7 @@ function nullableInteger(value: unknown) {
 export type RunStepType = "model" | "tool_call" | "tool_result" | "approval_requested" | "approval_response" | "fallback";
 
 export async function createRunStepAllocator(organizationId: string, runId: string) {
-  const first = await db().transaction(async (tx) => {
+  const first = await withDatabaseQuerySubsystem("runs", () => db().transaction(async (tx) => {
     const lock = await tx.execute(sql`
       SELECT "id" FROM "runs"
       WHERE "id" = ${runId} AND "organization_id" = ${organizationId}
@@ -31,7 +32,7 @@ export async function createRunStepAllocator(organizationId: string, runId: stri
         eq(agentRunSteps.runId, runId),
       ));
     return (current?.value ?? 0) + 1;
-  });
+  }));
   let next = first;
   return () => {
     const value = next;
@@ -77,7 +78,7 @@ export async function persistRunStep(input: {
     metadata: input.metadata ?? {},
     completedAt: input.status === "running" ? null : now,
   };
-  await db().insert(agentRunSteps).values(values).onConflictDoUpdate({
+  await withDatabaseQuerySubsystem("runs", () => db().insert(agentRunSteps).values(values).onConflictDoUpdate({
     target: [agentRunSteps.runId, agentRunSteps.stepNumber],
     set: {
       stepType: values.stepType,
@@ -95,7 +96,7 @@ export async function persistRunStep(input: {
       metadata: values.metadata,
       completedAt: values.completedAt,
     },
-  });
+  }));
 }
 
 export async function listRunSteps(organizationId: string, runId: string) {

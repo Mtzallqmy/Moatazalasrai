@@ -14,6 +14,7 @@ const CODE_CATEGORY: Record<string, ProviderErrorCategory> = {
   PROVIDER_TIMEOUT: "timeout",
   PROVIDER_NETWORK_ERROR: "network",
   PROVIDER_UNAVAILABLE: "provider_unavailable",
+  PROVIDER_CAPACITY_EXHAUSTED: "provider_unavailable",
   PROVIDER_ENDPOINT_NOT_FOUND: "model_unavailable",
   MODEL_UNAVAILABLE: "model_unavailable",
   PROVIDER_REJECTED_INPUT: "invalid_request",
@@ -21,10 +22,10 @@ const CODE_CATEGORY: Record<string, ProviderErrorCategory> = {
   BASE_URL_REQUIRED: "misconfigured",
   PROVIDER_CONFIG_INVALID: "misconfigured",
   PROVIDER_SECRET_REFERENCE_MISSING: "misconfigured",
-  WORKERS_AI_BINDING_UNAVAILABLE: "misconfigured",
   PROVIDER_INVALID_RESPONSE: "malformed_response",
   PROVIDER_INVALID_STREAM: "stream_interrupted",
   PROVIDER_STREAM_ERROR: "stream_interrupted",
+  PROVIDER_STREAM_INTERRUPTED: "stream_interrupted",
   PROVIDER_EMPTY_STREAM: "empty_response",
   PROVIDER_EMPTY_OUTPUT: "empty_response",
   PROVIDER_CANCELLED: "cancelled",
@@ -83,6 +84,23 @@ export function normalizeUnknownProviderError(
   context: { provider?: ProviderTypeId | ProviderKind; model?: string; requestId?: string } = {},
 ): ProviderError {
   if (error instanceof ProviderError) return enrichProviderError(error, context);
+  const technicalMessage = safeTechnicalMessage(error);
+  if (/resource\s*exhausted|resourceexhausted/i.test(technicalMessage)
+      && /worker\s+local\s+total\s+request\s+limit\s+reached/i.test(technicalMessage)) {
+    return new ProviderError(
+      "PROVIDER_CAPACITY_EXHAUSTED",
+      "سعة التنفيذ لدى المزود ممتلئة مؤقتًا. لم يبدأ توليد الرد.",
+      503,
+      undefined,
+      true,
+      60_000,
+      {
+        category: "provider_unavailable",
+        ...context,
+        technicalMessage,
+      },
+    );
+  }
   if (error instanceof DOMException && (error.name === "AbortError" || error.name === "TimeoutError")) {
     const cancelled = error.name === "AbortError";
     return new ProviderError(

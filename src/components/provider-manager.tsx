@@ -7,19 +7,14 @@ import { getProviderPreset, providerPresets } from "@/lib/providers/catalog";
 export type ProviderSummary = {
   id: string;
   provider: "openai" | "anthropic" | "gemini" | "openai_compatible";
-  providerTypeId: "cloudflare-workers-ai" | "cloudflare-ai-gateway" | "openai" | "anthropic" | "google-ai-studio" | "custom-openai-compatible";
-  transportMode: "direct" | "cloudflare_ai_gateway_native" | "cloudflare_ai_gateway_rest" | "cloudflare_workers_ai";
-  credentialMode: "encrypted_byok" | "cloudflare_provider_key" | "cloudflare_binding";
+  providerTypeId: "openai" | "anthropic" | "google-ai-studio" | "custom-openai-compatible";
+  transportMode: "direct";
+  credentialMode: "encrypted_byok";
   providerSlug: string;
   providerLabel: string;
   apiStyle: string;
   name: string;
   baseUrl: string;
-  gatewayId: string | null;
-  keyAlias: string | null;
-  gatewaySkipCache: boolean;
-  gatewayCacheTtl: number | null;
-  gatewayCollectLog: boolean;
   defaultModel: string | null;
   allowedModels: string[];
   capabilities: Record<string, boolean>;
@@ -79,13 +74,8 @@ function revalidationPayload(provider: ProviderSummary) {
     providerSlug: provider.providerSlug,
     transportMode: provider.transportMode,
     credentialMode: provider.credentialMode,
-    gatewayId: provider.gatewayId,
-    keyAlias: provider.keyAlias,
     defaultModel: provider.defaultModel,
     allowedModels: provider.allowedModels,
-    skipCache: provider.gatewaySkipCache,
-    cacheTtl: provider.gatewayCacheTtl,
-    collectLog: provider.gatewayCollectLog,
     revalidate: true,
     testModel: provider.defaultModel ?? provider.discoveredModels[0],
   };
@@ -237,7 +227,6 @@ export function ProviderManager({ initialProviders }: { initialProviders: Provid
             </div>
             <div className="mt-4 grid gap-1 text-xs text-[var(--text-secondary)]">
               <p className="break-all font-mono" dir="ltr">{provider.baseUrl}</p>
-              {provider.gatewayId ? <p dir="ltr">Gateway: {provider.gatewayId}</p> : null}
               <p dir="ltr">Credential: {provider.secretHint ?? provider.credentialMode}</p>
               {provider.defaultModel ? <p dir="ltr">Default model: {provider.defaultModel}</p> : null}
             </div>
@@ -274,7 +263,7 @@ export function ProviderManager({ initialProviders }: { initialProviders: Provid
     {editing ? <div className="modal-backdrop" role="presentation">
       <section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="edit-provider-title">
         <h2 id="edit-provider-title" className="text-xl font-bold">تعديل {editing.name}</h2>
-        <p className="mt-2 text-sm text-[var(--text-secondary)]">لا تُعرض قيمة السر الحالية. التعديل على مسار Cloudflare يقتصر هنا على الاسم؛ أضف اتصالًا جديدًا لتغيير مرجع السر أو نوع النقل بصورة قابلة للتدقيق.</p>
+        <p className="mt-2 text-sm text-[var(--text-secondary)]">لا تُعرض قيمة السر الحالية. يمكنك تحديث اتصال المزود المباشر بمفتاح جديد أو نموذج اختبار دون كشف السر المحفوظ.</p>
         <form onSubmit={saveEdit} className="mt-5 grid gap-4">
           <label className="grid gap-2 text-sm">الاسم<input name="name" defaultValue={editing.name} required maxLength={80} className="form-control" /></label>
           {editing.transportMode === "direct" ? <>

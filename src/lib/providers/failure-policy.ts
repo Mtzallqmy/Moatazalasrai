@@ -11,6 +11,7 @@ const CREDENTIAL_SCOPED_ERRORS = new Set([
 const NON_FALLBACK_ERRORS = new Set([
   "PROVIDER_CANCELLED",
   "PROVIDER_RESPONSE_TOO_LARGE",
+  "PROVIDER_CAPACITY_EXHAUSTED",
   "PROVIDER_UNAUTHORIZED",
   "PROVIDER_FORBIDDEN",
   "PROVIDER_PAYMENT_REQUIRED",
@@ -20,7 +21,6 @@ const NON_FALLBACK_ERRORS = new Set([
   "CONTEXT_TOO_LARGE",
   "PROVIDER_CONFIG_INVALID",
   "PROVIDER_SECRET_REFERENCE_MISSING",
-  "WORKERS_AI_BINDING_UNAVAILABLE",
 ]);
 
 export function providerFallbackEnabled(value = process.env.AI_PROVIDER_FALLBACK_ENABLED) {
@@ -43,7 +43,7 @@ export function providerCircuitOpenUntil(error: ProviderError, failures: number,
   if (error.code === "PROVIDER_UNAUTHORIZED" || error.code === "PROVIDER_FORBIDDEN" || error.code === "PROVIDER_SECRET_REFERENCE_MISSING") {
     return new Date(start + 60 * 60_000);
   }
-  if (error.code === "PROVIDER_RATE_LIMITED") {
+  if (error.code === "PROVIDER_RATE_LIMITED" || error.code === "PROVIDER_CAPACITY_EXHAUSTED") {
     return new Date(start + Math.max(60_000, error.retryAfterMs ?? 60_000));
   }
   if (failures >= 3 && isRetryableProviderError(error)) {

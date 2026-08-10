@@ -7,6 +7,9 @@ type Status = {
   enabled: boolean;
   configured?: boolean;
   connected: boolean;
+  connectionStored?: boolean;
+  platformReady?: boolean;
+  healthErrorCode?: string | null;
   connectedAt: string | null;
   lastInteractionAt?: string | null;
   phoneNumberMasked: string | null;
@@ -145,14 +148,15 @@ export function WhatsAppConnectionCard({ canManagePlatform = false }: { canManag
           </p>
         </div>
         <span className={`rounded-full px-3 py-1 text-xs ${status?.connected ? "bg-emerald-100/15 text-emerald-100" : "bg-stone-100/10 text-stone-300"}`}>
-          {status === null ? "جارٍ الفحص" : !status.enabled ? status.configured ? "جاهز للتفعيل" : "يحتاج إعداد" : status.connected ? "مرتبط" : "جاهز للربط"}
+          {status === null ? "جارٍ الفحص" : !status.enabled ? status.configured ? "جاهز للتفعيل" : "يحتاج إعداد" : status.connected ? "متصل" : status.connectionStored && status.platformReady === false ? "غير جاهز" : "غير مرتبط"}
         </span>
       </div>
 
-      {status?.connected ? (
+      {status?.connectionStored ? (
         <div className="mt-4 grid gap-1 text-sm text-stone-300">
           <p>الرقم: <span dir="ltr" className="font-latin">{status.phoneNumberMasked ?? "••••••"}</span></p>
           <p>تاريخ الربط: {status.connectedAt ? new Date(status.connectedAt).toLocaleString("ar") : "غير متاح"}</p>
+          {status.healthErrorCode ? <p className="text-amber-200">تعذر التحقق من Meta: <bdi dir="ltr">{status.healthErrorCode}</bdi></p> : null}
         </div>
       ) : null}
 
@@ -168,12 +172,12 @@ export function WhatsAppConnectionCard({ canManagePlatform = false }: { canManag
       {message ? <p role="status" className="mt-4 rounded-2xl border border-stone-700 p-3 text-sm">{message}</p> : null}
 
       <div className="mt-5 flex flex-wrap gap-2">
-        {status?.enabled && !status.connected ? (
+        {status?.enabled && !status.connectionStored ? (
           <button type="button" disabled={busy !== null} onClick={connect} className="primary-button disabled:opacity-50">
             {busy === "connect" ? "جارٍ إنشاء الرابط..." : expiresAt ? "إنشاء رابط جديد" : "ربط حسابي بواتساب"}
           </button>
         ) : null}
-        {status?.enabled && status.connected ? (
+        {status?.enabled && status.connectionStored ? (
           <button type="button" disabled={busy !== null} onClick={disconnect} className="danger-button disabled:opacity-50">
             {busy === "disconnect" ? "جارٍ إلغاء الربط..." : "إلغاء الربط"}
           </button>

@@ -28,6 +28,7 @@ export async function buildMcpChatContext(input: {
   userId?: string | null;
   resources?: McpResourceSelection[];
   prompt?: McpPromptSelection;
+  signal?: AbortSignal;
 }) {
   const textParts: string[] = [];
   const media: ProviderContentPart[] = [];
@@ -104,6 +105,7 @@ export async function buildMcpChatContext(input: {
       serverId: selection.serverId,
       uri: selection.uri,
       userId: input.userId,
+      signal: input.signal,
     });
     const payload = objectValue(result);
     const contents = Array.isArray(payload?.contents) ? payload.contents : [];
@@ -118,6 +120,7 @@ export async function buildMcpChatContext(input: {
       name: input.prompt.name,
       arguments: input.prompt.arguments,
       userId: input.userId,
+      signal: input.signal,
     });
     const payload = objectValue(result);
     const messages = Array.isArray(payload?.messages) ? payload.messages : [];

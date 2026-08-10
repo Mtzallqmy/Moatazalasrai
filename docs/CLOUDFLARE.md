@@ -1,92 +1,26 @@
-# تشغيل Cloudflare أمام Railway
+# Cloudflare أمام Railway
 
-## النطاق المعماري
+يُستخدم Cloudflare في هذه المنصة فقط كطبقة أمنية/شبكية وتخزين كائنات عند الحاجة. يبقى Next.js وGraphile Worker وPostgreSQL وAI runtime على Railway.
 
-يبقى Web وGraphile Worker وPostgreSQL على Railway. يعمل Cloudflare بوصفه DNS/WAF/Proxy، ويوفر Turnstile وR2 وAI Gateway بصورة اختيارية. لا تنشر هذا المستودع كاملًا على Workers ولا تشغّل migrations من أكثر من خدمة.
+## الاستخدامات المسموحة
 
-## إعداد النطاق والـProxy
+- DNS / Proxy / WAF وDDoS protection.
+- Turnstile عندما يكون مفعّلًا.
+- R2 لتخزين المرفقات مع روابط رفع موقعة.
+- CDN/static delivery حيث يكون مناسبًا.
 
-1. أضف النطاق إلى Cloudflare، ثم أنشئ `CNAME` للواجهة يشير إلى نطاق Railway العام وفعّل السحابة البرتقالية.
-2. اضبط SSL/TLS على **Full (strict)** واربط Railway بالنطاق المخصص حتى تكون شهادة origin صالحة.
-3. اجعل `APP_URL=https://moatazalalqami.online`. لا تستخدم نطاق Railway في redirects أو callbacks.
-4. امنع الوصول المباشر إلى origin بوسيلة Railway/Cloudflare المتاحة قبل ضبط `TRUST_CLOUDFLARE_PROXY=true`. لا تفعّل `TRUST_PROXY_HEADERS=true` إلا عندما يضمن ingress استبدال `X-Forwarded-For`.
-5. أنشئ Cache Rule تتجاوز cache لكل `/api/*` وصفحات الحساب والدردشة. التطبيق يرسل أيضًا `Cache-Control` و`CDN-Cache-Control` و`Cloudflare-CDN-Cache-Control: no-store`.
-6. اسمح بالـstatic assets ذات البصمة فقط. لا تُنشئ Rule من نوع Cache Everything على HTML أو API.
+## مسار AI
 
-## Turnstile
+لا يمر أي طلب AI عبر Cloudflare AI Gateway أو Workers AI أو bindings خاصة بالذكاء الاصطناعي. المسار الوحيد هو:
 
-أنشئ Managed widget للنطاق، ثم اضبط في Railway:
+`Application → Provider Adapter → OpenAI / Anthropic / Gemini / OpenAI-compatible provider`
 
-```dotenv
-TURNSTILE_ENABLED=true
-NEXT_PUBLIC_TURNSTILE_SITE_KEY=<public-site-key>
-TURNSTILE_SECRET_KEY=<server-secret>
-TURNSTILE_EXPECTED_HOSTNAME=moatazalalqami.online
-```
+لا تضبط عناوين AI Gateway أو headers أو aliases تعتمد على Cloudflare. مفاتيح المزودات تحفظ ضمن آلية BYOK المشفرة الحالية.
 
-التحقق يتم عبر Siteverify من الخادم، ويفحص `success` و`hostname` و`action` وعمر التحدي، مع مهلة خمس ثوانٍ ومنع إعادة استخدام hash التوكن. السر ليس `NEXT_PUBLIC_*` ولا يسجل. تطبيق Flutter يستخدم Supabase Auth مباشرة ولا يستخدم widget الويب.
+## R2
 
-لاختبارات Playwright المعزولة فقط استخدم `.env.playwright.example` الذي يحتوي مفاتيح Cloudflare الوهمية المنشورة رسميًا. لا تضعها في Railway production ولا تخلطها بمفاتيح widget الحقيقي. راجع [توثيق Siteverify](https://developers.cloudflare.com/turnstile/get-started/server-side-validation/) و[مفاتيح الاختبار الرسمية](https://developers.cloudflare.com/turnstile/troubleshooting/testing/).
+في الإنتاج يجب ضبط `OBJECT_STORAGE_DRIVER=r2` مع بيانات R2. لا تمر bytes الملف عبر خادم التطبيق في المسار الطبيعي؛ يُحجز سجل الملف، يُرفع مباشرة إلى R2، ثم يُتحقق منه ويُعالج في الـworker.
 
-## R2 الخاص
+## Proxy وTurnstile
 
-1. أنشئ bucket خاصًا، من دون Public Development URL أو custom public domain.
-2. أنشئ R2 API token بصلاحية Object Read & Write على هذا الـbucket فقط.
-3. اضبط:
-
-```dotenv
-OBJECT_STORAGE_DRIVER=r2
-R2_ACCOUNT_ID=<account-id>
-R2_BUCKET_NAME=<private-bucket>
-R2_ACCESS_KEY_ID=<s3-access-key>
-R2_SECRET_ACCESS_KEY=<s3-secret>
-R2_ENDPOINT=
-MAX_ATTACHMENT_BYTES=10485760
-R2_SIGNED_URL_TTL_SECONDS=300
-```
-
-أضف إلى CORS في الـbucket أصل الإنتاج فقط (وأصل التطوير عند الحاجة):
-
-```json
-[{"AllowedOrigins":["https://moatazalalqami.online"],"AllowedMethods":["GET","HEAD","PUT"],"AllowedHeaders":["content-type","x-amz-meta-sha256"],"ExposeHeaders":["etag"],"MaxAgeSeconds":3600}]
-```
-
-يُنشأ المفتاح بالشكل `<organization UUID>/<random UUID>`. يحجز Web metadata ثم يرفع المتصفح مباشرةً برابط PUT موقّع، ويتحقق الخادم من HEAD قبل إدراج مهمة Worker. يعيد Worker حساب SHA-256 الفعلي ويعالج الملف ويفهرسه. تبقى الملفات القديمة قابلة للقراءة عبر `storage_driver=database`، والتنزيلات الجديدة تستخدم رابط GET موقّع بعد فحص الصلاحية في Railway. راجع [توثيق R2 S3 والموقع](https://developers.cloudflare.com/r2/api/s3/presigned-urls/).
-
-## منصة مزوّدي الذكاء الاصطناعي
-
-الوضع الافتراضي يبقى الاتصال المباشر ومفاتيح BYOK المشفّرة. يمكن لكل اتصال خادمي اختيار أحد المسارات: direct، AI Gateway provider-native، AI Gateway REST أو Workers AI.
-
-أسماء الإعدادات الخادمية:
-
-```dotenv
-CLOUDFLARE_AI_GATEWAY_ENABLED=false
-CLOUDFLARE_ACCOUNT_ID=
-CLOUDFLARE_AI_GATEWAY_ID=default
-CLOUDFLARE_AI_GATEWAY_TOKEN=
-CLOUDFLARE_API_TOKEN=
-AI_PROVIDER_FALLBACK_ENABLED=false
-AI_PROVIDER_DIRECT_FALLBACK_ENABLED=false
-```
-
-لا تضبط `OPENAI_BASE_URL` خاصًا بالبوابة، ولا تستخدم `/compat`. يبني التطبيق العناوين المدعومة مركزيًا. يمكن تمرير BYOK المشفّر عبر provider-native endpoint، أو استخدام Provider Key Alias دون تخزين قيمة المفتاح في المنصة. AI Gateway REST يستخدم Cloudflare API Token، وWorkers AI يستخدم `env.AI` ولا يقبل BYOK لمزوّد خارجي.
-
-الـfallback مغلق افتراضيًا، ولا يعمل لأخطاء المصادقة أو الصلاحيات أو النموذج أو الإعداد. راجع [الدليل التشغيلي المفصل](cloudflare-ai-gateway.md).
-
-## WAF وRate Limiting
-
-- طبّق managed rules أولًا في log mode ثم block بعد مراجعة false positives.
-- ضع rate limits على `/api/auth/*` والـwebhooks والرفع، مع استثناءات محددة لا wildcard واسع.
-- لا تعتمد على WAF بدل rate limits داخل التطبيق.
-- راقب `CF-Ray` مع `x-request-id` من دون Authorization أو Cookie أو prompts.
-
-## النشر والرجوع
-
-1. خذ backup لقاعدة PostgreSQL واختبر إمكانية القراءة منه.
-2. شغّل `npm run db:migrate:all` كـRailway pre-deploy مرة واحدة؛ migration توسعية وتبقي بيانات الملفات القديمة.
-3. انشر Web ثم Worker، وكل flags الجديدة `false` و`OBJECT_STORAGE_DRIVER=local` أولًا.
-4. افحص `/api/health` و`/api/ready` وتسجيل الدخول والرفع والتنزيل.
-5. فعّل R2 أولًا واختبر ملفًا جديدًا، ثم Turnstile، ثم الثقة بعنوان Cloudflare بعد منع bypass، ثم AI Gateway على مؤسسة اختبار.
-6. راقب 4xx/5xx وزمن Siteverify وأخطاء R2 وTTFT للمزودات.
-
-للرجوع عطّل `CLOUDFLARE_AI_GATEWAY_ENABLED` ثم `TURNSTILE_ENABLED`، وأعد `TRUST_CLOUDFLARE_PROXY=false`. لا تعِد `OBJECT_STORAGE_DRIVER=local` قبل التأكد من بقاء R2 متاحًا للملفات الجديدة؛ النسخة التي تقرأ R2 يجب أن تظل منشورة. لا تحذف أعمدة migration أو bucket أثناء الرجوع.
+لا تفعّل `TRUST_CLOUDFLARE_PROXY=true` إلا بعد منع تجاوز Cloudflare والوصول المباشر إلى origin. لا تُضعف Turnstile أو WAF أو rate limits عند تغيير AI runtime.

@@ -9,7 +9,6 @@ import {
 } from "@/db/channel-schema";
 import { auditLogs, integrations } from "@/db/schema";
 import { ApiError } from "@/lib/http/api";
-import { telegramPlatformConfig } from "@/lib/integrations/telegram-platform";
 import { requireWhatsAppConfig } from "@/lib/integrations/whatsapp/config";
 import { decryptSecret } from "@/lib/security/encryption";
 import { currentWhatsAppChannelPolicy } from "./whatsapp-platform";
@@ -39,18 +38,6 @@ export async function channelAdapterContext(connection: ChannelConnectionRow): P
         phoneNumberId: connection.externalAccountId,
         graphApiVersion: config.graphApiVersion,
       },
-    };
-  }
-  if (connection.credentialSource === "environment") {
-    const config = telegramPlatformConfig();
-    if (!config.enabled || !config.botToken) {
-      throw new ApiError(503, "TELEGRAM_DISABLED", "تكامل Telegram المركزي غير مفعّل.");
-    }
-    return {
-      organizationId: connection.organizationId,
-      connectionId: connection.id,
-      externalAccountId: connection.externalAccountId,
-      credentials: { kind: "telegram", token: config.botToken },
     };
   }
   if (!connection.integrationId) {
@@ -157,64 +144,6 @@ export async function adoptEnvironmentWhatsApp(input: { organizationId: string; 
     metadata: { phoneNumberId: config.phoneNumberId, health: health.status },
   });
   return { connection, health };
-}
-
-export async function ensureCentralTelegramChannelConnection(input: {
-  organizationId: string;
-  botId: string;
-  botUsername?: string | null;
-  actorUserId?: string | null;
-}) {
-  const [connection] = await db().insert(channelConnections).values({
-    organizationId: input.organizationId,
-    kind: "telegram",
-    integrationId: null,
-    name: "Telegram المركزي",
-    externalAccountId: input.botId,
-    displayAddress: input.botUsername ? `@${input.botUsername}` : null,
-    credentialSource: "environment",
-    settings: {
-      welcomeMessage: "مرحبًا بك. أرسل رسالة للدردشة مع الوكيل.",
-      autoReplyEnabled: true,
-      handoffMode: "ai_then_human",
-      language: "ar",
-      memoryEnabled: true,
-      historyEnabled: true,
-      monthlyMessageLimit: 10_000,
-      allowedCommands: ["start", "help", "new", "human", "status", "github"],
-    },
-    status: "healthy",
-    enabled: true,
-    webhookStatus: "active",
-    webhookLastVerifiedAt: new Date(),
-    lastHealthAt: new Date(),
-    createdByUserId: input.actorUserId ?? null,
-    updatedAt: new Date(),
-  }).onConflictDoUpdate({
-    target: [channelConnections.organizationId, channelConnections.kind, channelConnections.externalAccountId],
-    set: {
-      integrationId: null,
-      name: "Telegram المركزي",
-      displayAddress: input.botUsername ? `@${input.botUsername}` : null,
-      credentialSource: "environment",
-      status: "healthy",
-      enabled: true,
-      webhookStatus: "active",
-      webhookLastVerifiedAt: new Date(),
-      lastErrorCode: null,
-      updatedAt: new Date(),
-    },
-  }).returning();
-  if (!connection) throw new Error("TELEGRAM_CENTRAL_CHANNEL_SYNC_FAILED");
-  await db().insert(channelPermissions).values({
-    connectionId: connection.id,
-    organizationId: input.organizationId,
-    permissions: DEFAULT_CHANNEL_PERMISSIONS,
-    blockedOperations: ["financial", "sensitive"],
-    allowedCommands: ["start", "help", "new", "human", "status"],
-    updatedByUserId: input.actorUserId ?? null,
-  }).onConflictDoNothing();
-  return connection;
 }
 
 export async function ensureTelegramChannelConnection(input: {

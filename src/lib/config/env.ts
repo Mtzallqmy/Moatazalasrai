@@ -1,5 +1,3 @@
-import { telegramPlatformConfig, type TelegramPlatformConfig } from "@/lib/integrations/telegram-platform";
-
 type NodeEnvironment = "development" | "test" | "production";
 type LogLevel = "debug" | "info" | "warn" | "error";
 type ExecutionRunnerKind = "existing" | "gvisor" | "e2b" | "daytona";
@@ -13,7 +11,6 @@ type RuntimeEnvironment = {
   bootstrapAdminToken?: string;
   appUrl?: string;
   publicAppUrl?: string;
-  telegram: TelegramPlatformConfig;
   whatsappIntegrationEnabled: boolean;
   metaAppId?: string;
   metaAppSecret?: string;
@@ -203,8 +200,6 @@ export function env(): RuntimeEnvironment {
   if (nodeEnv === "production" && !appUrl) throw new Error("APP_URL is required in production.");
   if (nodeEnv === "production" && appUrl && !appUrl.startsWith("https://")) throw new Error("APP_URL must use HTTPS in production.");
   const publicAppUrl = serviceUrl("PUBLIC_APP_URL", nodeEnv) ?? appUrl;
-  const telegram = telegramPlatformConfig();
-
   const whatsappIntegrationEnabled = booleanEnv("WHATSAPP_INTEGRATION_ENABLED");
   const metaAppId = numericIdentifier("META_APP_ID", requireFeatureValue(whatsappIntegrationEnabled, "META_APP_ID"));
   const metaAppSecret = requireFeatureValue(whatsappIntegrationEnabled, "META_APP_SECRET");
@@ -279,7 +274,6 @@ export function env(): RuntimeEnvironment {
     credentialEncryptionKey: validateEncryptionKey(required("CREDENTIAL_ENCRYPTION_KEY")),
     credentialEncryptionKeyId: encryptionKeyId(process.env.CREDENTIAL_ENCRYPTION_KEY_ID),
     credentialEncryptionPreviousKeys: previousEncryptionKeys(process.env.CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS),
-    telegram,
     whatsappIntegrationEnabled,
     whatsappConnectTokenTtlMinutes,
     logLevel: parseLogLevel(process.env.LOG_LEVEL),

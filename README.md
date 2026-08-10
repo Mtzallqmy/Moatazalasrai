@@ -27,7 +27,7 @@
 - تكامل Telegram عبر Webhook موثّق، ربط كل محادثة بالوكيل، أوامر `/new` و`/status` و`/github repos`، ومعالجة خلفية تمنع تعطيل استقبال التحديثات.
 - تكامل GitHub بتوكن مشفّر للتحقق وعرض المستودعات وقراءة الملفات عبر API مضبوط المسارات.
 - رفع ملفات حقيقي داخل الدردشة وAPI حتى 10MB مع metadata وSHA-256 وعزل كامل بين المؤسسات، وتخزين R2 خاص اختياري مع توافق قراءة الملفات القديمة.
-- تكامل Cloudflare اختياري أمام Railway: Turnstile خادمي، IP موثوق، منع Cache للمسارات الحساسة، وAI Gateway مغلق افتراضيًا دون تغيير مفاتيح BYOK.
+- تكامل Cloudflare اختياري أمام Railway: Turnstile خادمي، IP موثوق، منع Cache للمسارات الحساسة دون تغيير مسار AI المباشر.
 - ظهور المرفقات داخل سجل الرسالة بعد إعادة التحميل، وتمرير النص المفهرس للنموذج، وإرسال الصور كمدخلات multimodal حقيقية للمزودات الداعمة ولـTelegram وAPI v1.
 - API إصدار `v1` للدردشة والمحادثات والملفات والتكاملات وGitHub، مع عقد OpenAPI تمهيدًا لتطبيق Android أصلي.
 - توسعة اختيارية خلف Feature Flags للذاكرة المعزولة، وقواعد المعرفة والاستشهادات، والأدوات بموافقات بشرية، وWorker مستقل بصف ذري.
@@ -71,20 +71,13 @@ npm run dev
 | `TRUST_CLOUDFLARE_PROXY` | خلف Cloudflare فقط | يثق بـ`CF-Connecting-IP` بعد منع تجاوز الـproxy |
 | `OBJECT_STORAGE_DRIVER` | لا | `local` للتطوير أو `r2` للإنتاج؛ لا تُرسل بيانات اعتماد R2 للعميل |
 | `R2_*` | عند اختيار R2 | bucket خاص وبيانات S3 API محدودة على bucket واحد |
-| `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_AI_GATEWAY_ID` | عند استخدام Cloudflare AI | معرّفات الحساب والبوابة، وتُبنى عناوين provider-native وREST مركزيًا |
-| `CLOUDFLARE_AI_GATEWAY_TOKEN` / `CLOUDFLARE_API_TOKEN` | حسب المسار | أسرار خادمية لـAuthenticated Gateway أو AI Gateway REST؛ لا تظهر للعميل |
-| `AI_PROVIDER_FALLBACK_ENABLED` / `AI_PROVIDER_DIRECT_FALLBACK_ENABLED` | لا | fallback صريح للأخطاء العابرة فقط؛ مغلق افتراضيًا |
+| `AI_PROVIDER_FALLBACK_ENABLED` | لا | fallback صريح للأخطاء العابرة فقط؛ مغلق افتراضيًا |
 | `NEXT_PUBLIC_PUTER_ENABLED` | لا | يفعّل بطاقة ودردشة Puter من المتصفح؛ افتراضيًا `false` ولا يغيّر المزوّدات الخادمية |
 
-### منصة مزوّدي Cloudflare
+### مسار مزوّدي الذكاء الاصطناعي
 
-تدعم الطبقة الحالية الاتصال المباشر، وCloudflare AI Gateway provider-native،
-وAI Gateway REST API، وWorkers AI عبر binding `AI`. تبقى مفاتيح BYOK مشفّرة
-بالآلية الحالية، بينما يحفظ Provider Key Alias كمرجع فقط وتبقى قيمة المفتاح في
-Cloudflare. لا يستخدم التنفيذ الجديد endpoint `/compat` القديم، والـfallback
-مغلق افتراضيًا ولا يسمح بتجاوز أخطاء المصادقة أو الإعداد.
+تنفيذ AI مباشر فقط: `Application → Provider Adapter → OpenAI / Anthropic / Gemini / compatible provider`. لا يُستخدم Cloudflare AI Gateway أو Workers AI في مسار التوليد. يبقى Cloudflare للأمان وR2 عند الحاجة.
 
-راجع [دليل منصة مزوّدي Cloudflare](docs/cloudflare-ai-gateway.md).
 
 توليد مفتاح التشفير:
 
@@ -185,7 +178,6 @@ npm run test:e2e
 - [الاستجابة للحوادث](docs/INCIDENT_RESPONSE.md)
 - [النسخ والاستعادة](docs/BACKUP_AND_RESTORE.md)
 - [نموذج التهديد](docs/THREAT_MODEL.md)
-- [Cloudflare AI Gateway](docs/cloudflare-ai-gateway.md)
 - [مزوّد Puter الاختياري](docs/PUTER_PROVIDER.md)
 - [تكامل WhatsApp Business Platform](docs/WHATSAPP_BUSINESS.md)
 
@@ -195,7 +187,7 @@ npm run test:e2e
 - لا يوجد دفع أو اشتراك أو فوترة.
 - إيقاف Streaming يستخدم `AbortController` ويكون فوريًا داخل instance نفسه؛ تشغيل عدة replicas يحتاج قناة إلغاء مشتركة.
 - تشغيل فرق الوكلاء ينفذ حاليًا داخل طلب API مع تخزين كامل للخطوات؛ الأحمال الطويلة جدًا تحتاج نقل المنفذ إلى Worker.
-- بوابة MCP تنفذ الاتصال والاكتشاف والاستدعاء فعليًا، أما منح أداة لوكيل فيظهر في مخطط البيانات ولا يُدخل الأداة تلقائيًا في حلقة provider tool-calling قبل إضافة سياسة موافقات مناسبة.
+- بوابة MCP تنفذ الاتصال والاكتشاف والاستدعاء وربط الأدوات بالوكيل فعليًا، وتدخل الأدوات المفعلة في حلقة provider tool-calling مع سياسة الموافقات وحدود الاستدعاء.
 - ميزانية السياق تقديرية لأن حدود النماذج تختلف؛ لا يتم اختلاق usage عند غيابها من المزود.
 - معالجة وثائق المعرفة تعمل في Worker مستقل؛ تشغيل النموذج المتدفق يبقى في Web للمحافظة على البث.
 - دعم النشر لا يعني أن نشرًا إنتاجيًا حيًا تم إجراؤه. راجع نتائج التحقق الفعلية في تقرير التسليم.
