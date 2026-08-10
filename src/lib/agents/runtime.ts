@@ -1,6 +1,8 @@
 import { and, asc, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { providerCredentialHealthEvents } from "@/db/provider-health-schema";
+import { databaseRows } from "@/db/result";
+import { withDatabaseQuerySubsystem } from "@/db/query-observability";
 import {
   agentMcpTools,
   agentVersions,
@@ -26,9 +28,7 @@ import {
 } from "@/lib/providers/failure-policy";
 import { ProviderError, type ProviderContentPart, type ProviderMessage, type ProviderUsage } from "@/lib/providers/types";
 import { asProviderTypeId, asTransportMode, resolveProviderApiKey } from "@/lib/providers/provider-config";
-import { runCloudflareRestChat, streamCloudflareRestChat } from "@/lib/providers/cloudflare-rest";
 import { healthStatusForProviderError } from "@/lib/providers/errors";
-import { runWorkersAiChat, streamWorkersAiChat } from "@/lib/providers/workers-ai";
 import { safeTelemetry } from "@/ai/observability/telemetry";
 import { inferModelCapabilities, isFreeTierModel } from "@/server/models/capabilities";
 import {
@@ -40,12 +40,13 @@ import {
   type AiSdkExecutionState,
 } from "@/lib/ai-sdk/runtime";
 import { appendRunEvent, appendRunEvents } from "@/lib/ai-sdk/run-events";
-import { createRunStepAllocator, persistRunStep } from "@/lib/ai-sdk/run-steps";
+import { persistRunStep } from "@/lib/ai-sdk/run-steps";
 import { deleteRunCheckpoints } from "@/lib/ai-sdk/checkpoints";
 import { conversationAccessFilter } from "@/lib/chat/access";
 import type { Role } from "@/lib/auth/permissions";
 
 const activeControllers = new Map<string, AbortController>();
+let activeProviderRequests = 0;
 const MAX_CONTEXT_TOKENS_ESTIMATE = 24_000;
 const MAX_CONTEXT_MESSAGES = 80;
 
@@ -80,6 +81,10 @@ type RuntimeCandidate = {
   capabilities: Record<string, boolean | undefined>;
 };
 
+function freshRunStepAllocator() {
+  let next = 1;
+  return () => next++;
+}
 function emptyExecutionState(): AiSdkExecutionState {
   return {
     emittedText: false,
@@ -101,11 +106,6 @@ function aiSdkCandidate(candidate: RuntimeCandidate, organizationId: string): Ai
     baseUrl: credential.baseUrl,
     model: candidate.model,
     capabilities: candidate.capabilities,
-    gatewayId: credential.gatewayId ?? undefined,
-    keyAlias: credential.keyAlias ?? undefined,
-    skipCache: credential.gatewaySkipCache,
-    cacheTtl: credential.gatewayCacheTtl ?? undefined,
-    collectLog: credential.gatewayCollectLog,
   };
 }
 
@@ -125,93 +125,66 @@ function adapterRuntimeInput(input: {
     messages: input.context,
     temperature: input.temperature,
     maxOutputTokens: input.maxOutputTokens,
-    gatewayId: credential.gatewayId ?? undefined,
-    skipCache: credential.gatewaySkipCache,
-    cacheTtl: credential.gatewayCacheTtl ?? undefined,
-    collectLog: credential.gatewayCollectLog,
     requestId: input.requestId,
     signal: input.signal,
   };
 }
 
 async function executeRuntimeCandidate(input: Omit<Parameters<typeof executeAiSdkCandidate>[0], "candidate"> & { candidateRecord: RuntimeCandidate }): Promise<AiSdkExecutionResult> {
-  const mode = asTransportMode(input.candidateRecord.credential.transportMode);
-  if (mode === "direct" || mode === "cloudflare_ai_gateway_native") {
-    return executeAiSdkCandidate({ ...input, candidate: aiSdkCandidate(input.candidateRecord, input.organizationId) });
-  }
-  const state = emptyExecutionState();
+  asTransportMode(input.candidateRecord.credential.transportMode);
+  const acquiredAt = performance.now();
+  activeProviderRequests += 1;
+  console.info(JSON.stringify(safeTelemetry({
+    event: "ai.provider_request.acquired",
+    runId: input.runId,
+    activeProviderRequests,
+    queuedProviderRequests: 0,
+    requestSlotAcquireMs: 0,
+    requestSlotOwner: `run:${input.runId}:provider:${input.candidateRecord.credential.id}`,
+  })));
   try {
-    const request = adapterRuntimeInput({
-      organizationId: input.organizationId,
-      requestId: input.requestId,
-      candidate: input.candidateRecord,
-      context: input.context ?? [],
-      temperature: input.temperature,
-      maxOutputTokens: input.maxOutputTokens,
-      signal: input.abortSignal,
-    });
-    const result = mode === "cloudflare_workers_ai"
-      ? await runWorkersAiChat(request)
-      : await runCloudflareRestChat(request);
-    return {
-      status: "completed",
-      text: result.text,
-      usage: { inputTokens: result.inputTokens, outputTokens: result.outputTokens },
-      providerRequestId: "providerRequestId" in result && typeof result.providerRequestId === "string"
-        ? result.providerRequestId
-        : undefined,
-      state,
-    };
-  } catch (error) {
-    throw new AiSdkCandidateError(safeProviderError(error), state);
+    return await executeAiSdkCandidate({ ...input, candidate: aiSdkCandidate(input.candidateRecord, input.organizationId) });
+  } finally {
+    activeProviderRequests = Math.max(0, activeProviderRequests - 1);
+    console.info(JSON.stringify(safeTelemetry({
+      event: "ai.provider_request.released",
+      runId: input.runId,
+      activeProviderRequests,
+      queuedProviderRequests: 0,
+      requestSlotHoldMs: Math.round(performance.now() - acquiredAt),
+      requestSlotOwner: `run:${input.runId}:provider:${input.candidateRecord.credential.id}`,
+    })));
   }
 }
 
 async function* streamRuntimeCandidate(input: Omit<Parameters<typeof streamAiSdkCandidate>[0], "candidate"> & { candidateRecord: RuntimeCandidate }): AsyncGenerator<{ type: "delta"; text: string } | { type: "result"; result: AiSdkExecutionResult }> {
-  const mode = asTransportMode(input.candidateRecord.credential.transportMode);
-  if (mode === "direct" || mode === "cloudflare_ai_gateway_native") {
-    yield* streamAiSdkCandidate({ ...input, candidate: aiSdkCandidate(input.candidateRecord, input.organizationId) });
-    return;
-  }
-  const state = emptyExecutionState();
-  let text = "";
-  let usage: ProviderUsage = { inputTokens: null, outputTokens: null };
-  let providerRequestId: string | undefined;
+  asTransportMode(input.candidateRecord.credential.transportMode);
+  const acquiredAt = performance.now();
+  activeProviderRequests += 1;
+  console.info(JSON.stringify(safeTelemetry({
+    event: "ai.provider_request.acquired",
+    runId: input.runId,
+    activeProviderRequests,
+    queuedProviderRequests: 0,
+    requestSlotAcquireMs: 0,
+    requestSlotOwner: `run:${input.runId}:provider:${input.candidateRecord.credential.id}`,
+  })));
   try {
-    const request = adapterRuntimeInput({
-      organizationId: input.organizationId,
-      requestId: input.requestId,
-      candidate: input.candidateRecord,
-      context: input.context,
-      temperature: input.temperature,
-      maxOutputTokens: input.maxOutputTokens,
-      signal: input.abortSignal,
-    });
-    const source = mode === "cloudflare_workers_ai"
-      ? streamWorkersAiChat(request)
-      : streamCloudflareRestChat(request);
-    for await (const chunk of source) {
-      if (chunk.type === "delta") {
-        state.emittedText = true;
-        text += chunk.text;
-        yield { type: "delta", text: chunk.text };
-      } else if (chunk.type === "usage") {
-        usage = chunk.usage;
-        providerRequestId = chunk.providerRequestId ?? providerRequestId;
-      } else {
-        providerRequestId = chunk.providerRequestId ?? providerRequestId;
-      }
-    }
-    yield {
-      type: "result",
-      result: { status: "completed", text, usage, providerRequestId, state },
-    };
-  } catch (error) {
-    throw new AiSdkCandidateError(safeProviderError(error), state);
+    yield* streamAiSdkCandidate({ ...input, candidate: aiSdkCandidate(input.candidateRecord, input.organizationId) });
+  } finally {
+    activeProviderRequests = Math.max(0, activeProviderRequests - 1);
+    console.info(JSON.stringify(safeTelemetry({
+      event: "ai.provider_request.released",
+      runId: input.runId,
+      activeProviderRequests,
+      queuedProviderRequests: 0,
+      requestSlotHoldMs: Math.round(performance.now() - acquiredAt),
+      requestSlotOwner: `run:${input.runId}:provider:${input.candidateRecord.credential.id}`,
+    })));
   }
 }
 
-function titleFromFirstMessage(value: string) {
+export function titleFromFirstMessage(value: string) {
   const normalized = value.replace(/\s+/g, " ").trim();
   if (!normalized) return null;
   return normalized.length <= 72 ? normalized : `${normalized.slice(0, 69).trimEnd()}…`;
@@ -276,21 +249,33 @@ async function hasEnabledAgentTools(
   agentId: string,
   allowedToolIds?: readonly string[] | null,
 ) {
-  if (allowedToolIds && allowedToolIds.length === 0) return false;
-  const [row] = await db().select({ value: count() }).from(agentMcpTools)
-    .innerJoin(mcpTools, eq(mcpTools.id, agentMcpTools.toolId))
-    .innerJoin(mcpServers, eq(mcpServers.id, mcpTools.serverId))
-    .where(and(
-      eq(agentMcpTools.organizationId, organizationId),
-      eq(agentMcpTools.agentId, agentId),
-      allowedToolIds ? inArray(agentMcpTools.toolId, [...allowedToolIds]) : undefined,
-      eq(mcpTools.organizationId, organizationId),
-      eq(mcpTools.enabled, true),
-      eq(mcpServers.organizationId, organizationId),
-      eq(mcpServers.enabled, true),
-      eq(mcpServers.status, "connected"),
-    ));
-  return Number(row?.value ?? 0) > 0;
+  const allowMcp = !(allowedToolIds && allowedToolIds.length === 0);
+  const result = await withDatabaseQuerySubsystem("agent", () => db().execute(sql`
+    SELECT (
+      ${allowMcp ? sql`EXISTS (
+        SELECT 1
+        FROM agent_mcp_tools amt
+        INNER JOIN mcp_tools mt ON mt.id = amt.tool_id
+        INNER JOIN mcp_servers ms ON ms.id = mt.server_id
+        WHERE amt.organization_id = ${organizationId}
+          AND amt.agent_id = ${agentId}
+          ${allowedToolIds?.length ? sql`AND amt.tool_id IN (${sql.join(allowedToolIds.map((id) => sql`${id}::uuid`), sql`, `)})` : sql``}
+          AND mt.organization_id = ${organizationId}
+          AND mt.enabled = true
+          AND ms.organization_id = ${organizationId}
+          AND ms.enabled = true
+          AND ms.status = 'connected'
+      ) OR` : sql``}
+      EXISTS (
+        SELECT 1
+        FROM agent_tool_bindings atb
+        WHERE atb.organization_id = ${organizationId}
+          AND atb.agent_id = ${agentId}
+          AND atb.enabled = true
+      )
+    ) AS value
+  `));
+  return Boolean((databaseRows(result)[0] as { value?: boolean } | undefined)?.value);
 }
 
 export async function prepareAgentRun(input: {
@@ -307,33 +292,40 @@ export async function prepareAgentRun(input: {
   media?: ProviderContentPart[];
   allowedToolIds?: readonly string[] | null;
 }) {
-  const [agent] = await db().select().from(agents).where(and(
-    eq(agents.id, input.agentId),
-    eq(agents.organizationId, input.organizationId),
-  )).limit(1);
-  if (!agent || agent.status !== "published") {
-    throw new ApiError(422, "AGENT_UNAVAILABLE", "الوكيل غير موجود أو غير منشور.");
+  const [resolvedAgent] = await withDatabaseQuerySubsystem("agent", () => db().select({
+    agent: agents,
+    version: agentVersions,
+  }).from(agents)
+    .innerJoin(agentVersions, and(
+      eq(agentVersions.agentId, agents.id),
+      eq(agentVersions.version, agents.currentVersion),
+    ))
+    .where(and(
+      eq(agents.id, input.agentId),
+      eq(agents.organizationId, input.organizationId),
+      eq(agents.status, "published"),
+    ))
+    .limit(1));
+  if (!resolvedAgent) {
+    throw new ApiError(422, "AGENT_UNAVAILABLE", "الوكيل غير موجود أو غير منشور أو يفتقد الإصدار المنشور.");
   }
-
-  const [version] = await db().select().from(agentVersions)
-    .where(and(eq(agentVersions.agentId, agent.id), eq(agentVersions.version, agent.currentVersion)))
-    .limit(1);
-  if (!version) throw new ApiError(409, "AGENT_VERSION_MISSING", "الإصدار المنشور للوكيل غير متاح.");
+  const agent = resolvedAgent.agent;
+  const version = resolvedAgent.version;
 
   const [organization, catalog, credentials, toolsEnabled] = await Promise.all([
-    db().select({
+    withDatabaseQuerySubsystem("provider", () => db().select({
       defaultProviderCredentialId: organizations.defaultProviderCredentialId,
       defaultModel: organizations.defaultModel,
-    }).from(organizations).where(eq(organizations.id, input.organizationId)).limit(1),
-    db().select().from(modelCatalog).where(and(
+    }).from(organizations).where(eq(organizations.id, input.organizationId)).limit(1)),
+    withDatabaseQuerySubsystem("provider", () => db().select().from(modelCatalog).where(and(
       eq(modelCatalog.organizationId, input.organizationId),
       eq(modelCatalog.available, true),
-    )),
-    db().select().from(providerCredentials).where(and(
+    ))),
+    withDatabaseQuerySubsystem("provider", () => db().select().from(providerCredentials).where(and(
       eq(providerCredentials.organizationId, input.organizationId),
       eq(providerCredentials.enabled, true),
       eq(providerCredentials.validationStatus, "verified"),
-    )),
+    ))),
     hasEnabledAgentTools(input.organizationId, input.agentId, input.allowedToolIds),
   ]);
   const now = new Date();
@@ -368,12 +360,25 @@ export async function prepareAgentRun(input: {
   }));
 
   const inputKind = input.inputKind ?? "text";
+  if (input.model && inputKind === "image") {
+    const selected = routable.find((candidate) => candidate.model === input.model
+      && (!input.providerCredentialId || candidate.providerCredentialId === input.providerCredentialId));
+    if (!selected?.available || selected.capabilities.vision !== true) {
+      throw new ApiError(422, "VISION_MODEL_REQUIRED", "النموذج المحدد لا يدعم الصور. اختر نموذجًا يدعم الرؤية قبل إرسال المرفق.");
+    }
+  }
+  if (input.model && inputKind === "file") {
+    const selected = routable.find((candidate) => candidate.model === input.model
+      && (!input.providerCredentialId || candidate.providerCredentialId === input.providerCredentialId));
+    if (!selected?.available || selected.capabilities.files !== true) {
+      throw new ApiError(422, "FILE_MODEL_REQUIRED", "النموذج المحدد لا يدعم سياق الملفات. اختر نموذجًا متوافقًا قبل الإرسال.");
+    }
+  }
   const ranked = rankModels(routable, inputKind).filter((candidate) => {
     if (!toolsEnabled) return true;
     const credential = credentialById.get(candidate.providerCredentialId);
     if (!credential) return false;
-    const mode = asTransportMode(credential.transportMode);
-    if (mode === "cloudflare_ai_gateway_rest" || mode === "cloudflare_workers_ai") return false;
+    asTransportMode(credential.transportMode);
     return candidate.capabilities.tools === true || candidate.capabilities.toolCalling === true;
   });
   const preferredCredentialId = input.providerCredentialId
@@ -381,13 +386,18 @@ export async function prepareAgentRun(input: {
     ?? version.providerCredentialId;
   const preferredModel = input.model ?? agent.defaultModel ?? version.model;
   const explicitSelection = Boolean(input.providerCredentialId || input.model);
-  const prioritized = prioritizeProviderCandidates(
-    ranked,
-    (candidate) => explicitSelection
-      ? (!input.providerCredentialId || candidate.providerCredentialId === input.providerCredentialId)
-        && (!input.model || candidate.model === input.model)
-      : candidate.providerCredentialId === preferredCredentialId && candidate.model === preferredModel,
-  );
+  const explicitMatch = (candidate: (typeof ranked)[number]) =>
+    (!input.providerCredentialId || candidate.providerCredentialId === input.providerCredentialId)
+    && (!input.model || candidate.model === input.model);
+  const configuredAttempts = Number.parseInt(process.env.AI_PROVIDER_MAX_ATTEMPTS ?? "2", 10);
+  const maxAttempts = Number.isSafeInteger(configuredAttempts) ? Math.min(3, Math.max(1, configuredAttempts)) : 2;
+  const prioritized = explicitSelection
+    ? ranked.filter(explicitMatch).slice(0, 1)
+    : prioritizeProviderCandidates(
+        ranked,
+        (candidate) => candidate.providerCredentialId === preferredCredentialId && candidate.model === preferredModel,
+        maxAttempts,
+      );
 
   if (prioritized.length === 0) {
     if (toolsEnabled) {
@@ -408,21 +418,27 @@ export async function prepareAgentRun(input: {
   const primary = candidates[0];
   if (!primary) throw new ApiError(422, "PROVIDER_UNAVAILABLE", "المزود معطل أو لم يجتز آخر فحص.");
 
-  const [conversation] = await db().select({ id: conversations.id })
-    .from(conversations)
-    .where(and(
-      eq(conversations.id, input.conversationId),
-      eq(conversations.organizationId, input.organizationId),
-      eq(conversations.agentId, agent.id),
-      input.userId && !input.conversationAuthorized ? eq(conversations.createdByUserId, input.userId) : undefined,
-      isNull(conversations.archivedAt),
-      isNull(conversations.deletedAt),
-    ))
-    .limit(1);
+  const conversation = input.conversationAuthorized
+    ? { id: input.conversationId }
+    : await withDatabaseQuerySubsystem("conversation", async () => {
+        const [row] = await db().select({ id: conversations.id })
+          .from(conversations)
+          .where(and(
+            eq(conversations.id, input.conversationId),
+            eq(conversations.organizationId, input.organizationId),
+            eq(conversations.agentId, agent.id),
+            input.userId ? eq(conversations.createdByUserId, input.userId) : undefined,
+            isNull(conversations.archivedAt),
+            isNull(conversations.deletedAt),
+          ))
+          .limit(1);
+        return row ?? null;
+      });
   if (!conversation) throw new ApiError(404, "CONVERSATION_NOT_FOUND", "المحادثة غير موجودة أو مؤرشفة.");
 
-  const context = await contextMessages(conversation.id, version.instructions, version.maxOutputTokens, input.media);
-  const [run] = await db().transaction(async (tx) => {
+  const context = await withDatabaseQuerySubsystem("conversation", () =>
+    contextMessages(conversation.id, version.instructions, version.maxOutputTokens, input.media));
+  const [run] = await withDatabaseQuerySubsystem("runs", () => db().transaction(async (tx) => {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${conversation.id}, 0))`);
     const [activeRun] = await tx.select({ id: runs.id }).from(runs).where(and(
       eq(runs.organizationId, input.organizationId),
@@ -435,28 +451,33 @@ export async function prepareAgentRun(input: {
       agentId: agent.id,
       agentVersionId: version.id,
       conversationId: conversation.id,
-      status: "queued",
+      status: "running",
+      startedAt: new Date(),
       requestId: input.requestId,
       input: input.message,
       provider: primary.credential.provider,
       model: primary.model,
     }).returning();
     if (!created) throw new Error("RUN_CREATE_FAILED");
-    await tx.insert(runEvents).values({
-      runId: created.id,
-      sequence: 1,
-      type: "run.created",
-      payload: {
-        agentId: agent.id,
-        version: version.version,
-        requestId: input.requestId,
-        requestedProviderCredentialId: input.providerCredentialId ?? null,
-        requestedModel: input.model ?? null,
-        toolsEnabled,
+    await tx.insert(runEvents).values([
+      {
+        runId: created.id,
+        sequence: 1,
+        type: "run.created",
+        payload: {
+          agentId: agent.id,
+          version: version.version,
+          requestId: input.requestId,
+          requestedProviderCredentialId: input.providerCredentialId ?? null,
+          requestedModel: input.model ?? null,
+          toolsEnabled,
+        },
       },
-    });
+      { runId: created.id, sequence: 2, type: "run.running", payload: {} },
+      { runId: created.id, sequence: 3, type: "provider.request.started", payload: {} },
+    ]);
     return [created];
-  });
+  }));
 
   return {
     run,
@@ -466,22 +487,8 @@ export async function prepareAgentRun(input: {
     estimatedInputTokens: context.estimatedInputTokens,
     requestedProviderCredentialId: input.providerCredentialId ?? null,
     requestedModel: input.model ?? null,
+    toolsEnabled,
   };
-}
-
-async function beginProviderRequest(organizationId: string, runId: string) {
-  await db().update(runs).set({ status: "running", startedAt: new Date() }).where(and(
-    eq(runs.id, runId),
-    eq(runs.organizationId, organizationId),
-  ));
-  await appendRunEvents({
-    organizationId,
-    runId,
-    events: [
-      { type: "run.running" },
-      { type: "provider.request.started" },
-    ],
-  });
 }
 
 async function recordCredentialFailure(input: {
@@ -564,6 +571,10 @@ export async function completeAgentRun(input: {
   attemptCount: number;
   requestedProviderCredentialId: string | null;
   requestedModel: string | null;
+  requestId: string;
+  startedAt: Date | null;
+  streamingMessageCreated?: boolean;
+  toolsEnabled?: boolean;
 }) {
   const completedAt = new Date();
   const fallbackUsed = input.attemptCount > 1
@@ -576,18 +587,9 @@ export async function completeAgentRun(input: {
     model: input.model,
     status: "ok",
   })));
-  const result = await db().transaction(async (tx) => {
-    const [runRecord] = await tx.select({
-      id: runs.id,
-      requestId: runs.requestId,
-      startedAt: runs.startedAt,
-    }).from(runs).where(and(
-      eq(runs.id, input.runId),
-      eq(runs.organizationId, input.organizationId),
-    )).limit(1);
-    if (!runRecord) throw new ApiError(404, "RUN_NOT_FOUND", "عملية التشغيل غير موجودة.");
-    const latencyMs = runRecord.startedAt
-      ? Math.max(0, completedAt.getTime() - runRecord.startedAt.getTime())
+  const result = await withDatabaseQuerySubsystem("runs", () => db().transaction(async (tx) => {
+    const latencyMs = input.startedAt
+      ? Math.max(0, completedAt.getTime() - input.startedAt.getTime())
       : null;
     const routing = {
       attemptCount: input.attemptCount,
@@ -601,7 +603,7 @@ export async function completeAgentRun(input: {
       content: input.text,
       contentParts: [{ type: "text", text: input.text }],
       status: "completed" as const,
-      requestId: runRecord.requestId,
+      requestId: input.requestId,
       inputTokens: input.usage.inputTokens,
       outputTokens: input.usage.outputTokens,
       latencyMs,
@@ -611,14 +613,13 @@ export async function completeAgentRun(input: {
       model: input.model,
       metadata: { runId: input.runId, model: input.model, routing },
     };
-    const [existingAssistant] = await tx.select({ id: messages.id }).from(messages).where(and(
-      eq(messages.conversationId, input.conversationId),
-      eq(messages.clientRequestId, input.runId),
-      eq(messages.role, "assistant"),
-      isNull(messages.deletedAt),
-    )).limit(1);
-    const [assistantMessage] = existingAssistant
-      ? await tx.update(messages).set(assistantValues).where(eq(messages.id, existingAssistant.id)).returning()
+    const [assistantMessage] = input.streamingMessageCreated
+      ? await tx.update(messages).set(assistantValues).where(and(
+          eq(messages.conversationId, input.conversationId),
+          eq(messages.clientRequestId, input.runId),
+          eq(messages.role, "assistant"),
+          isNull(messages.deletedAt),
+        )).returning()
       : await tx.insert(messages).values({
           conversationId: input.conversationId,
           role: "assistant",
@@ -636,21 +637,7 @@ export async function completeAgentRun(input: {
       completedAt,
     }).where(and(eq(runs.id, input.runId), eq(runs.organizationId, input.organizationId))).returning();
 
-    const [conversation] = await tx.select({ title: conversations.title }).from(conversations).where(and(
-      eq(conversations.id, input.conversationId),
-      eq(conversations.organizationId, input.organizationId),
-    )).limit(1);
-    let generatedTitle: string | null = null;
-    if (!conversation?.title || conversation.title.startsWith("محادثة مع ")) {
-      const [firstUserMessage] = await tx.select({ content: messages.content }).from(messages).where(and(
-        eq(messages.conversationId, input.conversationId),
-        eq(messages.role, "user"),
-        isNull(messages.deletedAt),
-      )).orderBy(asc(messages.createdAt)).limit(1);
-      generatedTitle = firstUserMessage ? titleFromFirstMessage(firstUserMessage.content) : null;
-    }
     await tx.update(conversations).set({
-      ...(generatedTitle ? { title: generatedTitle } : {}),
       status: "active",
       providerCredentialId: input.providerCredentialId,
       model: input.model,
@@ -660,42 +647,39 @@ export async function completeAgentRun(input: {
       eq(conversations.id, input.conversationId),
       eq(conversations.organizationId, input.organizationId),
     ));
-    await tx.update(providerCredentials).set({
-      validationStatus: "verified",
-      healthStatus: "healthy",
-      consecutiveFailures: 0,
-      lastCheckedAt: completedAt,
-      lastSuccessfulAt: completedAt,
-      lastErrorCode: null,
-      lastErrorCategory: null,
-      circuitOpenUntil: null,
-      updatedAt: completedAt,
-    }).where(and(
-      eq(providerCredentials.id, input.providerCredentialId),
-      eq(providerCredentials.organizationId, input.organizationId),
-    ));
-    await tx.update(modelCatalog).set({
-      available: true,
-      lastSeenAt: completedAt,
-      updatedAt: completedAt,
-    }).where(and(
-      eq(modelCatalog.organizationId, input.organizationId),
-      eq(modelCatalog.providerCredentialId, input.providerCredentialId),
-      eq(modelCatalog.model, input.model),
-    ));
-    await tx.insert(providerCredentialHealthEvents).values({
-      organizationId: input.organizationId,
-      providerCredentialId: input.providerCredentialId,
-      runId: input.runId,
-      outcome: "completed",
-      model: input.model,
-      requestId: runRecord.requestId,
-      providerRequestId: input.providerRequestId,
-      latencyMs,
-      retryable: false,
-    });
+    await tx.execute(sql`
+      WITH updated_credential AS (
+        UPDATE provider_credentials
+        SET validation_status = 'verified',
+            health_status = 'healthy',
+            consecutive_failures = 0,
+            last_checked_at = ${completedAt},
+            last_successful_at = ${completedAt},
+            last_error_code = NULL,
+            last_error_category = NULL,
+            circuit_open_until = NULL,
+            updated_at = ${completedAt}
+        WHERE id = ${input.providerCredentialId}
+          AND organization_id = ${input.organizationId}
+        RETURNING id
+      ), updated_model AS (
+        UPDATE model_catalog
+        SET available = true, last_seen_at = ${completedAt}, updated_at = ${completedAt}
+        WHERE organization_id = ${input.organizationId}
+          AND provider_credential_id = ${input.providerCredentialId}
+          AND model = ${input.model}
+        RETURNING id
+      )
+      INSERT INTO provider_credential_health_events (
+        organization_id, provider_credential_id, run_id, outcome, model, request_id,
+        provider_request_id, latency_ms, retryable
+      ) VALUES (
+        ${input.organizationId}, ${input.providerCredentialId}, ${input.runId}, 'completed', ${input.model},
+        ${input.requestId}, ${input.providerRequestId ?? null}, ${latencyMs}, false
+      )
+    `);
     return { run: completed, assistantMessage };
-  });
+  }));
   await appendRunEvents({
     organizationId: input.organizationId,
     runId: input.runId,
@@ -712,7 +696,7 @@ export async function completeAgentRun(input: {
       { type: "run.completed", payload: { fallbackUsed, userNotified: fallbackUsed } },
     ],
   });
-  await deleteRunCheckpoints(input.organizationId, input.runId);
+  if (input.toolsEnabled) await deleteRunCheckpoints(input.organizationId, input.runId);
   return result;
 }
 
@@ -882,10 +866,9 @@ export async function executeAgentRun(input: {
 }) {
   const requestId = input.requestId ?? crypto.randomUUID();
   const prepared = await prepareAgentRun({ ...input, requestId });
-  await beginProviderRequest(input.organizationId, prepared.run.id);
   const controller = new AbortController();
   activeControllers.set(prepared.run.id, controller);
-  const allocateStep = await createRunStepAllocator(input.organizationId, prepared.run.id);
+  const allocateStep = freshRunStepAllocator();
   try {
     let lastError: ProviderError | undefined;
     let lastState: AiSdkExecutionState | undefined;
@@ -918,6 +901,7 @@ export async function executeAgentRun(input: {
           candidateRecord: candidate,
           context: prepared.context,
           allowedToolIds: input.allowedToolIds,
+          toolsEnabled: prepared.toolsEnabled,
           temperature: prepared.version.temperatureMilli / 1000,
           maxOutputTokens: prepared.version.maxOutputTokens,
           abortSignal: controller.signal,
@@ -950,6 +934,9 @@ export async function executeAgentRun(input: {
           attemptCount,
           requestedProviderCredentialId: prepared.requestedProviderCredentialId,
           requestedModel: prepared.requestedModel,
+          requestId,
+          startedAt: prepared.run.startedAt,
+          toolsEnabled: prepared.toolsEnabled,
         });
       } catch (error) {
         const safe = safeProviderError(error);
@@ -1032,14 +1019,14 @@ export async function* streamAgentRun(input: {
   inputKind?: InputKind;
   media?: ProviderContentPart[];
   allowedToolIds?: readonly string[] | null;
+  onProviderAttempt?: (event: { phase: "start" | "end"; attempt: number; activeProviderRequests: number; holdMs?: number }) => void;
 }) {
   const prepared = await prepareAgentRun(input);
-  await beginProviderRequest(input.organizationId, prepared.run.id);
   const controller = new AbortController();
   const abortFromRequest = () => controller.abort(input.requestSignal?.reason);
   input.requestSignal?.addEventListener("abort", abortFromRequest, { once: true });
   activeControllers.set(prepared.run.id, controller);
-  const allocateStep = await createRunStepAllocator(input.organizationId, prepared.run.id);
+  const allocateStep = freshRunStepAllocator();
   yield { type: "run" as const, runId: prepared.run.id };
   let accumulatedText = "";
   let streamingMessageCreated = false;
@@ -1053,6 +1040,7 @@ export async function* streamAgentRun(input: {
       if (blockedCredentialIds.has(candidate.credential.id)) continue;
       activeCandidate = candidate;
       attemptCount += 1;
+      input.onProviderAttempt?.({ phase: "start", attempt: attemptCount, activeProviderRequests: activeProviderRequests + 1 });
       if (attemptCount > 1) {
         await db().update(runs).set({
           provider: candidate.credential.provider,
@@ -1072,6 +1060,7 @@ export async function* streamAgentRun(input: {
           candidateRecord: candidate,
           context: prepared.context,
           allowedToolIds: input.allowedToolIds,
+          toolsEnabled: prepared.toolsEnabled,
           temperature: prepared.version.temperatureMilli / 1000,
           maxOutputTokens: prepared.version.maxOutputTokens,
           abortSignal: controller.signal,
@@ -1094,7 +1083,7 @@ export async function* streamAgentRun(input: {
             candidateResult = event.result;
           }
         }
-        if (!candidateResult) throw new ProviderError("PROVIDER_EMPTY_OUTPUT", "لم يُرجع النموذج نتيجة.", 502);
+        if (!candidateResult) throw new ProviderError("PROVIDER_STREAM_INTERRUPTED", "انتهى بث المزود قبل اكتمال النتيجة.", 502, undefined, true);
         if (candidateResult.status === "waiting_approval") {
           if (streamingMessageCreated) {
             await persistStreamingAssistantProgress({
@@ -1124,6 +1113,10 @@ export async function* streamAgentRun(input: {
           attemptCount,
           requestedProviderCredentialId: prepared.requestedProviderCredentialId,
           requestedModel: prepared.requestedModel,
+          requestId: input.requestId,
+          startedAt: prepared.run.startedAt,
+          streamingMessageCreated,
+          toolsEnabled: prepared.toolsEnabled,
         });
         yield {
           type: "complete" as const,
@@ -1132,6 +1125,7 @@ export async function* streamAgentRun(input: {
           usage: candidateResult.usage,
           model: candidate.model,
           fallbackUsed: attemptCount > 1,
+          attemptCount,
         };
         return;
       } catch (error) {
